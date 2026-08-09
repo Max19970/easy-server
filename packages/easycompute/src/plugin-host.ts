@@ -118,6 +118,7 @@ class PluginRuntime {
     return {
       pluginId: this.pluginId,
       provider,
+      capabilities: this.#plugin.manifest.provider.capabilities,
       release() {},
     };
   }

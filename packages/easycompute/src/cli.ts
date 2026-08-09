@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { ComputeManager } from "./compute-manager.js";
 import {
   formatPluginStatuses,
   PluginHost,
@@ -19,6 +20,8 @@ Usage:
   easycompute plugins add <module>
   easycompute plugins enable <module>
   easycompute plugins disable <module>
+  easycompute instances list
+  easycompute instances inspect <instance-id>
 `;
 
 await run(process.argv.slice(2));
@@ -36,6 +39,16 @@ async function run(args: readonly string[]): Promise<void> {
     return;
   }
 
+  if (command === "instances") {
+    try {
+      await runInstances(args.slice(1));
+    } catch (error) {
+      process.stderr.write(`${errorMessage(error)}\n\n${help}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (command === "plugins") {
     try {
       await runPlugins(args.slice(1));
@@ -48,6 +61,39 @@ async function run(args: readonly string[]): Promise<void> {
 
   process.stderr.write(`Unknown command: ${command}\n\n${help}`);
   process.exitCode = 1;
+}
+
+async function runInstances(args: readonly string[]): Promise<void> {
+  const [command, instanceId] = args;
+  const store = new JsonStateStore(stateFilePath());
+  const state = await store.read();
+  const registry = new ProviderRegistry();
+  const host = new PluginHost(registry);
+  await host.load(
+    state.plugins
+      .filter((plugin) => plugin.enabled)
+      .map((plugin) => canonicalPluginSource(plugin.source)),
+  );
+  const manager = new ComputeManager(registry, store);
+  const context = { signal: new AbortController().signal };
+
+  if (command === "list" && args.length === 1) {
+    const instances = await manager.listInstances(context);
+    process.stdout.write(formatInstances(instances));
+    return;
+  }
+
+  if (command === "inspect" && instanceId !== undefined && args.length === 2) {
+    const instance = await manager.inspectInstance(instanceId, context);
+    if (instance === undefined) {
+      throw new Error(`Compute Instance not found: ${instanceId}`);
+    }
+
+    process.stdout.write(`${JSON.stringify(instance, null, 2)}\n`);
+    return;
+  }
+
+  throw new Error(`Unknown instances command: ${command ?? "(missing)"}`);
 }
 
 async function runPlugins(args: readonly string[]): Promise<void> {
@@ -167,6 +213,22 @@ async function validatePluginActivation(
   }
 
   return status;
+}
+
+function formatInstances(instances: readonly import("./compute-manager.js").ComputeInstance[]): string {
+  if (instances.length === 0) {
+    return "No compute instances found.\n";
+  }
+
+  return `${instances
+    .map((instance) => {
+      const name = instance.name === undefined ? "" : ` name=${JSON.stringify(instance.name)}`;
+      const actions = instance.availableActions.length === 0
+        ? "-"
+        : instance.availableActions.join(",");
+      return `${instance.id} provider=${instance.providerId} external=${instance.providerExternalId} state=${instance.state} actions=${actions}${name}`;
+    })
+    .join("\n")}\n`;
 }
 
 function parsePluginSources(args: readonly string[]): readonly string[] {

@@ -17,9 +17,16 @@ export interface PluginRegistration {
   readonly credentials?: readonly ProviderCredentialBinding[];
 }
 
+export interface InstanceBinding {
+  readonly id: string;
+  readonly providerId: string;
+  readonly providerExternalId: string;
+}
+
 export interface EasyComputeState {
   readonly version: 1;
   readonly plugins: readonly PluginRegistration[];
+  readonly instances?: readonly InstanceBinding[];
 }
 
 export class JsonStateStore {
@@ -122,7 +129,62 @@ function parseState(value: unknown): EasyComputeState {
     );
   }
 
-  return { version: 1, plugins };
+  const instances = parseInstanceBindings(state.instances, "state.instances");
+
+  return instances === undefined
+    ? { version: 1, plugins }
+    : { version: 1, plugins, instances };
+}
+
+function parseInstanceBindings(
+  value: unknown,
+  path: string,
+): readonly InstanceBinding[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${path} must be an array`);
+  }
+
+  const bindings: InstanceBinding[] = [];
+  const seenIds = new Set<string>();
+  const seenProviderKeys = new Set<string>();
+
+  for (const [index, candidate] of value.entries()) {
+    const binding = expectRecord(candidate, `${path}[${index}]`);
+    const id = expectNonEmptyString(binding.id, `${path}[${index}].id`);
+    const providerId = expectNonEmptyString(
+      binding.providerId,
+      `${path}[${index}].providerId`,
+    );
+    const providerExternalId = expectNonEmptyString(
+      binding.providerExternalId,
+      `${path}[${index}].providerExternalId`,
+    );
+
+    if (!COMPUTE_INSTANCE_ID_PATTERN.test(id)) {
+      throw new TypeError(`${path}[${index}].id must be instance:<uuid>`);
+    }
+
+    if (seenIds.has(id)) {
+      throw new TypeError(`${path} contains duplicate id: ${id}`);
+    }
+
+    const providerKey = `${providerId}\u0000${providerExternalId}`;
+    if (seenProviderKeys.has(providerKey)) {
+      throw new TypeError(
+        `${path} contains duplicate provider identity: ${providerId}/${providerExternalId}`,
+      );
+    }
+
+    seenIds.add(id);
+    seenProviderKeys.add(providerKey);
+    bindings.push({ id, providerId, providerExternalId });
+  }
+
+  return bindings;
 }
 
 function parseCredentialBindings(
@@ -179,6 +241,9 @@ function expectNonEmptyString(value: unknown, path: string): string {
 
   return value;
 }
+
+const COMPUTE_INSTANCE_ID_PATTERN =
+  /^instance:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isErrno(error: unknown, code: string): boolean {
   return (

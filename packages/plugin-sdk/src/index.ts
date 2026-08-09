@@ -52,8 +52,101 @@ export interface OperationContext {
   readonly signal: AbortSignal;
 }
 
+export const INSTANCE_STATES = [
+  "provisioning",
+  "running",
+  "stopped",
+  "starting",
+  "stopping",
+  "terminating",
+  "terminated",
+  "error",
+  "unknown",
+] as const;
+
+export type InstanceState = (typeof INSTANCE_STATES)[number];
+export type ProviderRawState = string | number | boolean | null;
+export type AvailableAction = ProviderCapability;
+
+export interface ProviderInstanceSnapshot {
+  readonly providerExternalId: string;
+  readonly name?: string;
+  readonly state: InstanceState;
+  readonly rawState: ProviderRawState;
+  readonly availableActions: readonly AvailableAction[];
+}
+
 export interface ProviderAdapter {
   readonly providerId: string;
+  listInstances(
+    context: OperationContext,
+  ): Promise<readonly ProviderInstanceSnapshot[]>;
+  getInstance(
+    providerExternalId: string,
+    context: OperationContext,
+  ): Promise<ProviderInstanceSnapshot | undefined>;
+}
+
+export function parseProviderInstanceSnapshot(
+  value: unknown,
+  capabilities: readonly ProviderCapability[],
+): ProviderInstanceSnapshot {
+  const snapshot = expectRecord(value, "provider instance snapshot");
+  const parsed: ProviderInstanceSnapshot = {
+    providerExternalId: expectNonEmptyString(
+      snapshot.providerExternalId,
+      "provider instance snapshot.providerExternalId",
+    ),
+    state: expectInstanceState(
+      snapshot.state,
+      "provider instance snapshot.state",
+    ),
+    rawState: expectRawState(
+      snapshot.rawState,
+      "provider instance snapshot.rawState",
+    ),
+    availableActions: expectAvailableActions(
+      snapshot.availableActions,
+      capabilities,
+      "provider instance snapshot.availableActions",
+    ),
+  };
+
+  if (snapshot.name !== undefined) {
+    return {
+      ...parsed,
+      name: expectNonEmptyString(snapshot.name, "provider instance snapshot.name"),
+    };
+  }
+
+  return parsed;
+}
+
+export function parseProviderInstanceList(
+  value: unknown,
+  capabilities: readonly ProviderCapability[],
+): readonly ProviderInstanceSnapshot[] {
+  if (!Array.isArray(value)) {
+    throw new PluginContractError("provider instance list must be an array");
+  }
+
+  const instances: ProviderInstanceSnapshot[] = [];
+  const seenExternalIds = new Set<string>();
+
+  for (const candidate of value) {
+    const instance = parseProviderInstanceSnapshot(candidate, capabilities);
+
+    if (seenExternalIds.has(instance.providerExternalId)) {
+      throw new PluginContractError(
+        `provider instance list contains duplicate providerExternalId: ${instance.providerExternalId}`,
+      );
+    }
+
+    seenExternalIds.add(instance.providerExternalId);
+    instances.push(instance);
+  }
+
+  return instances;
 }
 
 export interface ProviderPlugin {
@@ -164,6 +257,11 @@ export function parseProviderPlugin(value: unknown): ProviderPlugin {
   const manifest = parsePluginManifest(plugin.manifest);
   const provider = expectRecord(plugin.provider, "provider plugin.provider");
   const providerId = expectId(provider.providerId, "provider plugin.provider.providerId");
+  expectFunction(
+    provider.listInstances,
+    "provider plugin.provider.listInstances",
+  );
+  expectFunction(provider.getInstance, "provider plugin.provider.getInstance");
 
   if (providerId !== manifest.provider.id) {
     throw new PluginContractError(
@@ -183,6 +281,7 @@ const SECRET_REFERENCE_PATTERN =
 const VERSION_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const PROVIDER_CAPABILITY_SET = new Set<string>(PROVIDER_CAPABILITIES);
+const INSTANCE_STATE_SET = new Set<string>(INSTANCE_STATES);
 const NORMALIZED_ERROR_CODE_SET = new Set<string>(NORMALIZED_ERROR_CODES);
 
 function expectRecord(value: unknown, path: string): Record<string, unknown> {
@@ -225,6 +324,52 @@ function expectVersion(value: unknown, path: string): string {
   }
 
   return version;
+}
+
+function expectFunction(value: unknown, path: string): void {
+  if (typeof value !== "function") {
+    throw new PluginContractError(`${path} must be a function`);
+  }
+}
+
+function expectInstanceState(value: unknown, path: string): InstanceState {
+  if (typeof value !== "string" || !INSTANCE_STATE_SET.has(value)) {
+    throw new PluginContractError(`${path} is not a supported instance state`);
+  }
+
+  return value as InstanceState;
+}
+
+function expectRawState(value: unknown, path: string): ProviderRawState {
+  if (
+    value !== null &&
+    typeof value !== "string" &&
+    typeof value !== "number" &&
+    typeof value !== "boolean"
+  ) {
+    throw new PluginContractError(`${path} must be a scalar value or null`);
+  }
+
+  return value;
+}
+
+function expectAvailableActions(
+  value: unknown,
+  capabilities: readonly ProviderCapability[],
+  path: string,
+): readonly AvailableAction[] {
+  const actions = expectCapabilities(value, path);
+  const capabilitySet = new Set<string>(capabilities);
+
+  for (const action of actions) {
+    if (!capabilitySet.has(action)) {
+      throw new PluginContractError(
+        `${path} contains ${action}, which is not declared by the provider`,
+      );
+    }
+  }
+
+  return actions;
 }
 
 function expectCapabilities(

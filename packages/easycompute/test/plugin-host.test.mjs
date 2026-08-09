@@ -19,7 +19,15 @@ function plugin({ pluginId = "fake.plugin", providerId = "fake" } = {}) {
         capabilities: [],
       },
     },
-    provider: { providerId },
+    provider: {
+      providerId,
+      async listInstances() {
+        return [];
+      },
+      async getInstance() {
+        return undefined;
+      },
+    },
   };
 }
 

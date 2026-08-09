@@ -6,6 +6,7 @@ import {
   normalizedError,
   isSecretReference,
   parsePluginManifest,
+  parseProviderInstanceList,
   parseProviderPlugin,
   parseSecretReference,
   PluginContractError,
@@ -29,7 +30,15 @@ const validManifest = {
 test("accepts a valid provider plugin", () => {
   const plugin = parseProviderPlugin({
     manifest: validManifest,
-    provider: { providerId: "vastai" },
+    provider: {
+      providerId: "vastai",
+      async listInstances() {
+        return [];
+      },
+      async getInstance() {
+        return undefined;
+      },
+    },
   });
 
   assert.equal(plugin.manifest.provider.id, "vastai");
@@ -65,7 +74,15 @@ test("rejects malformed manifests at the plugin boundary", () => {
     () =>
       parseProviderPlugin({
         manifest: validManifest,
-        provider: { providerId: "intelion" },
+        provider: {
+          providerId: "intelion",
+          async listInstances() {
+            return [];
+          },
+          async getInstance() {
+            return undefined;
+          },
+        },
       }),
     PluginContractError,
   );
@@ -77,6 +94,68 @@ test("validates opaque secret references", () => {
   assert.equal(isSecretReference(ref), true);
   assert.equal(isSecretReference("not-a-secret-ref"), false);
   assert.throws(() => parseSecretReference("secret:banana"), PluginContractError);
+});
+
+test("validates normalized provider inventory and per-instance available actions", () => {
+  const instances = parseProviderInstanceList(
+    [
+      {
+        providerExternalId: "contract-1",
+        name: "Training",
+        state: "running",
+        rawState: "RUNNING",
+        availableActions: ["instance.stop"],
+      },
+      {
+        providerExternalId: "contract-2",
+        state: "unknown",
+        rawState: 17,
+        availableActions: [],
+      },
+    ],
+    ["instance.stop"],
+  );
+
+  assert.equal(instances[1].state, "unknown");
+  assert.equal(instances[1].rawState, 17);
+
+  assert.throws(
+    () =>
+      parseProviderInstanceList(
+        [
+          {
+            providerExternalId: "contract-1",
+            state: "stopped",
+            rawState: "stopped",
+            availableActions: ["instance.start"],
+          },
+        ],
+        ["instance.stop"],
+      ),
+    /not declared by the provider/,
+  );
+
+  assert.throws(
+    () =>
+      parseProviderInstanceList(
+        [
+          {
+            providerExternalId: "duplicate",
+            state: "running",
+            rawState: "running",
+            availableActions: [],
+          },
+          {
+            providerExternalId: "duplicate",
+            state: "stopped",
+            rawState: "stopped",
+            availableActions: [],
+          },
+        ],
+        [],
+      ),
+    /duplicate providerExternalId/,
+  );
 });
 
 test("a host-owned abort signal reaches a blocking plugin invocation", async () => {

@@ -13,8 +13,11 @@ const validPlugin = fileURLToPath(
 const brokenPlugin = fileURLToPath(
   new URL("./fixtures/broken-plugin.mjs", import.meta.url),
 );
-const providerCollisionPlugin = `data:text/javascript,${encodeURIComponent(
-  `export default ${JSON.stringify({
+const inventoryPlugin = fileURLToPath(
+  new URL("./fixtures/inventory-plugin.mjs", import.meta.url),
+);
+const providerCollisionPlugin = `data:text/javascript,${encodeURIComponent(`
+  export default {
     manifest: {
       id: "fixture.collision",
       displayName: "Provider Collision Fixture",
@@ -26,9 +29,13 @@ const providerCollisionPlugin = `data:text/javascript,${encodeURIComponent(
         capabilities: [],
       },
     },
-    provider: { providerId: "fixture" },
-  })};`,
-)}`;
+    provider: {
+      providerId: "fixture",
+      async listInstances() { return []; },
+      async getInstance() { return undefined; },
+    },
+  };
+`)}`;
 const testDirectory = await mkdtemp(join(tmpdir(), "easycompute-cli-"));
 const emptyStateFile = join(testDirectory, "empty-state.json");
 
@@ -252,6 +259,37 @@ test("lists healthy and broken explicitly requested plugins", () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /^loaded\s+fixture\.plugin provider=fixture/m);
   assert.match(result.stdout, /^failed\s+.*broken-plugin\.mjs error=fixture load failure/m);
+});
+
+test("lists and inspects compute instances through configured providers", () => {
+  const stateFile = join(testDirectory, "instances-state.json");
+  assert.equal(
+    runWithState(stateFile, "plugins", "add", inventoryPlugin).status,
+    0,
+  );
+
+  const firstList = runWithState(stateFile, "instances", "list");
+  assert.equal(firstList.status, 0);
+  assert.match(firstList.stdout, /provider=inventory external=remote-1 state=running/);
+  assert.match(firstList.stdout, /actions=instance\.stop/);
+  const [instanceId] = firstList.stdout.match(/instance:[0-9a-f-]+/i) ?? [];
+  assert.ok(instanceId);
+
+  const secondList = runWithState(stateFile, "instances", "list");
+  assert.equal(secondList.status, 0);
+  assert.match(secondList.stdout, new RegExp(instanceId));
+
+  const inspect = runWithState(stateFile, "instances", "inspect", instanceId);
+  assert.equal(inspect.status, 0);
+  assert.deepEqual(JSON.parse(inspect.stdout), {
+    id: instanceId,
+    providerId: "inventory",
+    providerExternalId: "remote-1",
+    state: "running",
+    rawState: "READY",
+    availableActions: ["instance.stop"],
+    name: "Fixture GPU",
+  });
 });
 
 test("rejects malformed plugin list arguments", () => {

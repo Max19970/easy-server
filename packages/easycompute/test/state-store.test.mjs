@@ -46,6 +46,35 @@ test("state survives a fresh store instance and atomic replacement", async () =>
   });
 });
 
+test("compute instance bindings persist stable local and provider identities", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    const store = new JsonStateStore(path);
+    const binding = {
+      id: "instance:550e8400-e29b-41d4-a716-446655440000",
+      providerId: "fixture",
+      providerExternalId: "remote-17",
+    };
+
+    await store.write({ version: 1, plugins: [], instances: [binding] });
+
+    assert.deepEqual(await store.read(), {
+      version: 1,
+      plugins: [],
+      instances: [binding],
+    });
+
+    await assert.rejects(
+      store.write({
+        version: 1,
+        plugins: [],
+        instances: [binding, { ...binding, id: "instance:9d832a32-2b45-4d1c-8f21-286b3a2aecee" }],
+      }),
+      /duplicate provider identity/,
+    );
+  });
+});
+
 test("provider credential configuration persists only opaque secret references", async () => {
   await withTempDirectory(async (directory) => {
     const path = join(directory, "state.json");

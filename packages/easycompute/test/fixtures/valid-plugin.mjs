@@ -15,5 +15,11 @@ export default {
   },
   provider: {
     providerId: "fixture",
+    async listInstances() {
+      return [];
+    },
+    async getInstance() {
+      return undefined;
+    },
   },
 };
