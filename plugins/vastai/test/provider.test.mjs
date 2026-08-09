@@ -148,3 +148,101 @@ test("404 instance lookup returns undefined without weakening other HTTP errors"
 
   assert.equal(await plugin.provider.getInstance("404", context()), undefined);
 });
+
+test("marketplace feature searches Vast offers with plugin-owned filters", async () => {
+  const calls = [];
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch(input, init) {
+      calls.push({ url: new URL(input), init });
+      return json({
+        offers: [
+          {
+            id: 901,
+            machine_id: 77,
+            gpu_name: "RTX 4090",
+            num_gpus: 2,
+            gpu_ram: 24576,
+            dph_total: 0.42,
+            reliability: 0.997,
+            geolocation: "DE",
+          },
+        ],
+      });
+    },
+  });
+
+  const marketplace = plugin.features.find((feature) => feature.id === "marketplace");
+  assert.ok(marketplace);
+
+  const offers = await marketplace.searchOffers(
+    {
+      gpuName: "RTX 4090",
+      minGpuCount: 2,
+      maxHourlyPrice: 0.5,
+      minReliability: 0.99,
+      verifiedOnly: true,
+      limit: 7,
+    },
+    context(),
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.pathname, "/api/v0/bundles/");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].init.headers.Authorization, "Bearer fixture-key");
+  assert.equal(calls[0].init.headers["Content-Type"], "application/json");
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    gpu_name: { eq: "RTX 4090" },
+    num_gpus: { gte: 2 },
+    dph_total: { lte: 0.5 },
+    reliability: { gte: 0.99 },
+    verified: { eq: true },
+    limit: 7,
+  });
+  assert.deepEqual(offers, [
+    {
+      id: "901",
+      machineId: "77",
+      gpuName: "RTX 4090",
+      gpuCount: 2,
+      gpuRamMb: 24576,
+      hourlyPriceUsd: 0.42,
+      reliability: 0.997,
+      location: "DE",
+    },
+  ]);
+});
+
+test("marketplace feature exposes search through the provider-scoped CLI seam", async () => {
+  let requestBody;
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch(_input, init) {
+      requestBody = JSON.parse(init.body);
+      return json({ offers: [] });
+    },
+  });
+  const marketplace = plugin.features[0];
+  const search = marketplace.cli?.commands.find((command) => command.name === "search");
+  assert.ok(search);
+
+  let output = "";
+  await search.run(
+    ["--gpu", "RTX 5090", "--max-hourly", "1.25", "--verified"],
+    {
+      ...context(),
+      write(text) {
+        output += text;
+      },
+      writeError() {},
+    },
+  );
+
+  assert.deepEqual(requestBody, {
+    gpu_name: { eq: "RTX 5090" },
+    dph_total: { lte: 1.25 },
+    verified: { eq: true },
+  });
+  assert.equal(output, "[]\n");
+});

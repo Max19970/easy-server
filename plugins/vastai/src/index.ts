@@ -6,20 +6,43 @@ import {
   type ProviderOperationContext,
   type ProviderPlugin,
 } from "@easycompute/plugin-sdk";
+import {
+  VastApiClient,
+  VAST_API_KEY_CREDENTIAL,
+  type VastFetch,
+} from "./api-client.js";
+import {
+  createVastMarketplaceFeature,
+  type VastMarketplaceFeature,
+  type VastOffer,
+  type VastOfferSearch,
+} from "./marketplace.js";
 
 const DEFAULT_BASE_URL = "https://console.vast.ai";
-export const VAST_API_KEY_CREDENTIAL = "api-key";
 
-type FetchLike = typeof globalThis.fetch;
+export { VAST_API_KEY_CREDENTIAL } from "./api-client.js";
+export type {
+  VastMarketplaceFeature,
+  VastOffer,
+  VastOfferSearch,
+} from "./marketplace.js";
 
 export interface VastPluginOptions {
   readonly baseUrl?: string;
-  readonly fetch?: FetchLike;
+  readonly fetch?: VastFetch;
+}
+
+export interface VastProviderPlugin extends ProviderPlugin {
+  readonly features: readonly [VastMarketplaceFeature];
 }
 
 export function createVastProviderPlugin(
   options: VastPluginOptions = {},
-): ProviderPlugin {
+): VastProviderPlugin {
+  const client = new VastApiClient(
+    options.baseUrl ?? DEFAULT_BASE_URL,
+    options.fetch ?? globalThis.fetch,
+  );
   return {
     manifest: {
       id: "vastai",
@@ -35,37 +58,31 @@ export function createVastProviderPlugin(
         capabilities: [],
       },
     },
-    provider: new VastProviderAdapter(
-      options.baseUrl ?? DEFAULT_BASE_URL,
-      options.fetch ?? globalThis.fetch,
-    ),
+    provider: new VastProviderAdapter(client),
+    features: [createVastMarketplaceFeature(client)],
   };
 }
 
 class VastProviderAdapter implements ProviderAdapter {
   readonly providerId = "vastai";
 
-  constructor(
-    private readonly baseUrl: string,
-    private readonly fetchImpl: FetchLike,
-  ) {}
+  constructor(private readonly client: VastApiClient) {}
 
   async listInstances(
     context: ProviderOperationContext,
   ): Promise<readonly ProviderInstanceSnapshot[]> {
-    const apiKey = await requireApiKey(context);
     const instances: ProviderInstanceSnapshot[] = [];
     const seenTokens = new Set<string>();
     let afterToken: string | undefined;
 
     for (;;) {
-      const url = new URL("/api/v1/instances/", this.baseUrl);
+      const url = this.client.url("/api/v1/instances/");
       url.searchParams.set("limit", "25");
       if (afterToken !== undefined) {
         url.searchParams.set("after_token", afterToken);
       }
 
-      const body = await this.#requestJson(url, apiKey, context);
+      const body = await this.client.getJson(url, context);
       const page = parseInstancePage(body);
       instances.push(...page.instances.map(parseInstance));
 
@@ -87,12 +104,11 @@ class VastProviderAdapter implements ProviderAdapter {
     providerExternalId: string,
     context: ProviderOperationContext,
   ): Promise<ProviderInstanceSnapshot | undefined> {
-    const apiKey = await requireApiKey(context);
-    const url = new URL(
+    const body = await this.client.getJson(
       `/api/v0/instances/${encodeURIComponent(providerExternalId)}/`,
-      this.baseUrl,
+      context,
+      true,
     );
-    const body = await this.#requestJson(url, apiKey, context, true);
     if (body === undefined) {
       return undefined;
     }
@@ -100,84 +116,6 @@ class VastProviderAdapter implements ProviderAdapter {
     const response = expectRecord(body, "Vast.ai instance response");
     return parseInstance(response.instances);
   }
-
-  async #requestJson(
-    url: URL,
-    apiKey: string,
-    context: ProviderOperationContext,
-    allowNotFound = false,
-  ): Promise<unknown | undefined> {
-    let response: Response;
-    try {
-      response = await this.fetchImpl(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          Accept: "application/json",
-        },
-        signal: context.signal,
-      });
-    } catch (error) {
-      if (context.signal.aborted) {
-        throw normalizedError(
-          "cancelled",
-          "Vast.ai request was cancelled before a response was received",
-          error,
-        );
-      }
-      throw normalizedError(
-        "provider-unavailable",
-        "Vast.ai request failed before a response was received",
-        error,
-      );
-    }
-
-    if (allowNotFound && response.status === 404) {
-      return undefined;
-    }
-    if (response.status === 401 || response.status === 403) {
-      throw normalizedError(
-        "authentication",
-        "Vast.ai rejected the configured API key",
-      );
-    }
-    if (response.status === 429) {
-      throw normalizedError("rate-limited", "Vast.ai rate limit exceeded");
-    }
-    if (response.status >= 500) {
-      throw normalizedError(
-        "provider-unavailable",
-        `Vast.ai returned HTTP ${response.status}`,
-      );
-    }
-    if (!response.ok) {
-      throw normalizedError(
-        "unknown-provider-error",
-        `Vast.ai returned HTTP ${response.status}`,
-      );
-    }
-
-    try {
-      return await response.json();
-    } catch (error) {
-      throw normalizedError(
-        "plugin-failure",
-        "Vast.ai returned an invalid JSON response",
-        error,
-      );
-    }
-  }
-}
-
-async function requireApiKey(context: ProviderOperationContext): Promise<string> {
-  const value = await context.resolveCredential(VAST_API_KEY_CREDENTIAL);
-  if (value === undefined || value.length === 0) {
-    throw normalizedError(
-      "authentication",
-      `Vast.ai requires configured credential ${VAST_API_KEY_CREDENTIAL}`,
-    );
-  }
-  return value;
 }
 
 function parseInstancePage(value: unknown): {
