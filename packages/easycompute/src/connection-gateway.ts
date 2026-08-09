@@ -129,6 +129,7 @@ export class ConnectionGateway {
 
       const target: TcpForwardTarget = { host: remoteHost, port: remotePort };
       const allowedSecretRefs = accessMethodSecretRefs(selected.method);
+      const allowedCredentialIds = accessMethodDeferredCredentialIds(selected.method);
       const transport = await selected.adapter.openTcpForward(
         selected.method,
         binding.providerExternalId,
@@ -161,6 +162,33 @@ export class ConnectionGateway {
             }
 
             return secret;
+          },
+          resolveCredential: async (id) => {
+            if (!allowedCredentialIds.has(id)) {
+              throw normalizedError(
+                "authentication",
+                "Access Adapter requested a provider credential that is not declared by the selected Access Method",
+              );
+            }
+            if (admission.provider.resolveAccessCredential === undefined) {
+              throw normalizedError(
+                "plugin-failure",
+                `Provider ${binding.providerId} declared deferred access credential ${id} without a resolver`,
+              );
+            }
+
+            const credential = await admission.provider.resolveAccessCredential(
+              binding.providerExternalId,
+              id,
+              providerOperationContext(admission, context),
+            );
+            if (credential === undefined) {
+              throw normalizedError(
+                "authentication",
+                `Provider access credential is unavailable: ${id}`,
+              );
+            }
+            return credential;
           },
         },
       );
@@ -439,6 +467,16 @@ function accessMethodSecretRefs(method: AccessMethod): Set<SecretReference> {
   }
 
   return refs;
+}
+
+function accessMethodDeferredCredentialIds(method: AccessMethod): Set<string> {
+  const ids = new Set<string>();
+  for (const source of method.credentialSources ?? []) {
+    if (source.kind === "provider-deferred") {
+      ids.add(source.id);
+    }
+  }
+  return ids;
 }
 
 function validateTarget(host: string, port: number): void {

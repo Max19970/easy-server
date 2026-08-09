@@ -1,6 +1,7 @@
 import {
   isNormalizedError,
   normalizedError,
+  type AccessMethod,
   type PowerAction,
   type ProviderAdapter,
   type ProviderInstanceSnapshot,
@@ -18,6 +19,7 @@ import {
 } from "./configurator.js";
 
 const DEFAULT_BASE_URL = "https://intelion.cloud";
+const SSH_PASSWORD_CREDENTIAL = "ssh-password";
 
 export { INTELION_API_TOKEN_CREDENTIAL } from "./api-client.js";
 export type {
@@ -112,6 +114,78 @@ class IntelionProviderAdapter implements ProviderAdapter {
     return body === undefined ? undefined : parseServer(body);
   }
 
+  async getAccessMethods(
+    providerExternalId: string,
+    context: ProviderOperationContext,
+  ): Promise<readonly AccessMethod[]> {
+    const body = await this.client.getJson(
+      `/api/v2/cloud-servers/${encodeServerId(providerExternalId)}/`,
+      context,
+      true,
+    );
+    if (body === undefined) {
+      return [];
+    }
+
+    const server = expectRecord(body, "Intelion cloud server");
+    const snapshot = parseServer(server);
+    if (snapshot.providerExternalId !== providerExternalId || snapshot.rawState !== 2) {
+      return [];
+    }
+
+    const address = connectionAddress(server);
+    const login = server.login;
+    if (address === undefined || login === null || login === undefined) {
+      return [];
+    }
+    if (typeof login !== "string" || login.trim().length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        id: "ssh",
+        kind: "ssh",
+        mode: "tcp-forward",
+        credentialSources: [
+          { kind: "provider-deferred", id: SSH_PASSWORD_CREDENTIAL },
+        ],
+        ssh: {
+          host: address,
+          port: 22,
+          username: login,
+          passwordCredentialId: SSH_PASSWORD_CREDENTIAL,
+        },
+      },
+    ];
+  }
+
+  async resolveAccessCredential(
+    providerExternalId: string,
+    credentialId: string,
+    context: ProviderOperationContext,
+  ): Promise<string | undefined> {
+    if (credentialId !== SSH_PASSWORD_CREDENTIAL) {
+      return undefined;
+    }
+    const body = await this.client.getJson(
+      `/api/v2/cloud-servers/${encodeServerId(providerExternalId)}/password/`,
+      context,
+      true,
+    );
+    if (body === undefined) {
+      return undefined;
+    }
+    const password =
+      typeof body === "string"
+        ? body
+        : expectRecord(body, "Intelion server password response").password;
+    if (typeof password !== "string" || password.length === 0) {
+      return undefined;
+    }
+    return password;
+  }
+
   async performPowerAction(
     providerExternalId: string,
     action: PowerAction,
@@ -201,6 +275,24 @@ function parseServer(value: unknown): ProviderInstanceSnapshot {
       error,
     );
   }
+}
+
+function connectionAddress(server: Record<string, unknown>): string | undefined {
+  for (const value of [server.ip_to_connect, server.domain_to_connect]) {
+    if (value === null || value === undefined) {
+      continue;
+    }
+    if (typeof value !== "string") {
+      throw normalizedError(
+        "plugin-failure",
+        "Intelion connection address must be a string or null",
+      );
+    }
+    if (value.trim().length > 0) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function availableActions(

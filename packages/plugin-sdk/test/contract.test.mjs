@@ -209,6 +209,59 @@ test("keeps access method discovery secret-free and validates adapter ownership"
     ],
   );
 
+  assert.deepEqual(
+    parseAccessMethods([
+      {
+        id: "password-ssh",
+        kind: "ssh",
+        mode: "tcp-forward",
+        credentialSources: [
+          { kind: "provider-deferred", id: "ssh-password" },
+        ],
+        ssh: {
+          host: "ssh.example.test",
+          port: 22,
+          username: "root",
+          passwordCredentialId: "ssh-password",
+        },
+      },
+    ]),
+    [
+      {
+        id: "password-ssh",
+        kind: "ssh",
+        mode: "tcp-forward",
+        credentialSources: [
+          { kind: "provider-deferred", id: "ssh-password" },
+        ],
+        ssh: {
+          host: "ssh.example.test",
+          port: 22,
+          username: "root",
+          passwordCredentialId: "ssh-password",
+        },
+      },
+    ],
+  );
+
+  assert.throws(
+    () =>
+      parseAccessMethods([
+        {
+          id: "bad-password-source",
+          kind: "ssh",
+          mode: "tcp-forward",
+          ssh: {
+            host: "ssh.example.test",
+            port: 22,
+            username: "root",
+            passwordCredentialId: "undeclared-password",
+          },
+        },
+      ]),
+    /passwordCredentialId must reference a declared provider-deferred credential source/,
+  );
+
   assert.throws(
     () =>
       parseAccessMethods([

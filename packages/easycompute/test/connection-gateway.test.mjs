@@ -47,6 +47,7 @@ function registerProvider(
       { id: "loopback", kind: "loopback", mode: "tcp-forward" },
     ],
     accessAdapters = [],
+    resolveAccessCredential,
     onRelease = () => {},
   } = {},
 ) {
@@ -59,6 +60,7 @@ function registerProvider(
       return undefined;
     },
     getAccessMethods,
+    ...(resolveAccessCredential === undefined ? {} : { resolveAccessCredential }),
   };
 
   registry.register("fake", "fake.plugin", () => ({
@@ -273,6 +275,60 @@ test("selected Access Method can resolve only its declared secret references", a
       secrets,
     ).openEndpoint(INSTANCE_ID, 12345, operationContext());
     assert.equal(secretReads, 1);
+    await result.session.close();
+  });
+});
+
+test("selected Access Method resolves only its declared provider-deferred credentials", async () => {
+  await withState(async (store) => {
+    const providers = new ProviderRegistry();
+    const access = new AccessAdapterRegistry();
+    let providerCredentialReads = 0;
+    registerProvider(providers, {
+      getAccessMethods: async () => [
+        {
+          id: "deferred",
+          kind: "deferred",
+          mode: "tcp-forward",
+          credentialSources: [
+            { kind: "provider-deferred", id: "session-password" },
+          ],
+        },
+      ],
+      async resolveAccessCredential(providerExternalId, id) {
+        providerCredentialReads += 1;
+        assert.equal(providerExternalId, "remote-1");
+        assert.equal(id, "session-password");
+        return "fixture-provider-password";
+      },
+    });
+    access.registerBuiltIn({
+      kind: "deferred",
+      async openTcpForward(_method, _providerExternalId, _target, setupContext) {
+        await assert.rejects(
+          setupContext.resolveCredential("undeclared"),
+          (error) =>
+            error.code === "authentication" && /not declared/.test(error.message),
+        );
+        assert.equal(
+          await setupContext.resolveCredential("session-password"),
+          "fixture-provider-password",
+        );
+        return {
+          async openChannel() {
+            throw new Error("not used");
+          },
+          async close() {},
+        };
+      },
+    });
+
+    const result = await new ConnectionGateway(
+      providers,
+      access,
+      store,
+    ).openEndpoint(INSTANCE_ID, 12345, operationContext());
+    assert.equal(providerCredentialReads, 1);
     await result.session.close();
   });
 });

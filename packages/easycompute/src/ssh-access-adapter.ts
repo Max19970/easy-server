@@ -38,11 +38,26 @@ interface HostKey {
   readonly fingerprint: string;
 }
 
+interface PasswordAuth {
+  readonly passwordFile: string;
+  readonly askpassPreload: string;
+}
+
 interface CommandResult {
   readonly code: number | null;
   readonly stdout: string;
   readonly stderr: string;
 }
+
+const ASKPASS_PRELOAD = `
+const { readFileSync } = require("node:fs");
+const passwordFile = process.env.EASYCOMPUTE_SSH_PASSWORD_FILE;
+if (passwordFile && process.argv.length === 2) {
+  const password = readFileSync(passwordFile, "utf8");
+  process.stdout.write(password.endsWith("\\n") ? password : password + "\\n");
+  process.exit(0);
+}
+`;
 
 export class OpenSshAccessAdapter implements AccessAdapter {
   readonly kind = "ssh";
@@ -76,12 +91,20 @@ export class OpenSshAccessAdapter implements AccessAdapter {
             await context.resolveSecret(method.ssh.privateKeySecretRef),
             context,
           );
+    const passwordAuth =
+      method.ssh.passwordCredentialId === undefined
+        ? undefined
+        : await this.#materializePassword(
+            await context.resolveCredential(method.ssh.passwordCredentialId),
+            context,
+          );
 
     return new OpenSshTransportSession(
       method,
       target,
       this.#knownHostsPath,
       identityFile,
+      passwordAuth,
       this.#sshCommand,
     );
   }
@@ -190,6 +213,46 @@ export class OpenSshAccessAdapter implements AccessAdapter {
     }
     return path;
   }
+
+  async #materializePassword(
+    secret: string,
+    context: AccessSetupContext,
+  ): Promise<PasswordAuth> {
+    const directory = join(
+      dirname(this.#knownHostsPath),
+      "sessions",
+      randomUUID(),
+    );
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    context.registerCleanup(() => rm(directory, { recursive: true, force: true }));
+    await securePrivateDirectory(directory, this.#icaclsCommand, context.signal);
+
+    const passwordFile = join(directory, "password");
+    const password = await open(passwordFile, "wx", 0o600);
+    try {
+      await password.writeFile(secret, "utf8");
+      await password.sync();
+    } finally {
+      await password.close();
+    }
+
+    const askpassPreload = join(directory, "askpass.cjs");
+    const preload = await open(askpassPreload, "wx", 0o600);
+    try {
+      await preload.writeFile(ASKPASS_PRELOAD, "utf8");
+      await preload.sync();
+    } finally {
+      await preload.close();
+    }
+
+    if (process.platform !== "win32") {
+      await Promise.all([
+        chmod(passwordFile, 0o600),
+        chmod(askpassPreload, 0o600),
+      ]);
+    }
+    return { passwordFile, askpassPreload };
+  }
 }
 
 class OpenSshTransportSession implements AccessTransportSession {
@@ -204,6 +267,7 @@ class OpenSshTransportSession implements AccessTransportSession {
     private readonly target: TcpForwardTarget,
     private readonly knownHostsPath: string,
     private readonly identityFile: string | undefined,
+    private readonly passwordAuth: PasswordAuth | undefined,
     private readonly sshCommand: CommandSpec,
   ) {}
 
@@ -229,6 +293,9 @@ class OpenSshTransportSession implements AccessTransportSession {
       {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
+        ...(this.passwordAuth === undefined
+          ? {}
+          : { env: passwordEnvironment(this.passwordAuth) }),
       },
     );
     const onAbort = () => {
@@ -336,6 +403,16 @@ function assertSshMethod(
   }
 }
 
+function passwordEnvironment(auth: PasswordAuth): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    SSH_ASKPASS: process.execPath,
+    SSH_ASKPASS_REQUIRE: "force",
+    EASYCOMPUTE_SSH_PASSWORD_FILE: auth.passwordFile,
+    NODE_OPTIONS: `--require ${JSON.stringify(auth.askpassPreload)}`,
+  };
+}
+
 export function buildSshArgs(
   method: AccessMethod & {
     readonly kind: "ssh";
@@ -355,7 +432,9 @@ export function buildSshArgs(
     "-l",
     method.ssh.username,
     "-o",
-    "BatchMode=yes",
+    method.ssh.passwordCredentialId === undefined
+      ? "BatchMode=yes"
+      : "BatchMode=no",
     "-o",
     "StrictHostKeyChecking=yes",
     "-o",
@@ -367,9 +446,21 @@ export function buildSshArgs(
     "-o",
     "UpdateHostKeys=no",
     "-o",
-    "PasswordAuthentication=no",
+    method.ssh.passwordCredentialId === undefined
+      ? "PasswordAuthentication=no"
+      : "PasswordAuthentication=yes",
     "-o",
     "KbdInteractiveAuthentication=no",
+    ...(method.ssh.passwordCredentialId === undefined
+      ? []
+      : [
+          "-o",
+          "PreferredAuthentications=password",
+          "-o",
+          "PubkeyAuthentication=no",
+          "-o",
+          "NumberOfPasswordPrompts=1",
+        ]),
     ...(identityFile === undefined
       ? []
       : ["-o", "IdentitiesOnly=yes", "-i", identityFile]),

@@ -53,6 +53,25 @@ function sshMethod(privateKeySecretRef) {
   ])[0];
 }
 
+function passwordSshMethod() {
+  return parseAccessMethods([
+    {
+      id: "password-ssh",
+      kind: "ssh",
+      mode: "tcp-forward",
+      credentialSources: [
+        { kind: "provider-deferred", id: "ssh-password" },
+      ],
+      ssh: {
+        host: "ssh.example.test",
+        port: 2222,
+        username: "ubuntu",
+        passwordCredentialId: "ssh-password",
+      },
+    },
+  ])[0];
+}
+
 function adapter(directory, keySpecPath, recordPath) {
   return new OpenSshAccessAdapter({
     knownHostsPath: join(directory, "known_hosts"),
@@ -71,7 +90,10 @@ function adapter(directory, keySpecPath, recordPath) {
   });
 }
 
-function setupContext({ resolveSecret = async () => assert.fail("secret not expected") } = {}) {
+function setupContext({
+  resolveSecret = async () => assert.fail("secret not expected"),
+  resolveCredential = async () => assert.fail("credential not expected"),
+} = {}) {
   const cleanups = [];
   return {
     context: {
@@ -80,6 +102,7 @@ function setupContext({ resolveSecret = async () => assert.fail("secret not expe
         cleanups.push(cleanup);
       },
       resolveSecret,
+      resolveCredential,
     },
     async cleanup() {
       for (const cleanup of cleanups.reverse()) {
@@ -289,6 +312,63 @@ test("SSH channel abort during spawn rejects and cleans up", async () => {
       await transport.close();
       await setup.cleanup();
     }
+  });
+});
+
+test("deferred SSH password is resolved only after trust and passed through askpass", async () => {
+  await withTempDirectory(async (directory) => {
+    const keySpecPath = join(directory, "host-key.json");
+    const recordPath = join(directory, "ssh-args.json");
+    await writeFile(keySpecPath, JSON.stringify(key("host-key-one")), "utf8");
+    const access = adapter(
+      join(directory, "session path with spaces"),
+      keySpecPath,
+      recordPath,
+    );
+    const method = passwordSshMethod();
+    let credentialReads = 0;
+    const setup = setupContext({
+      async resolveCredential(id) {
+        credentialReads += 1;
+        assert.equal(id, "ssh-password");
+        return "fixture-server-password";
+      },
+    });
+
+    const trust = await captureTrustError(() =>
+      access.openTcpForward(
+        method,
+        "remote-1",
+        { host: "127.0.0.1", port: 8000 },
+        setup.context,
+      ),
+    );
+    assert.equal(credentialReads, 0);
+    await access.enrollHostKey(trust, context.signal);
+
+    const transport = await access.openTcpForward(
+      method,
+      "remote-1",
+      { host: "127.0.0.1", port: 8000 },
+      setup.context,
+    );
+    assert.equal(credentialReads, 1);
+    const channel = await transport.openChannel(context);
+
+    const args = JSON.parse(await waitForFile(recordPath));
+    assert.ok(args.includes("BatchMode=no"));
+    assert.ok(args.includes("PasswordAuthentication=yes"));
+    assert.ok(args.includes("PreferredAuthentications=password"));
+    assert.equal(args.some((arg) => arg.includes("fixture-server-password")), false);
+
+    const auth = JSON.parse(await waitForFile(`${recordPath}.auth.json`));
+    assert.equal(auth.askpassRequire, "force");
+    assert.equal(auth.password, "fixture-server-password");
+
+    await channel.close();
+    await transport.close();
+    await setup.cleanup();
+    await assert.rejects(readFile(auth.passwordFile, "utf8"), (error) => error?.code === "ENOENT");
   });
 });
 

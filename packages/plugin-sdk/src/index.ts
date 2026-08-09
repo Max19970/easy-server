@@ -102,6 +102,11 @@ export interface ProviderAdapter {
     providerExternalId: string,
     context: ProviderOperationContext,
   ): Promise<readonly AccessMethod[]>;
+  resolveAccessCredential?(
+    providerExternalId: string,
+    credentialId: string,
+    context: ProviderOperationContext,
+  ): Promise<string | undefined>;
   performPowerAction?(
     providerExternalId: string,
     action: PowerAction,
@@ -220,6 +225,7 @@ export interface SshAccessDescriptor {
   readonly port: number;
   readonly username: string;
   readonly privateKeySecretRef?: SecretReference;
+  readonly passwordCredentialId?: string;
 }
 
 export interface AccessMethod {
@@ -244,6 +250,7 @@ export interface TcpForwardTarget {
 export interface AccessSetupContext extends OperationContext {
   registerCleanup(cleanup: () => void | Promise<void>): void;
   resolveSecret(ref: SecretReference): Promise<string>;
+  resolveCredential(id: string): Promise<string>;
 }
 
 export interface AccessAdapter {
@@ -426,6 +433,12 @@ export function parseProviderPlugin(value: unknown): ProviderPlugin {
       "provider plugin.provider.getAccessMethods",
     );
   }
+  if (provider.resolveAccessCredential !== undefined) {
+    expectFunction(
+      provider.resolveAccessCredential,
+      "provider plugin.provider.resolveAccessCredential",
+    );
+  }
   assertLifecycleMethods(provider, manifest.provider.capabilities);
 
   if (providerId !== manifest.provider.id) {
@@ -474,7 +487,13 @@ export function parseAccessMethods(value: unknown): readonly AccessMethod[] {
       method.credentialSources,
       `${path}.credentialSources`,
     );
-    const ssh = parseSshAccessDescriptor(method.ssh, kind, mode, `${path}.ssh`);
+    const ssh = parseSshAccessDescriptor(
+      method.ssh,
+      kind,
+      mode,
+      credentialSources,
+      `${path}.ssh`,
+    );
 
     if (seen.has(id)) {
       throw new PluginContractError(
@@ -499,6 +518,7 @@ function parseSshAccessDescriptor(
   value: unknown,
   kind: string,
   mode: AccessMethodMode,
+  credentialSources: readonly AccessCredentialSource[] | undefined,
   path: string,
 ): SshAccessDescriptor | undefined {
   if (kind !== "ssh") {
@@ -513,19 +533,39 @@ function parseSshAccessDescriptor(
   }
 
   const ssh = expectRecord(value, path);
-  assertOnlyKeys(ssh, ["host", "port", "username", "privateKeySecretRef"], path);
+  assertOnlyKeys(
+    ssh,
+    ["host", "port", "username", "privateKeySecretRef", "passwordCredentialId"],
+    path,
+  );
+  const passwordCredentialId =
+    ssh.passwordCredentialId === undefined
+      ? undefined
+      : expectId(ssh.passwordCredentialId, `${path}.passwordCredentialId`);
+  if (
+    passwordCredentialId !== undefined &&
+    !credentialSources?.some(
+      (source) =>
+        source.kind === "provider-deferred" && source.id === passwordCredentialId,
+    )
+  ) {
+    throw new PluginContractError(
+      `${path}.passwordCredentialId must reference a declared provider-deferred credential source`,
+    );
+  }
   const parsed: SshAccessDescriptor = {
     host: expectSshToken(ssh.host, `${path}.host`),
     port: expectTcpPort(ssh.port, `${path}.port`),
     username: expectSshToken(ssh.username, `${path}.username`),
   };
 
-  return ssh.privateKeySecretRef === undefined
-    ? parsed
-    : {
-        ...parsed,
-        privateKeySecretRef: parseSecretReference(ssh.privateKeySecretRef),
-      };
+  return {
+    ...parsed,
+    ...(ssh.privateKeySecretRef === undefined
+      ? {}
+      : { privateKeySecretRef: parseSecretReference(ssh.privateKeySecretRef) }),
+    ...(passwordCredentialId === undefined ? {} : { passwordCredentialId }),
+  };
 }
 
 function parseAccessCredentialSources(
