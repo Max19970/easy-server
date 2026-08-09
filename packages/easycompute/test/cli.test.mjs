@@ -16,6 +16,9 @@ const brokenPlugin = fileURLToPath(
 const inventoryPlugin = fileURLToPath(
   new URL("./fixtures/inventory-plugin.mjs", import.meta.url),
 );
+const providerCliPlugin = fileURLToPath(
+  new URL("./fixtures/provider-cli-plugin.mjs", import.meta.url),
+);
 const providerCollisionPlugin = `data:text/javascript,${encodeURIComponent(`
   export default {
     manifest: {
@@ -298,6 +301,53 @@ test("lists and inspects compute instances through configured providers", () => 
   const start = runWithState(stateFile, "instances", "start", instanceId);
   assert.equal(start.status, 1);
   assert.match(start.stderr, /conflict: instance\.start is not available/);
+});
+
+test("mounts and removes provider-scoped CLI feature commands with plugin lifecycle", () => {
+  const stateFile = join(testDirectory, "provider-cli-state.json");
+  assert.equal(
+    runWithState(stateFile, "plugins", "add", providerCliPlugin).status,
+    0,
+  );
+
+  const features = runWithState(stateFile, "provider");
+  assert.equal(features.status, 0);
+  assert.match(features.stdout, /provider-cli\/marketplace Fixture Marketplace/);
+
+  const commands = runWithState(
+    stateFile,
+    "provider",
+    "provider-cli",
+    "marketplace",
+  );
+  assert.equal(commands.status, 0);
+  assert.match(commands.stdout, /echo\s+Echo provider-owned arguments/);
+
+  const execute = runWithState(
+    stateFile,
+    "provider",
+    "provider-cli",
+    "marketplace",
+    "echo",
+    "alpha",
+    "beta",
+  );
+  assert.equal(execute.status, 0);
+  assert.equal(execute.stdout, "provider-owned:alpha|beta\n");
+
+  assert.equal(
+    runWithState(stateFile, "plugins", "disable", providerCliPlugin).status,
+    0,
+  );
+  const removed = runWithState(
+    stateFile,
+    "provider",
+    "provider-cli",
+    "marketplace",
+    "echo",
+  );
+  assert.equal(removed.status, 1);
+  assert.match(removed.stderr, /Provider Feature not found/);
 });
 
 test("rejects malformed plugin list arguments", () => {

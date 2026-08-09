@@ -166,9 +166,28 @@ export function parseProviderInstanceList(
   return instances;
 }
 
+export interface ProviderCliCommandContext extends OperationContext {
+  write(text: string): void;
+  writeError(text: string): void;
+}
+
+export interface ProviderCliCommand {
+  readonly name: string;
+  readonly description: string;
+  run(
+    args: readonly string[],
+    context: ProviderCliCommandContext,
+  ): Promise<void>;
+}
+
+export interface ProviderCliContribution {
+  readonly commands: readonly ProviderCliCommand[];
+}
+
 export interface ProviderFeature {
   readonly id: string;
   readonly displayName: string;
+  readonly cli?: ProviderCliContribution;
 }
 
 export interface ProviderPlugin {
@@ -333,11 +352,43 @@ function parseProviderFeatures(value: unknown): readonly ProviderFeature[] {
       );
     }
 
+    if (feature.cli !== undefined) {
+      parseProviderCliContribution(
+        feature.cli,
+        `provider plugin.features[${index}].cli`,
+      );
+    }
+
     seen.add(id);
     features.push(feature as unknown as ProviderFeature);
   }
 
   return features;
+}
+
+function parseProviderCliContribution(value: unknown, path: string): void {
+  const contribution = expectRecord(value, path);
+  if (!Array.isArray(contribution.commands)) {
+    throw new PluginContractError(`${path}.commands must be an array`);
+  }
+
+  const seen = new Set<string>();
+  for (const [index, candidate] of contribution.commands.entries()) {
+    const command = expectRecord(candidate, `${path}.commands[${index}]`);
+    const name = expectId(command.name, `${path}.commands[${index}].name`);
+    expectNonEmptyString(
+      command.description,
+      `${path}.commands[${index}].description`,
+    );
+    expectFunction(command.run, `${path}.commands[${index}].run`);
+
+    if (seen.has(name)) {
+      throw new PluginContractError(
+        `${path}.commands contains duplicate name: ${name}`,
+      );
+    }
+    seen.add(name);
+  }
 }
 
 const ID_PATTERN = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;

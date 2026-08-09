@@ -136,6 +136,48 @@ test("validates provider feature identities without interpreting feature payload
   );
 });
 
+test("validates provider CLI contributions without interpreting command arguments", () => {
+  const run = async () => {};
+  const feature = {
+    id: "marketplace",
+    displayName: "Marketplace",
+    cli: {
+      commands: [
+        { name: "search", description: "Search offers", run },
+        { name: "rent", description: "Rent one offer", run },
+      ],
+    },
+  };
+  const plugin = parseProviderPlugin({
+    manifest: validManifest,
+    provider: provider(),
+    features: [feature],
+  });
+
+  assert.equal(plugin.features?.[0], feature);
+  assert.equal(plugin.features?.[0].cli?.commands[0].run, run);
+
+  assert.throws(
+    () =>
+      parseProviderPlugin({
+        manifest: validManifest,
+        provider: provider(),
+        features: [
+          {
+            ...feature,
+            cli: {
+              commands: [
+                { name: "search", description: "One", run },
+                { name: "search", description: "Two", run },
+              ],
+            },
+          },
+        ],
+      }),
+    /duplicate name/,
+  );
+});
+
 test("validates opaque secret references", () => {
   const ref = parseSecretReference("secret:550e8400-e29b-41d4-a716-446655440000");
 

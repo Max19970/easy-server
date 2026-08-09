@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { isNormalizedError, type AvailableAction } from "@easycompute/plugin-sdk";
 import { ComputeManager } from "./compute-manager.js";
+import { ProviderFeatureHost } from "./provider-feature-host.js";
 import {
   formatPluginStatuses,
   PluginHost,
@@ -27,6 +28,7 @@ Usage:
   easycompute instances stop <instance-id>
   easycompute instances restart <instance-id>
   easycompute instances destroy <instance-id>
+  easycompute provider <provider-id> <feature-id> <command> [args...]
 `;
 
 await run(process.argv.slice(2));
@@ -41,6 +43,16 @@ async function run(args: readonly string[]): Promise<void> {
 
   if (command === "--version" || command === "-v" || command === "version") {
     process.stdout.write(`${VERSION}\n`);
+    return;
+  }
+
+  if (command === "provider") {
+    try {
+      await runProvider(args.slice(1));
+    } catch (error) {
+      process.stderr.write(`${errorMessage(error)}\n\n${help}`);
+      process.exitCode = 1;
+    }
     return;
   }
 
@@ -66,6 +78,68 @@ async function run(args: readonly string[]): Promise<void> {
 
   process.stderr.write(`Unknown command: ${command}\n\n${help}`);
   process.exitCode = 1;
+}
+
+async function runProvider(args: readonly string[]): Promise<void> {
+  const [providerId, featureId, commandName, ...commandArgs] = args;
+  const store = new JsonStateStore(stateFilePath());
+  const state = await store.read();
+  const registry = new ProviderRegistry();
+  const featureHost = new ProviderFeatureHost();
+  const host = new PluginHost(registry, undefined, featureHost);
+  await host.load(
+    state.plugins
+      .filter((plugin) => plugin.enabled)
+      .map((plugin) => canonicalPluginSource(plugin.source)),
+  );
+
+  if (providerId === undefined) {
+    process.stdout.write(formatProviderFeatures(featureHost.listFeatures()));
+    return;
+  }
+
+  if (featureId === undefined) {
+    process.stdout.write(
+      formatProviderFeatures(
+        featureHost
+          .listFeatures()
+          .filter((feature) => feature.providerId === providerId),
+      ),
+    );
+    return;
+  }
+
+  const admission = featureHost.acquire(providerId, featureId);
+  if (admission === undefined) {
+    throw new Error(`Provider Feature not found: ${providerId}/${featureId}`);
+  }
+
+  try {
+    const commands = admission.feature.cli?.commands ?? [];
+    if (commandName === undefined) {
+      process.stdout.write(formatProviderCommands(providerId, featureId, commands));
+      return;
+    }
+
+    const command = commands.find((candidate) => candidate.name === commandName);
+    if (command === undefined) {
+      throw new Error(
+        `Provider command not found: ${providerId}/${featureId}/${commandName}`,
+      );
+    }
+
+    await command.run(commandArgs, {
+      signal: new AbortController().signal,
+      write(text) {
+        process.stdout.write(text);
+      },
+      writeError(text) {
+        process.stderr.write(text);
+      },
+    });
+  } finally {
+    admission.release();
+  }
 }
 
 async function runInstances(args: readonly string[]): Promise<void> {
@@ -225,6 +299,35 @@ async function validatePluginActivation(
   }
 
   return status;
+}
+
+function formatProviderFeatures(
+  features: readonly import("./provider-feature-host.js").ProviderFeatureDescriptor[],
+): string {
+  if (features.length === 0) {
+    return "No provider features available.\n";
+  }
+
+  return `${features
+    .map(
+      (feature) =>
+        `${feature.providerId}/${feature.featureId} ${feature.displayName}`,
+    )
+    .join("\n")}\n`;
+}
+
+function formatProviderCommands(
+  providerId: string,
+  featureId: string,
+  commands: readonly import("@easycompute/plugin-sdk").ProviderCliCommand[],
+): string {
+  if (commands.length === 0) {
+    return `No CLI commands for ${providerId}/${featureId}.\n`;
+  }
+
+  return `${commands
+    .map((command) => `${command.name.padEnd(12)} ${command.description}`)
+    .join("\n")}\n`;
 }
 
 function instanceAction(command: string | undefined): AvailableAction | undefined {
