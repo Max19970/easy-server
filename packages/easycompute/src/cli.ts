@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";

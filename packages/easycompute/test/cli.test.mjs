@@ -166,6 +166,10 @@ test("prints version", () => {
   assert.equal(result.stdout, "0.1.0\n");
 });
 
+test("published CLI entrypoint is directly executable by Node-compatible shells", async () => {
+  assert.match(await readFile(cli, "utf8"), /^#!\/usr\/bin\/env node\r?\n/);
+});
+
 test("loads first-party workspace packages as explicit provider plugins", () => {
   for (const [source, providerId] of [
     ["@easycompute/plugin-vastai", "vastai"],
