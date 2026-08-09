@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { normalizedError } from "@easycompute/plugin-sdk";
 import { ComputeManager } from "../dist/compute-manager.js";
+import { HostOperationRunner } from "../dist/host-operation.js";
 import { ProviderRegistry } from "../dist/provider-registry.js";
 import { JsonStateStore } from "../dist/state-store.js";
 
@@ -62,6 +63,27 @@ test("zero providers returns an empty inventory", async () => {
   await withStore(async (store) => {
     const manager = new ComputeManager(new ProviderRegistry(), store);
     assert.deepEqual(await manager.listInstances(context), []);
+  });
+});
+
+test("host deadline bounds a non-cooperative provider inventory read", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    registerProvider(registry, {
+      providerId: "slow",
+      capabilities: [],
+      list: async () => new Promise(() => {}),
+      get: async () => undefined,
+    });
+
+    await assert.rejects(
+      new ComputeManager(
+        registry,
+        store,
+        new HostOperationRunner(20),
+      ).listInstances(context),
+      (error) => error?.code === "timeout",
+    );
   });
 });
 
@@ -359,6 +381,59 @@ test("a failed provider action does not corrupt another provider binding", async
       persisted.instances.some((binding) => binding.id === healthyInstance.id),
       true,
     );
+  });
+});
+
+test("cancelled lifecycle mutation after dispatch reports outcome unknown, is not retried, and reconciles", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const snapshot = {
+      providerExternalId: "remote",
+      state: "running",
+      rawState: "running",
+      availableActions: ["instance.stop"],
+    };
+    let powerCalls = 0;
+    let getCalls = 0;
+    let markDispatched;
+    const dispatched = new Promise((resolve) => {
+      markDispatched = resolve;
+    });
+
+    registerProvider(registry, {
+      providerId: "bounded",
+      capabilities: ["instance.stop"],
+      list: async () => [snapshot],
+      get: async () => {
+        getCalls += 1;
+        return snapshot;
+      },
+      powerAction: async (_providerExternalId, _action, operationContext) => {
+        powerCalls += 1;
+        markDispatched();
+        await new Promise((resolve) =>
+          operationContext.signal.addEventListener("abort", resolve, { once: true }),
+        );
+      },
+    });
+
+    const manager = new ComputeManager(
+      registry,
+      store,
+      new HostOperationRunner(500),
+    );
+    const [instance] = await manager.listInstances(context);
+    const controller = new AbortController();
+    const action = manager.performAction(instance.id, "instance.stop", {
+      signal: controller.signal,
+    });
+
+    await dispatched;
+    controller.abort();
+
+    await assert.rejects(action, (error) => error?.code === "outcome-unknown");
+    assert.equal(powerCalls, 1);
+    assert.equal(getCalls, 2);
   });
 });
 

@@ -189,9 +189,12 @@ export interface ProviderCliCommandResult {
   readonly refreshProviderInventory?: boolean;
 }
 
+export type ProviderCliOperation = "read" | "mutation";
+
 export interface ProviderCliCommand {
   readonly name: string;
   readonly description: string;
+  readonly operation: ProviderCliOperation;
   run(
     args: readonly string[],
     context: ProviderCliCommandContext,
@@ -699,6 +702,11 @@ function parseProviderCliContribution(value: unknown, path: string): void {
       command.description,
       `${path}.commands[${index}].description`,
     );
+    if (command.operation !== "read" && command.operation !== "mutation") {
+      throw new PluginContractError(
+        `${path}.commands[${index}].operation must be read or mutation`,
+      );
+    }
     expectFunction(command.run, `${path}.commands[${index}].run`);
 
     if (seen.has(name)) {

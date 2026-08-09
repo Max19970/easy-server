@@ -10,6 +10,7 @@ import {
   type TcpForwardTarget,
 } from "@easycompute/plugin-sdk";
 import { AccessAdapterRegistry } from "./access-adapter-registry.js";
+import { HostOperationRunner } from "./host-operation.js";
 import {
   providerOperationContext,
   ProviderRegistry,
@@ -40,6 +41,7 @@ export class ConnectionGateway {
     private readonly accessAdapters: AccessAdapterRegistry,
     private readonly stateStore: JsonStateStore,
     private readonly secretStore?: SecretStore,
+    private readonly operations = new HostOperationRunner(),
   ) {}
 
   async openEndpoint(
@@ -104,9 +106,15 @@ export class ConnectionGateway {
       }
 
       const methods = parseAccessMethods(
-        await admission.provider.getAccessMethods(
-          binding.providerExternalId,
-          providerOperationContext(admission, context),
+        await this.operations.run(
+          "read",
+          `Provider ${binding.providerId} getAccessMethods`,
+          context,
+          (operationContext) =>
+            admission.provider.getAccessMethods!(
+              binding.providerExternalId,
+              providerOperationContext(admission, operationContext),
+            ),
         ),
       );
       const selected = methods
@@ -130,67 +138,76 @@ export class ConnectionGateway {
       const target: TcpForwardTarget = { host: remoteHost, port: remotePort };
       const allowedSecretRefs = accessMethodSecretRefs(selected.method);
       const allowedCredentialIds = accessMethodDeferredCredentialIds(selected.method);
-      const transport = await selected.adapter.openTcpForward(
-        selected.method,
-        binding.providerExternalId,
-        target,
-        {
-          signal: context.signal,
-          registerCleanup(cleanup) {
-            scope.register(cleanup);
-          },
-          resolveSecret: async (ref) => {
-            if (!allowedSecretRefs.has(ref)) {
-              throw normalizedError(
-                "authentication",
-                "Access Adapter requested a secret that is not declared by the selected Access Method",
-              );
-            }
-            if (this.secretStore === undefined) {
-              throw normalizedError(
-                "authentication",
-                "No Secret Store is configured for the selected Access Method",
-              );
-            }
+      const transport = await this.operations.run(
+        "read",
+        `Access setup for ${instanceId}`,
+        context,
+        (operationContext) =>
+          selected.adapter.openTcpForward(
+            selected.method,
+            binding.providerExternalId,
+            target,
+            {
+              signal: operationContext.signal,
+              registerCleanup(cleanup) {
+                scope.register(cleanup);
+              },
+              resolveSecret: async (ref) => {
+                if (!allowedSecretRefs.has(ref)) {
+                  throw normalizedError(
+                    "authentication",
+                    "Access Adapter requested a secret that is not declared by the selected Access Method",
+                  );
+                }
+                if (this.secretStore === undefined) {
+                  throw normalizedError(
+                    "authentication",
+                    "No Secret Store is configured for the selected Access Method",
+                  );
+                }
 
-            const secret = await this.secretStore.get(ref, context.signal);
-            if (secret === undefined) {
-              throw normalizedError(
-                "authentication",
-                `Secret is unavailable: ${ref}`,
-              );
-            }
+                const secret = await this.secretStore.get(
+                  ref,
+                  operationContext.signal,
+                );
+                if (secret === undefined) {
+                  throw normalizedError(
+                    "authentication",
+                    `Secret is unavailable: ${ref}`,
+                  );
+                }
 
-            return secret;
-          },
-          resolveCredential: async (id) => {
-            if (!allowedCredentialIds.has(id)) {
-              throw normalizedError(
-                "authentication",
-                "Access Adapter requested a provider credential that is not declared by the selected Access Method",
-              );
-            }
-            if (admission.provider.resolveAccessCredential === undefined) {
-              throw normalizedError(
-                "plugin-failure",
-                `Provider ${binding.providerId} declared deferred access credential ${id} without a resolver`,
-              );
-            }
+                return secret;
+              },
+              resolveCredential: async (id) => {
+                if (!allowedCredentialIds.has(id)) {
+                  throw normalizedError(
+                    "authentication",
+                    "Access Adapter requested a provider credential that is not declared by the selected Access Method",
+                  );
+                }
+                if (admission.provider.resolveAccessCredential === undefined) {
+                  throw normalizedError(
+                    "plugin-failure",
+                    `Provider ${binding.providerId} declared deferred access credential ${id} without a resolver`,
+                  );
+                }
 
-            const credential = await admission.provider.resolveAccessCredential(
-              binding.providerExternalId,
-              id,
-              providerOperationContext(admission, context),
-            );
-            if (credential === undefined) {
-              throw normalizedError(
-                "authentication",
-                `Provider access credential is unavailable: ${id}`,
-              );
-            }
-            return credential;
-          },
-        },
+                const credential = await admission.provider.resolveAccessCredential(
+                  binding.providerExternalId,
+                  id,
+                  providerOperationContext(admission, operationContext),
+                );
+                if (credential === undefined) {
+                  throw normalizedError(
+                    "authentication",
+                    `Provider access credential is unavailable: ${id}`,
+                  );
+                }
+                return credential;
+              },
+            },
+          ),
       );
       scope.register(() => transport.close());
 

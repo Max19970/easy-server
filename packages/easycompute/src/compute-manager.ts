@@ -11,6 +11,7 @@ import {
   type ProviderInstanceSnapshot,
   type ProviderRawState,
 } from "@easycompute/plugin-sdk";
+import { HostOperationRunner } from "./host-operation.js";
 import {
   providerOperationContext,
   ProviderRegistry,
@@ -36,6 +37,7 @@ export class ComputeManager {
   constructor(
     private readonly registry: ProviderRegistry,
     private readonly stateStore: JsonStateStore,
+    private readonly operations = new HostOperationRunner(),
   ) {}
 
   async listInstances(context: OperationContext): Promise<readonly ComputeInstance[]> {
@@ -54,8 +56,14 @@ export class ComputeManager {
         snapshotsByProvider.set(
           providerId,
           parseProviderInstanceList(
-            await admission.provider.listInstances(
-              providerOperationContext(admission, context),
+            await this.operations.run(
+              "read",
+              `Provider ${providerId} listInstances`,
+              context,
+              (operationContext) =>
+                admission.provider.listInstances(
+                  providerOperationContext(admission, operationContext),
+                ),
             ),
             admission.capabilities,
           ),
@@ -98,8 +106,14 @@ export class ComputeManager {
     let snapshots: readonly ProviderInstanceSnapshot[];
     try {
       snapshots = parseProviderInstanceList(
-        await admission.provider.listInstances(
-          providerOperationContext(admission, context),
+        await this.operations.run(
+          "read",
+          `Provider ${providerId} listInstances`,
+          context,
+          (operationContext) =>
+            admission.provider.listInstances(
+              providerOperationContext(admission, operationContext),
+            ),
         ),
         admission.capabilities,
       );
@@ -132,9 +146,15 @@ export class ComputeManager {
     }
 
     try {
-      const value = await admission.provider.getInstance(
-        binding.providerExternalId,
-        providerOperationContext(admission, context),
+      const value = await this.operations.run(
+        "read",
+        `Provider ${binding.providerId} getInstance`,
+        context,
+        (operationContext) =>
+          admission.provider.getInstance(
+            binding.providerExternalId,
+            providerOperationContext(admission, operationContext),
+          ),
       );
 
       if (value === undefined) {
@@ -177,10 +197,15 @@ export class ComputeManager {
         );
       }
 
-      const providerContext = providerOperationContext(admission, context);
-      const before = await admission.provider.getInstance(
-        binding.providerExternalId,
-        providerContext,
+      const before = await this.operations.run(
+        "read",
+        `Provider ${binding.providerId} getInstance`,
+        context,
+        (operationContext) =>
+          admission.provider.getInstance(
+            binding.providerExternalId,
+            providerOperationContext(admission, operationContext),
+          ),
       );
       if (before === undefined) {
         await this.removeBinding(state, binding.id);
@@ -204,7 +229,16 @@ export class ComputeManager {
               `Provider ${binding.providerId} declared ${action} without destroy()`,
             );
           }
-          await admission.provider.destroy(binding.providerExternalId, providerContext);
+          await this.operations.run(
+            "mutation",
+            `Provider ${binding.providerId} ${action}`,
+            context,
+            (operationContext) =>
+              admission.provider.destroy!(
+                binding.providerExternalId,
+                providerOperationContext(admission, operationContext),
+              ),
+          );
         } else {
           if (admission.provider.performPowerAction === undefined) {
             throw normalizedError(
@@ -212,19 +246,27 @@ export class ComputeManager {
               `Provider ${binding.providerId} declared ${action} without performPowerAction()`,
             );
           }
-          await admission.provider.performPowerAction(
-            binding.providerExternalId,
-            action,
-            providerContext,
+          await this.operations.run(
+            "mutation",
+            `Provider ${binding.providerId} ${action}`,
+            context,
+            (operationContext) =>
+              admission.provider.performPowerAction!(
+                binding.providerExternalId,
+                action,
+                providerOperationContext(admission, operationContext),
+              ),
           );
         }
       } catch (error) {
-        if (isNormalizedError(error) && error.code === "conflict") {
-          await this.refreshBindingAfterConflict(
+        if (
+          isNormalizedError(error) &&
+          (error.code === "conflict" || error.code === "outcome-unknown")
+        ) {
+          await this.refreshBindingAfterMutation(
             state,
             binding,
             admission,
-            context,
           ).catch(() => undefined);
         }
         throw error;
@@ -234,15 +276,21 @@ export class ComputeManager {
     }
   }
 
-  private async refreshBindingAfterConflict(
+  private async refreshBindingAfterMutation(
     state: EasyComputeState,
     binding: InstanceBinding,
     admission: ProviderAdmission,
-    context: OperationContext,
   ): Promise<void> {
-    const snapshot = await admission.provider.getInstance(
-      binding.providerExternalId,
-      providerOperationContext(admission, context),
+    const reconciliationContext = { signal: new AbortController().signal };
+    const snapshot = await this.operations.run(
+      "read",
+      `Provider ${binding.providerId} reconcile instance`,
+      reconciliationContext,
+      (operationContext) =>
+        admission.provider.getInstance(
+          binding.providerExternalId,
+          providerOperationContext(admission, operationContext),
+        ),
     );
     if (snapshot === undefined) {
       await this.removeBinding(state, binding.id);

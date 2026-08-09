@@ -59,11 +59,13 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
       {
         name: "validate",
         description: "Validate an Intelion cloud-server configuration",
+        operation: "read",
         run: (args, context) => this.#runValidate(args, context),
       },
       {
         name: "create",
         description: "Create an Intelion cloud-server configuration",
+        operation: "mutation",
         run: (args, context) => this.#runCreate(args, context),
       },
     ],

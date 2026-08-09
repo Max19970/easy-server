@@ -11,6 +11,7 @@ import { AccessAdapterRegistry } from "./access-adapter-registry.js";
 import { runForegroundConnect } from "./connect-command.js";
 import { ConnectionGateway } from "./connection-gateway.js";
 import { ComputeManager } from "./compute-manager.js";
+import { HostOperationRunner } from "./host-operation.js";
 import { ProviderFeatureHost } from "./provider-feature-host.js";
 import {
   formatPluginStatuses,
@@ -439,21 +440,49 @@ async function runProvider(args: readonly string[]): Promise<void> {
       );
     }
 
-    const signal = new AbortController().signal;
-    const result = await command.run(commandArgs, {
-      signal,
-      resolveCredential: (name) => admission.resolveCredential(name, signal),
-      write(text) {
-        process.stdout.write(text);
-      },
-      writeError(text) {
-        process.stderr.write(text);
-      },
-    });
-    if (result?.refreshProviderInventory) {
-      await new ComputeManager(registry, store).refreshProvider(providerId, {
-        signal,
-      });
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    process.once("SIGINT", cancel);
+    process.once("SIGTERM", cancel);
+    try {
+      const result = await new HostOperationRunner().run(
+        command.operation,
+        `Provider Feature ${providerId}/${featureId}/${commandName}`,
+        { signal: controller.signal },
+        (operationContext) =>
+          command.run(commandArgs, {
+            signal: operationContext.signal,
+            resolveCredential: (name) =>
+              admission.resolveCredential(name, operationContext.signal),
+            write(text) {
+              process.stdout.write(text);
+            },
+            writeError(text) {
+              process.stderr.write(text);
+            },
+          }),
+      );
+      if (result?.refreshProviderInventory) {
+        await new ComputeManager(registry, store).refreshProvider(providerId, {
+          signal: new AbortController().signal,
+        });
+      }
+    } catch (error) {
+      if (
+        command.operation === "mutation" &&
+        isNormalizedError(error) &&
+        error.code === "outcome-unknown"
+      ) {
+        await new ComputeManager(registry, store)
+          .refreshProvider(providerId, {
+            signal: new AbortController().signal,
+          })
+          .catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      process.removeListener("SIGINT", cancel);
+      process.removeListener("SIGTERM", cancel);
     }
   } finally {
     admission.release();
@@ -469,32 +498,42 @@ async function runInstances(args: readonly string[]): Promise<void> {
   const host = new PluginHost(registry);
   await host.load(configuredPluginLoads(state.plugins), secretStore);
   const manager = new ComputeManager(registry, store);
-  const context = { signal: new AbortController().signal };
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  process.once("SIGINT", cancel);
+  process.once("SIGTERM", cancel);
 
-  if (command === "list" && args.length === 1) {
-    const instances = await manager.listInstances(context);
-    process.stdout.write(formatInstances(instances));
-    return;
-  }
+  try {
+    const context = { signal: controller.signal };
 
-  if (command === "inspect" && instanceId !== undefined && args.length === 2) {
-    const instance = await manager.inspectInstance(instanceId, context);
-    if (instance === undefined) {
-      throw new Error(`Compute Instance not found: ${instanceId}`);
+    if (command === "list" && args.length === 1) {
+      const instances = await manager.listInstances(context);
+      process.stdout.write(formatInstances(instances));
+      return;
     }
 
-    process.stdout.write(`${JSON.stringify(instance, null, 2)}\n`);
-    return;
-  }
+    if (command === "inspect" && instanceId !== undefined && args.length === 2) {
+      const instance = await manager.inspectInstance(instanceId, context);
+      if (instance === undefined) {
+        throw new Error(`Compute Instance not found: ${instanceId}`);
+      }
 
-  const action = instanceAction(command);
-  if (action !== undefined && instanceId !== undefined && args.length === 2) {
-    await manager.performAction(instanceId, action, context);
-    process.stdout.write(`Requested ${action} for ${instanceId}\n`);
-    return;
-  }
+      process.stdout.write(`${JSON.stringify(instance, null, 2)}\n`);
+      return;
+    }
 
-  throw new Error(`Unknown instances command: ${command ?? "(missing)"}`);
+    const action = instanceAction(command);
+    if (action !== undefined && instanceId !== undefined && args.length === 2) {
+      await manager.performAction(instanceId, action, context);
+      process.stdout.write(`Requested ${action} for ${instanceId}\n`);
+      return;
+    }
+
+    throw new Error(`Unknown instances command: ${command ?? "(missing)"}`);
+  } finally {
+    process.removeListener("SIGINT", cancel);
+    process.removeListener("SIGTERM", cancel);
+  }
 }
 
 async function runPlugins(args: readonly string[]): Promise<void> {

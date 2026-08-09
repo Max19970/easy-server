@@ -76,11 +76,13 @@ class MarketplaceFeature implements VastMarketplaceFeature {
       {
         name: "search",
         description: "Search Vast.ai marketplace offers",
+        operation: "read",
         run: (args, context) => this.#runSearchCommand(args, context),
       },
       {
         name: "rent",
         description: "Rent a Vast.ai marketplace offer",
+        operation: "mutation",
         run: (args, context) => this.#runRentCommand(args, context),
       },
     ],

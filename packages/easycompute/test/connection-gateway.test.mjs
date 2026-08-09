@@ -8,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { AccessAdapterRegistry } from "../dist/access-adapter-registry.js";
 import { ConnectionGateway } from "../dist/connection-gateway.js";
+import { HostOperationRunner } from "../dist/host-operation.js";
 import { PluginHost } from "../dist/plugin-host.js";
 import { ProviderRegistry } from "../dist/provider-registry.js";
 import { JsonStateStore } from "../dist/state-store.js";
@@ -221,6 +222,38 @@ test("setup failure cleans setup-owned resources and provider admission", async 
         operationContext(),
       ),
       /fixture setup failure/,
+    );
+    assert.equal(setupCleanups, 1);
+    assert.equal(releases, 1);
+  });
+});
+
+test("host deadline cancels connection setup and releases setup-owned resources", async () => {
+  await withState(async (store) => {
+    const providers = new ProviderRegistry();
+    const access = new AccessAdapterRegistry();
+    let releases = 0;
+    let setupCleanups = 0;
+    registerProvider(providers, { onRelease: () => (releases += 1) });
+    access.registerBuiltIn({
+      kind: "loopback",
+      async openTcpForward(_method, _providerExternalId, _target, setupContext) {
+        setupContext.registerCleanup(() => {
+          setupCleanups += 1;
+        });
+        await new Promise(() => {});
+      },
+    });
+
+    await assert.rejects(
+      new ConnectionGateway(
+        providers,
+        access,
+        store,
+        undefined,
+        new HostOperationRunner(20),
+      ).openEndpoint(INSTANCE_ID, 12345, operationContext()),
+      (error) => error?.code === "timeout",
     );
     assert.equal(setupCleanups, 1);
     assert.equal(releases, 1);

@@ -1,3 +1,5 @@
+import { normalizedError } from "@easycompute/plugin-sdk";
+
 let created = false;
 
 export default {
@@ -43,6 +45,7 @@ export default {
           {
             name: "echo",
             description: "Echo provider-owned arguments",
+            operation: "read",
             async run(args, context) {
               context.write(`provider-owned:${args.join("|")}\n`);
             },
@@ -50,10 +53,23 @@ export default {
           {
             name: "create",
             description: "Create a provider-owned resource",
+            operation: "mutation",
             async run(_args, context) {
               created = true;
               context.write("created:created-1\n");
               return { refreshProviderInventory: true };
+            },
+          },
+          {
+            name: "uncertain-create",
+            description: "Create a resource with an uncertain response",
+            operation: "mutation",
+            async run() {
+              created = true;
+              throw normalizedError(
+                "outcome-unknown",
+                "fixture mutation outcome is unknown",
+              );
             },
           },
         ],

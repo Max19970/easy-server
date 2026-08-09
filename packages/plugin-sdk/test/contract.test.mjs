@@ -147,8 +147,8 @@ test("validates provider CLI contributions without interpreting command argument
     displayName: "Marketplace",
     cli: {
       commands: [
-        { name: "search", description: "Search offers", run },
-        { name: "rent", description: "Rent one offer", run },
+        { name: "search", description: "Search offers", operation: "read", run },
+        { name: "rent", description: "Rent one offer", operation: "mutation", run },
       ],
     },
   };
@@ -171,14 +171,31 @@ test("validates provider CLI contributions without interpreting command argument
             ...feature,
             cli: {
               commands: [
-                { name: "search", description: "One", run },
-                { name: "search", description: "Two", run },
+                { name: "search", description: "One", operation: "read", run },
+                { name: "search", description: "Two", operation: "read", run },
               ],
             },
           },
         ],
       }),
     /duplicate name/,
+  );
+
+  assert.throws(
+    () =>
+      parseProviderPlugin({
+        manifest: validManifest,
+        provider: provider(),
+        features: [
+          {
+            ...feature,
+            cli: {
+              commands: [{ name: "search", description: "Search offers", run }],
+            },
+          },
+        ],
+      }),
+    /operation must be read or mutation/,
   );
 });
 

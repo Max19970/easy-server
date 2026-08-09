@@ -493,6 +493,29 @@ test("mounts provider feature commands and reconciles requested inventory change
   assert.match(removed.stderr, /Provider Feature not found/);
 });
 
+test("provider feature outcome-unknown reconciles inventory without retrying the mutation", async () => {
+  const stateFile = join(testDirectory, "provider-cli-outcome-unknown-state.json");
+  assert.equal(
+    runWithState(stateFile, "plugins", "add", providerCliPlugin).status,
+    0,
+  );
+
+  const result = runWithState(
+    stateFile,
+    "provider",
+    "provider-cli",
+    "marketplace",
+    "uncertain-create",
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /outcome-unknown: fixture mutation outcome is unknown/);
+  const reconciledState = JSON.parse(await readFile(stateFile, "utf8"));
+  assert.equal(reconciledState.instances.length, 1);
+  assert.equal(reconciledState.instances[0].providerId, "provider-cli");
+  assert.equal(reconciledState.instances[0].providerExternalId, "created-1");
+});
+
 test("daemon-owned sessions survive the creating CLI and restart without phantom sessions", async () => {
   const stateFile = join(testDirectory, "daemon-state.json");
   const daemonFile = join(testDirectory, "daemon-control.json");
