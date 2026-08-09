@@ -107,13 +107,26 @@ export async function claimLocalDaemonDescriptor(
   descriptor: LocalDaemonDescriptor,
 ): Promise<() => Promise<void>> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, `${JSON.stringify(descriptor)}\n`, {
+  const serialized = `${JSON.stringify(descriptor)}\n`;
+  await writeFile(path, serialized, {
     encoding: "utf8",
     mode: 0o600,
     flag: "wx",
   });
   return async () => {
-    await rm(path, { force: true });
+    let current: string;
+    try {
+      current = await readFile(path, "utf8");
+    } catch (error) {
+      if (isErrorCode(error, "ENOENT")) {
+        return;
+      }
+      throw error;
+    }
+
+    if (current === serialized) {
+      await rm(path, { force: true });
+    }
   };
 }
 
@@ -130,6 +143,7 @@ export async function startLocalConnectionDaemon(options: {
   }
 
   const sessions = new Map<string, OwnedSession>();
+  const pendingSetups = new Set<AbortController>();
   let closing = false;
   let closePromise: Promise<void> | undefined;
 
@@ -160,12 +174,19 @@ export async function startLocalConnectionDaemon(options: {
 
       if (request.method === "POST" && request.url === "/sessions") {
         const input = parseCreateRequest(await readJson(request));
-        const opened = await options.gateway.openEndpoint(
-          input.instanceId,
-          input.remotePort,
-          input.remoteHost,
-          { signal: new AbortController().signal },
-        );
+        const setupController = new AbortController();
+        pendingSetups.add(setupController);
+        let opened: OpenEndpointResult;
+        try {
+          opened = await options.gateway.openEndpoint(
+            input.instanceId,
+            input.remotePort,
+            input.remoteHost,
+            { signal: setupController.signal },
+          );
+        } finally {
+          pendingSetups.delete(setupController);
+        }
         if (closing) {
           await opened.session.close();
           sendJson(response, 503, { message: "Daemon is shutting down" });
@@ -236,6 +257,9 @@ export async function startLocalConnectionDaemon(options: {
       closePromise ??= (async () => {
         closing = true;
         const errors: unknown[] = [];
+        for (const controller of pendingSetups) {
+          controller.abort();
+        }
 
         try {
           await closeHttpServer(server);
@@ -440,5 +464,6 @@ async function closeHttpServer(server: ReturnType<typeof createServer>): Promise
         reject(error);
       }
     });
+    server.closeAllConnections();
   });
 }

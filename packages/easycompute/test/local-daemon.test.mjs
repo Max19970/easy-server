@@ -1,13 +1,20 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
 import { connect, createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import {
   hostTrustRequiredError,
   isHostTrustRequiredError,
 } from "@easycompute/plugin-sdk";
 import {
+  claimLocalDaemonDescriptor,
   LocalDaemonClient,
+  readLocalDaemonDescriptor,
+  removeLocalDaemonDescriptor,
   startLocalConnectionDaemon,
 } from "../dist/local-daemon.js";
 
@@ -106,6 +113,94 @@ test("daemon preserves typed SSH host-trust-required results without enrolling t
     );
   } finally {
     await daemon.close();
+  }
+});
+
+test("daemon shutdown aborts pending session setup", async () => {
+  let setupStarted;
+  const started = new Promise((resolve) => {
+    setupStarted = resolve;
+  });
+  let releaseSetup;
+  let sawAbort = false;
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint(_instanceId, _remotePort, _remoteHost, context) {
+        setupStarted();
+        return new Promise((resolve, reject) => {
+          releaseSetup = () =>
+            resolve({
+              endpoint: { host: "127.0.0.1", port: 1 },
+              session: {
+                closed: Promise.resolve(),
+                async close() {},
+              },
+            });
+          context.signal.addEventListener(
+            "abort",
+            () => {
+              sawAbort = true;
+              reject(new Error("setup aborted"));
+            },
+            { once: true },
+          );
+        });
+      },
+    },
+    authToken: "fixture-token",
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+  const creating = client
+    .createSession({ instanceId: "instance:fixture", remotePort: 8188 })
+    .catch(() => undefined);
+
+  await started;
+  const closing = daemon.close();
+  let timedOut = false;
+  try {
+    await Promise.race([
+      closing,
+      delay(200).then(() => {
+        timedOut = true;
+        throw new Error("daemon.close() did not abort pending setup");
+      }),
+    ]);
+    assert.equal(sawAbort, true);
+  } finally {
+    if (timedOut) {
+      releaseSetup?.();
+    }
+    await creating;
+    await closing;
+  }
+});
+
+test("descriptor release does not delete a successor daemon descriptor", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "easycompute-daemon-"));
+  const path = join(directory, "daemon.json");
+  const first = {
+    version: 1,
+    address: { host: "127.0.0.1", port: 30_001 },
+    authToken: "first-token",
+  };
+  const second = {
+    version: 1,
+    address: { host: "127.0.0.1", port: 30_002 },
+    authToken: "second-token",
+  };
+
+  try {
+    const releaseFirst = await claimLocalDaemonDescriptor(path, first);
+    await removeLocalDaemonDescriptor(path);
+    const releaseSecond = await claimLocalDaemonDescriptor(path, second);
+
+    await releaseFirst();
+    assert.deepEqual(await readLocalDaemonDescriptor(path), second);
+
+    await releaseSecond();
+    assert.equal(await readLocalDaemonDescriptor(path), undefined);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
