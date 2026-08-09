@@ -175,6 +175,42 @@ test("daemon shutdown aborts pending session setup", async () => {
   }
 });
 
+test("daemon health probe is bounded against a silent stale descriptor target", async () => {
+  const sockets = new Set();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
+  server.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const client = new LocalDaemonClient(
+    { host: "127.0.0.1", port: address.port },
+    "stale-token",
+  );
+  const ping = client.ping(20);
+
+  try {
+    const outcome = await Promise.race([
+      ping.then(
+        () => "settled",
+        () => "settled",
+      ),
+      delay(100).then(() => "pending"),
+    ]);
+    assert.equal(outcome, "settled");
+  } finally {
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    await ping.catch(() => undefined);
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
 test("descriptor release does not delete a successor daemon descriptor", async () => {
   const directory = await mkdtemp(join(tmpdir(), "easycompute-daemon-"));
   const path = join(directory, "daemon.json");

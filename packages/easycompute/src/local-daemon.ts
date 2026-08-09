@@ -16,6 +16,7 @@ import type {
 } from "./connection-gateway.js";
 
 const MAX_REQUEST_BYTES = 64 * 1024;
+const DEFAULT_HEALTH_TIMEOUT_MS = 1_000;
 
 export interface PersistentConnectionSession {
   readonly id: string;
@@ -296,8 +297,13 @@ export class LocalDaemonClient {
     private readonly authToken: string,
   ) {}
 
-  async ping(): Promise<void> {
-    await this.#request("GET", "/health");
+  async ping(timeoutMs = DEFAULT_HEALTH_TIMEOUT_MS): Promise<void> {
+    await this.#request(
+      "GET",
+      "/health",
+      undefined,
+      AbortSignal.timeout(timeoutMs),
+    );
   }
 
   async createSession(
@@ -314,7 +320,12 @@ export class LocalDaemonClient {
     await this.#request("DELETE", `/sessions/${encodeURIComponent(id)}`);
   }
 
-  async #request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  async #request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const response = await fetch(
       `http://${this.address.host}:${this.address.port}${path}`,
       {
@@ -324,6 +335,7 @@ export class LocalDaemonClient {
           ...(body === undefined ? {} : { "content-type": "application/json" }),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(signal === undefined ? {} : { signal }),
       },
     );
     const text = await response.text();
