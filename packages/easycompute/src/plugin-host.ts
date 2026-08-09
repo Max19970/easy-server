@@ -1,10 +1,12 @@
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  normalizedError,
   parseProviderPlugin,
   type AccessAdapter,
   type ProviderFeature,
   type ProviderPlugin,
+  type SecretReference,
 } from "@easycompute/plugin-sdk";
 import {
   ProviderFeatureHost,
@@ -14,6 +16,7 @@ import {
   ProviderRegistry,
   type ProviderAdmission,
 } from "./provider-registry.js";
+import type { SecretStore } from "./secret-store.js";
 
 const EASYCMP_VERSION = "0.0.0";
 const PLUGIN_SDK_VERSION = "0.0.0";
@@ -30,6 +33,18 @@ export interface PluginStatus {
 }
 
 export type PluginImporter = (source: string) => Promise<unknown>;
+
+export interface PluginLoadCredential {
+  readonly name: string;
+  readonly secretRef: SecretReference;
+}
+
+export interface PluginLoadRequest {
+  readonly source: string;
+  readonly credentials?: readonly PluginLoadCredential[];
+}
+
+export type PluginLoadSource = string | PluginLoadRequest;
 
 type PluginRecord =
   | { readonly source: string; readonly runtime: PluginRuntime }
@@ -52,9 +67,14 @@ export class PluginHost {
     this.#featureHost = featureHost;
   }
 
-  async load(sources: readonly string[]): Promise<void> {
-    for (const source of sources) {
-      await this.#loadOne(source);
+  async load(
+    sources: readonly PluginLoadSource[],
+    secretStore?: Pick<SecretStore, "get">,
+  ): Promise<void> {
+    for (const candidate of sources) {
+      const request =
+        typeof candidate === "string" ? { source: candidate } : candidate;
+      await this.#loadOne(request, secretStore);
     }
   }
 
@@ -84,7 +104,11 @@ export class PluginHost {
     return true;
   }
 
-  async #loadOne(source: string): Promise<void> {
+  async #loadOne(
+    request: PluginLoadRequest,
+    secretStore?: Pick<SecretStore, "get">,
+  ): Promise<void> {
+    const { source } = request;
     try {
       const plugin = parseProviderPlugin(await this.#importer(source));
       assertCompatibility(plugin);
@@ -93,7 +117,11 @@ export class PluginHost {
         throw new Error(`Plugin already loaded: ${plugin.manifest.id}`);
       }
 
-      const runtime = new PluginRuntime(plugin);
+      const runtime = new PluginRuntime(
+        plugin,
+        request.credentials ?? [],
+        secretStore,
+      );
       this.#registry.register(
         runtime.providerId,
         runtime.pluginId,
@@ -132,14 +160,22 @@ class PluginRuntime {
   readonly features: readonly ProviderFeature[];
   readonly accessAdapters: readonly AccessAdapter[];
   readonly #plugin: ProviderPlugin;
+  readonly #credentials: ReadonlyMap<string, SecretReference>;
+  readonly #secretStore?: Pick<SecretStore, "get">;
   #admitting = true;
 
-  constructor(plugin: ProviderPlugin) {
+  constructor(
+    plugin: ProviderPlugin,
+    credentials: readonly PluginLoadCredential[],
+    secretStore?: Pick<SecretStore, "get">,
+  ) {
     this.#plugin = plugin;
     this.pluginId = plugin.manifest.id;
     this.providerId = plugin.manifest.provider.id;
     this.features = plugin.features ?? [];
     this.accessAdapters = plugin.accessAdapters ?? [];
+    this.#credentials = credentialMap(credentials);
+    this.#secretStore = secretStore;
   }
 
   admit(): ProviderAdmission | undefined {
@@ -153,6 +189,7 @@ class PluginRuntime {
       provider,
       capabilities: this.#plugin.manifest.provider.capabilities,
       accessAdapters: this.accessAdapters,
+      resolveCredential: (name, signal) => this.#resolveCredential(name, signal),
       release() {},
     };
   }
@@ -173,8 +210,26 @@ class PluginRuntime {
       featureId: feature.id,
       displayName: feature.displayName,
       feature,
+      resolveCredential: (name, signal) => this.#resolveCredential(name, signal),
       release() {},
     };
+  }
+
+  async #resolveCredential(
+    name: string,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const ref = this.#credentials.get(name);
+    if (ref === undefined) {
+      return undefined;
+    }
+    if (this.#secretStore === undefined) {
+      throw normalizedError(
+        "authentication",
+        `No Secret Store is configured for provider credential ${name}`,
+      );
+    }
+    return this.#secretStore.get(ref, signal);
   }
 
   disable(): boolean {
@@ -250,6 +305,19 @@ function assertCompatibility(plugin: ProviderPlugin): void {
 function acceptsVersion(requirement: string, version: string): boolean {
   // ponytail: pre-release compatibility accepts exact versions or "*"; use a SemVer range library when published plugin ranges are required.
   return requirement === "*" || requirement === version;
+}
+
+function credentialMap(
+  credentials: readonly PluginLoadCredential[],
+): ReadonlyMap<string, SecretReference> {
+  const result = new Map<string, SecretReference>();
+  for (const credential of credentials) {
+    if (result.has(credential.name)) {
+      throw new Error(`Duplicate plugin credential name: ${credential.name}`);
+    }
+    result.set(credential.name, credential.secretRef);
+  }
+  return result;
 }
 
 function errorMessage(error: unknown): string {

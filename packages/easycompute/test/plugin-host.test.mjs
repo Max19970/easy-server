@@ -179,6 +179,50 @@ test("isolates catchable import and manifest failures", async () => {
   assert.deepEqual(registry.listProviderIds(), ["fake"]);
 });
 
+test("provider and feature admissions resolve only configured credential names", async () => {
+  const registry = new ProviderRegistry();
+  const features = new ProviderFeatureHost();
+  const secretRef = "secret:550e8400-e29b-41d4-a716-446655440000";
+  const secretStore = {
+    async get(ref) {
+      assert.equal(ref, secretRef);
+      return "fixture-token";
+    },
+  };
+  const host = new PluginHost(
+    registry,
+    async () =>
+      plugin({
+        features: [{ id: "marketplace", displayName: "Marketplace" }],
+      }),
+    features,
+  );
+
+  await host.load(
+    [
+      {
+        source: "fake-module",
+        credentials: [{ name: "api-key", secretRef }],
+      },
+    ],
+    secretStore,
+  );
+
+  const providerAdmission = registry.acquire("fake");
+  const featureAdmission = features.acquire("fake", "marketplace");
+  assert.ok(providerAdmission);
+  assert.ok(featureAdmission);
+  assert.equal(
+    await providerAdmission.resolveCredential("api-key"),
+    "fixture-token",
+  );
+  assert.equal(await providerAdmission.resolveCredential("missing"), undefined);
+  assert.equal(
+    await featureAdmission.resolveCredential("api-key"),
+    "fixture-token",
+  );
+});
+
 test("disable stops new admission while an existing lease keeps its adapter", async () => {
   const registry = new ProviderRegistry();
   const host = new PluginHost(registry, async () => plugin());

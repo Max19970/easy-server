@@ -1,7 +1,9 @@
 import type {
   AccessAdapter,
+  OperationContext,
   ProviderAdapter,
   ProviderCapability,
+  ProviderOperationContext,
 } from "@easycompute/plugin-sdk";
 
 export interface ProviderAdmission {
@@ -9,6 +11,7 @@ export interface ProviderAdmission {
   readonly provider: ProviderAdapter;
   readonly capabilities: readonly ProviderCapability[];
   readonly accessAdapters: readonly AccessAdapter[];
+  resolveCredential(name: string, signal?: AbortSignal): Promise<string | undefined>;
   release(): void;
 }
 
@@ -17,6 +20,16 @@ type AcquireProvider = () => ProviderAdmission | undefined;
 interface ProviderRegistration {
   readonly pluginId: string;
   readonly acquire: AcquireProvider;
+}
+
+export function providerOperationContext(
+  admission: Pick<ProviderAdmission, "resolveCredential">,
+  context: OperationContext,
+): ProviderOperationContext {
+  return {
+    signal: context.signal,
+    resolveCredential: (name) => admission.resolveCredential(name, context.signal),
+  };
 }
 
 export class ProviderRegistry {

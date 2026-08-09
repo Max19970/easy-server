@@ -60,6 +60,11 @@ export interface OperationContext {
   readonly signal: AbortSignal;
 }
 
+export interface ProviderOperationContext extends OperationContext {
+  /** Resolve one configured provider credential by stable plugin-owned name. */
+  resolveCredential(name: string): Promise<string | undefined>;
+}
+
 export const INSTANCE_STATES = [
   "provisioning",
   "running",
@@ -87,24 +92,24 @@ export interface ProviderInstanceSnapshot {
 export interface ProviderAdapter {
   readonly providerId: string;
   listInstances(
-    context: OperationContext,
+    context: ProviderOperationContext,
   ): Promise<readonly ProviderInstanceSnapshot[]>;
   getInstance(
     providerExternalId: string,
-    context: OperationContext,
+    context: ProviderOperationContext,
   ): Promise<ProviderInstanceSnapshot | undefined>;
   getAccessMethods?(
     providerExternalId: string,
-    context: OperationContext,
+    context: ProviderOperationContext,
   ): Promise<readonly AccessMethod[]>;
   performPowerAction?(
     providerExternalId: string,
     action: PowerAction,
-    context: OperationContext,
+    context: ProviderOperationContext,
   ): Promise<void>;
   destroy?(
     providerExternalId: string,
-    context: OperationContext,
+    context: ProviderOperationContext,
   ): Promise<void>;
 }
 
@@ -170,7 +175,7 @@ export function parseProviderInstanceList(
   return instances;
 }
 
-export interface ProviderCliCommandContext extends OperationContext {
+export interface ProviderCliCommandContext extends ProviderOperationContext {
   write(text: string): void;
   writeError(text: string): void;
 }

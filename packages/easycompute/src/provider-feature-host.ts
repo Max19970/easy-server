@@ -9,6 +9,7 @@ export interface ProviderFeatureDescriptor {
 
 export interface ProviderFeatureAdmission extends ProviderFeatureDescriptor {
   readonly feature: ProviderFeature;
+  resolveCredential(name: string, signal?: AbortSignal): Promise<string | undefined>;
   release(): void;
 }
 

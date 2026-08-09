@@ -12,6 +12,7 @@ import {
   type ProviderRawState,
 } from "@easycompute/plugin-sdk";
 import {
+  providerOperationContext,
   ProviderRegistry,
   type ProviderAdmission,
 } from "./provider-registry.js";
@@ -38,9 +39,10 @@ export class ComputeManager {
   ) {}
 
   async listInstances(context: OperationContext): Promise<readonly ComputeInstance[]> {
-    const state = await this.stateStore.read();
-    let bindings = [...(state.instances ?? [])];
-    const instances: ComputeInstance[] = [];
+    const snapshotsByProvider = new Map<
+      string,
+      readonly ProviderInstanceSnapshot[]
+    >();
 
     for (const providerId of this.registry.listProviderIds()) {
       const admission = this.registry.acquire(providerId);
@@ -49,10 +51,25 @@ export class ComputeManager {
       }
 
       try {
-        const snapshots = parseProviderInstanceList(
-          await admission.provider.listInstances(context),
-          admission.capabilities,
+        snapshotsByProvider.set(
+          providerId,
+          parseProviderInstanceList(
+            await admission.provider.listInstances(
+              providerOperationContext(admission, context),
+            ),
+            admission.capabilities,
+          ),
         );
+      } finally {
+        admission.release();
+      }
+    }
+
+    const instances: ComputeInstance[] = [];
+    await this.stateStore.update((state) => {
+      let bindings = [...(state.instances ?? [])];
+
+      for (const [providerId, snapshots] of snapshotsByProvider) {
         const existing = new Map(
           bindings
             .filter((binding) => binding.providerId === providerId)
@@ -72,14 +89,12 @@ export class ComputeManager {
           ...bindings.filter((binding) => binding.providerId !== providerId),
           ...currentBindings,
         ];
-      } finally {
-        admission.release();
       }
-    }
 
-    if (!sameBindings(state.instances ?? [], bindings)) {
-      await this.stateStore.write({ ...state, instances: bindings });
-    }
+      return sameBindings(state.instances ?? [], bindings)
+        ? state
+        : { ...state, instances: bindings };
+    });
 
     return instances;
   }
@@ -102,7 +117,7 @@ export class ComputeManager {
     try {
       const value = await admission.provider.getInstance(
         binding.providerExternalId,
-        context,
+        providerOperationContext(admission, context),
       );
 
       if (value === undefined) {
@@ -145,9 +160,10 @@ export class ComputeManager {
         );
       }
 
+      const providerContext = providerOperationContext(admission, context);
       const before = await admission.provider.getInstance(
         binding.providerExternalId,
-        context,
+        providerContext,
       );
       if (before === undefined) {
         await this.removeBinding(state, binding.id);
@@ -171,7 +187,7 @@ export class ComputeManager {
               `Provider ${binding.providerId} declared ${action} without destroy()`,
             );
           }
-          await admission.provider.destroy(binding.providerExternalId, context);
+          await admission.provider.destroy(binding.providerExternalId, providerContext);
         } else {
           if (admission.provider.performPowerAction === undefined) {
             throw normalizedError(
@@ -182,7 +198,7 @@ export class ComputeManager {
           await admission.provider.performPowerAction(
             binding.providerExternalId,
             action,
-            context,
+            providerContext,
           );
         }
       } catch (error) {
@@ -209,7 +225,7 @@ export class ComputeManager {
   ): Promise<void> {
     const snapshot = await admission.provider.getInstance(
       binding.providerExternalId,
-      context,
+      providerOperationContext(admission, context),
     );
     if (snapshot === undefined) {
       await this.removeBinding(state, binding.id);
@@ -222,9 +238,15 @@ export class ComputeManager {
     );
   }
 
-  private async removeBinding(state: EasyComputeState, id: string): Promise<void> {
-    const instances = (state.instances ?? []).filter((binding) => binding.id !== id);
-    await this.stateStore.write({ ...state, instances });
+  private async removeBinding(_state: EasyComputeState, id: string): Promise<void> {
+    await this.stateStore.update((state) => {
+      const instances = (state.instances ?? []).filter(
+        (binding) => binding.id !== id,
+      );
+      return instances.length === (state.instances ?? []).length
+        ? state
+        : { ...state, instances };
+    });
   }
 }
 

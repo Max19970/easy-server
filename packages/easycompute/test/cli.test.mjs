@@ -76,6 +76,17 @@ test("prints version", () => {
   assert.equal(result.stdout, "0.0.0\n");
 });
 
+test("loads the Vast.ai workspace package as an explicit provider plugin", () => {
+  const result = run(
+    "plugins",
+    "list",
+    "--plugin",
+    "@easycompute/plugin-vastai",
+  );
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /^loaded\s+vastai provider=vastai$/m);
+});
+
 test("lists zero configured plugins", () => {
   const result = run("plugins", "list");
   assert.equal(result.status, 0);
@@ -129,6 +140,30 @@ test("plugin configuration survives separate CLI processes", () => {
   const enabledList = runWithState(stateFile, "plugins", "list");
   assert.equal(enabledList.status, 0);
   assert.match(enabledList.stdout, /^loaded\s+fixture\.plugin provider=fixture/m);
+});
+
+test("plugin credential command never requires the secret in argv", () => {
+  const stateFile = join(testDirectory, "credential-command-state.json");
+  const add = runWithState(
+    stateFile,
+    "plugins",
+    "add",
+    "@easycompute/plugin-vastai",
+  );
+  assert.equal(add.status, 0);
+
+  const missingEnv = runWithState(
+    stateFile,
+    "plugins",
+    "credential",
+    "set",
+    "@easycompute/plugin-vastai",
+    "api-key",
+    "--env",
+    "EASYCOMPUTE_TEST_SECRET_INTENTIONALLY_MISSING_7CFB",
+  );
+  assert.equal(missingEnv.status, 1);
+  assert.match(missingEnv.stderr, /Environment variable is empty or missing/);
 });
 
 test("enable and disable preserve provider credential references", async () => {

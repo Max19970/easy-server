@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { open, mkdir, readFile, rename, rm } from "node:fs/promises";
+import { open, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   parseSecretReference,
   type SecretReference,
@@ -61,7 +62,33 @@ export class JsonStateStore {
     return parseState(value);
   }
 
+  async update(
+    mutate: (
+      state: EasyComputeState,
+    ) => EasyComputeState | Promise<EasyComputeState>,
+  ): Promise<void> {
+    const release = await acquireStateLock(this.path);
+    try {
+      const state = await this.read();
+      const next = await mutate(state);
+      if (next !== state) {
+        await this.#writeUnlocked(next);
+      }
+    } finally {
+      await release();
+    }
+  }
+
   async write(state: EasyComputeState): Promise<void> {
+    const release = await acquireStateLock(this.path);
+    try {
+      await this.#writeUnlocked(state);
+    } finally {
+      await release();
+    }
+  }
+
+  async #writeUnlocked(state: EasyComputeState): Promise<void> {
     const parsed = parseState(state);
     const directory = dirname(this.path);
     const temporaryPath = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
@@ -80,6 +107,85 @@ export class JsonStateStore {
       await file?.close().catch(() => undefined);
       await rm(temporaryPath, { force: true }).catch(() => undefined);
     }
+  }
+}
+
+async function acquireStateLock(path: string): Promise<() => Promise<void>> {
+  await mkdir(dirname(path), { recursive: true });
+  const lockPath = `${path}.lock`;
+  const token = randomUUID();
+  const deadline = Date.now() + 10_000;
+
+  for (;;) {
+    try {
+      const lock = await open(lockPath, "wx", 0o600);
+      try {
+        await lock.writeFile(`${process.pid} ${token}\n`, "utf8");
+      } catch (error) {
+        await lock.close().catch(() => undefined);
+        await rm(lockPath, { force: true }).catch(() => undefined);
+        throw error;
+      }
+
+      return async () => {
+        await lock.close().catch(() => undefined);
+        try {
+          const owner = await readFile(lockPath, "utf8");
+          if (owner.trim().endsWith(token)) {
+            await rm(lockPath, { force: true });
+          }
+        } catch (error) {
+          if (!isErrno(error, "ENOENT")) {
+            throw error;
+          }
+        }
+      };
+    } catch (error) {
+      if (!isErrno(error, "EEXIST")) {
+        throw error;
+      }
+    }
+
+    if (await removeStaleStateLock(lockPath)) {
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for EasyCompute state lock: ${lockPath}`);
+    }
+    await delay(25);
+  }
+}
+
+async function removeStaleStateLock(lockPath: string): Promise<boolean> {
+  try {
+    const [owner, metadata] = await Promise.all([
+      readFile(lockPath, "utf8"),
+      stat(lockPath),
+    ]);
+    const pid = Number.parseInt(owner.trim().split(/\s+/u)[0] ?? "", 10);
+    const stale =
+      Number.isInteger(pid) && pid > 0
+        ? !processExists(pid)
+        : Date.now() - metadata.mtimeMs > 5_000;
+    if (!stale) {
+      return false;
+    }
+    await rm(lockPath, { force: true });
+    return true;
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) {
+      return true;
+    }
+    return false;
+  }
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return isErrno(error, "EPERM");
   }
 }
 

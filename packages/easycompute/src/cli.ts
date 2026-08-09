@@ -16,6 +16,10 @@ import {
   PluginHost,
   type PluginStatus,
 } from "./plugin-host.js";
+import {
+  removePluginCredential,
+  setPluginCredential,
+} from "./plugin-credentials.js";
 import { ProviderRegistry } from "./provider-registry.js";
 import { OsKeyringSecretStore } from "./secret-store.js";
 import { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
@@ -32,6 +36,8 @@ Usage:
   easycompute plugins add <module>
   easycompute plugins enable <module>
   easycompute plugins disable <module>
+  easycompute plugins credential set <module> <name> --env <variable>
+  easycompute plugins credential remove <module> <name>
   easycompute instances list
   easycompute instances inspect <instance-id>
   easycompute instances start <instance-id>
@@ -106,12 +112,9 @@ async function runConnect(args: readonly string[]): Promise<void> {
   const store = new JsonStateStore(stateFilePath());
   const state = await store.read();
   const registry = new ProviderRegistry();
+  const secretStore = new OsKeyringSecretStore();
   const host = new PluginHost(registry);
-  await host.load(
-    state.plugins
-      .filter((plugin) => plugin.enabled)
-      .map((plugin) => canonicalPluginSource(plugin.source)),
-  );
+  await host.load(configuredPluginLoads(state.plugins), secretStore);
 
   const sshAdapter = new OpenSshAccessAdapter();
   const accessAdapters = new AccessAdapterRegistry([sshAdapter]);
@@ -119,7 +122,7 @@ async function runConnect(args: readonly string[]): Promise<void> {
     registry,
     accessAdapters,
     store,
-    new OsKeyringSecretStore(),
+    secretStore,
   );
   const controller = new AbortController();
   const cancel = () => controller.abort();
@@ -233,12 +236,9 @@ async function runProvider(args: readonly string[]): Promise<void> {
   const state = await store.read();
   const registry = new ProviderRegistry();
   const featureHost = new ProviderFeatureHost();
+  const secretStore = new OsKeyringSecretStore();
   const host = new PluginHost(registry, undefined, featureHost);
-  await host.load(
-    state.plugins
-      .filter((plugin) => plugin.enabled)
-      .map((plugin) => canonicalPluginSource(plugin.source)),
-  );
+  await host.load(configuredPluginLoads(state.plugins), secretStore);
 
   if (providerId === undefined) {
     process.stdout.write(formatProviderFeatures(featureHost.listFeatures()));
@@ -275,8 +275,10 @@ async function runProvider(args: readonly string[]): Promise<void> {
       );
     }
 
+    const signal = new AbortController().signal;
     await command.run(commandArgs, {
-      signal: new AbortController().signal,
+      signal,
+      resolveCredential: (name) => admission.resolveCredential(name, signal),
       write(text) {
         process.stdout.write(text);
       },
@@ -294,12 +296,9 @@ async function runInstances(args: readonly string[]): Promise<void> {
   const store = new JsonStateStore(stateFilePath());
   const state = await store.read();
   const registry = new ProviderRegistry();
+  const secretStore = new OsKeyringSecretStore();
   const host = new PluginHost(registry);
-  await host.load(
-    state.plugins
-      .filter((plugin) => plugin.enabled)
-      .map((plugin) => canonicalPluginSource(plugin.source)),
-  );
+  await host.load(configuredPluginLoads(state.plugins), secretStore);
   const manager = new ComputeManager(registry, store);
   const context = { signal: new AbortController().signal };
 
@@ -348,7 +347,71 @@ async function runPlugins(args: readonly string[]): Promise<void> {
     return;
   }
 
+  if (command === "credential") {
+    await runPluginCredential(store, args.slice(1));
+    return;
+  }
+
   throw new Error(`Unknown plugins command: ${command ?? "(missing)"}`);
+}
+
+async function runPluginCredential(
+  store: JsonStateStore,
+  args: readonly string[],
+): Promise<void> {
+  const [command, rawSource, name, option, variable] = args;
+  if (
+    command === "set" &&
+    rawSource !== undefined &&
+    name !== undefined &&
+    option === "--env" &&
+    variable !== undefined &&
+    args.length === 5
+  ) {
+    const secret = process.env[variable];
+    if (secret === undefined || secret.length === 0) {
+      throw new Error(`Environment variable is empty or missing: ${variable}`);
+    }
+    const result = await setPluginCredential(
+      store,
+      new OsKeyringSecretStore(),
+      persistedPluginSource(rawSource),
+      name,
+      secret,
+    );
+    process.stdout.write(`Configured credential ${name} for ${rawSource}\n`);
+    if (!result.previousSecretRemoved) {
+      process.stderr.write(
+        "Warning: previous credential could not be removed from the OS secret store.\n",
+      );
+    }
+    return;
+  }
+
+  if (
+    command === "remove" &&
+    rawSource !== undefined &&
+    name !== undefined &&
+    args.length === 3
+  ) {
+    const result = await removePluginCredential(
+      store,
+      new OsKeyringSecretStore(),
+      persistedPluginSource(rawSource),
+      name,
+    );
+    process.stdout.write(`Removed credential ${name} from ${rawSource}\n`);
+    if (!result.previousSecretRemoved) {
+      process.stderr.write(
+        "Warning: credential reference was removed but the OS secret could not be deleted.\n",
+      );
+    }
+    return;
+  }
+
+  throw new Error(
+    "plugins credential expects set <module> <name> --env <variable> or remove <module> <name>",
+  );
 }
 
 async function listPlugins(
@@ -358,14 +421,19 @@ async function listPlugins(
   const canonicalExplicitSources = explicitSources.map(canonicalPluginSource);
   const explicitSourceSet = new Set(canonicalExplicitSources);
   const state = await store.read();
-  const configuredSources = state.plugins
-    .filter((plugin) => plugin.enabled)
-    .map((plugin) => canonicalPluginSource(plugin.source));
+  const configured = configuredPluginLoads(state.plugins);
+  const configuredSourceSet = new Set(configured.map((plugin) => plugin.source));
   const registry = new ProviderRegistry();
   const host = new PluginHost(registry);
-  await host.load([
-    ...new Set([...configuredSources, ...canonicalExplicitSources]),
-  ]);
+  await host.load(
+    [
+      ...configured,
+      ...canonicalExplicitSources.filter(
+        (source) => !configuredSourceSet.has(source),
+      ),
+    ],
+    new OsKeyringSecretStore(),
+  );
 
   const disabledStatuses: PluginStatus[] = state.plugins
     .filter((plugin) => !plugin.enabled)
@@ -379,22 +447,23 @@ async function listPlugins(
 }
 
 async function addPlugin(store: JsonStateStore, source: string): Promise<void> {
-  const state = await store.read();
+  let status: PluginStatus | undefined;
+  await store.update(async (state) => {
+    if (
+      state.plugins.some(
+        (plugin) => canonicalPluginSource(plugin.source) === source,
+      )
+    ) {
+      throw new Error(`Plugin source is already configured: ${source}`);
+    }
 
-  if (
-    state.plugins.some(
-      (plugin) => canonicalPluginSource(plugin.source) === source,
-    )
-  ) {
-    throw new Error(`Plugin source is already configured: ${source}`);
-  }
-
-  const status = await validatePluginActivation(state.plugins, source);
-  await store.write({
-    ...state,
-    plugins: [...state.plugins, { source, enabled: true }],
+    status = await validatePluginActivation(state.plugins, source);
+    return {
+      ...state,
+      plugins: [...state.plugins, { source, enabled: true }],
+    };
   });
-  process.stdout.write(`Added ${status.pluginId ?? source}\n`);
+  process.stdout.write(`Added ${status?.pluginId ?? source}\n`);
 }
 
 async function setPluginEnabled(
@@ -402,28 +471,27 @@ async function setPluginEnabled(
   source: string,
   enabled: boolean,
 ): Promise<void> {
-  const state = await store.read();
-  const index = state.plugins.findIndex(
-    (plugin) => canonicalPluginSource(plugin.source) === source,
-  );
+  await store.update(async (state) => {
+    const index = state.plugins.findIndex(
+      (plugin) => canonicalPluginSource(plugin.source) === source,
+    );
 
-  if (index < 0) {
-    throw new Error(`Plugin source is not configured: ${source}`);
-  }
+    if (index < 0) {
+      throw new Error(`Plugin source is not configured: ${source}`);
+    }
+    if (state.plugins[index].enabled === enabled) {
+      return state;
+    }
+    if (enabled) {
+      await validatePluginActivation(state.plugins, source);
+    }
 
-  if (state.plugins[index].enabled === enabled) {
-    process.stdout.write(`${enabled ? "Enabled" : "Disabled"} ${source}\n`);
-    return;
-  }
-
-  if (enabled) {
-    await validatePluginActivation(state.plugins, source);
-  }
-
-  const plugins = state.plugins.map<PluginRegistration>((plugin, pluginIndex) =>
-    pluginIndex === index ? { ...plugin, source, enabled } : plugin,
-  );
-  await store.write({ ...state, plugins });
+    const plugins = state.plugins.map<PluginRegistration>(
+      (plugin, pluginIndex) =>
+        pluginIndex === index ? { ...plugin, source, enabled } : plugin,
+    );
+    return { ...state, plugins };
+  });
   process.stdout.write(`${enabled ? "Enabled" : "Disabled"} ${source}\n`);
 }
 
@@ -431,14 +499,11 @@ async function validatePluginActivation(
   plugins: readonly PluginRegistration[],
   source: string,
 ): Promise<PluginStatus> {
-  const configuredSources = plugins
-    .filter(
-      (plugin) =>
-        plugin.enabled && canonicalPluginSource(plugin.source) !== source,
-    )
-    .map((plugin) => canonicalPluginSource(plugin.source));
+  const configured = configuredPluginLoads(plugins).filter(
+    (plugin) => plugin.source !== source,
+  );
   const host = new PluginHost(new ProviderRegistry());
-  await host.load([...new Set([...configuredSources, source])]);
+  await host.load([...configured, source]);
   const status = host.listPlugins().at(-1);
 
   if (status?.state !== "loaded") {
@@ -520,6 +585,22 @@ function parsePluginSources(args: readonly string[]): readonly string[] {
   }
 
   return sources;
+}
+
+function configuredPluginLoads(
+  plugins: readonly PluginRegistration[],
+): readonly {
+  readonly source: string;
+  readonly credentials?: PluginRegistration["credentials"];
+}[] {
+  return plugins
+    .filter((plugin) => plugin.enabled)
+    .map((plugin) => ({
+      source: canonicalPluginSource(plugin.source),
+      ...(plugin.credentials === undefined
+        ? {}
+        : { credentials: plugin.credentials }),
+    }));
 }
 
 function persistedPluginSource(source: string): string {

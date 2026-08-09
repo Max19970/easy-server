@@ -10,7 +10,10 @@ import {
   type TcpForwardTarget,
 } from "@easycompute/plugin-sdk";
 import { AccessAdapterRegistry } from "./access-adapter-registry.js";
-import { ProviderRegistry } from "./provider-registry.js";
+import {
+  providerOperationContext,
+  ProviderRegistry,
+} from "./provider-registry.js";
 import type { SecretStore } from "./secret-store.js";
 import { JsonStateStore } from "./state-store.js";
 
@@ -103,7 +106,7 @@ export class ConnectionGateway {
       const methods = parseAccessMethods(
         await admission.provider.getAccessMethods(
           binding.providerExternalId,
-          context,
+          providerOperationContext(admission, context),
         ),
       );
       const selected = methods

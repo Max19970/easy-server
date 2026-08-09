@@ -46,6 +46,46 @@ test("state survives a fresh store instance and atomic replacement", async () =>
   });
 });
 
+test("concurrent state updates re-read under an exclusive lock instead of losing changes", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    const firstStore = new JsonStateStore(path);
+    const secondStore = new JsonStateStore(path);
+    await firstStore.write({ version: 1, plugins: [] });
+
+    let firstEnteredResolve;
+    const firstEntered = new Promise((resolve) => {
+      firstEnteredResolve = resolve;
+    });
+    let releaseFirst;
+    const firstGate = new Promise((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = firstStore.update(async (state) => {
+      firstEnteredResolve();
+      await firstGate;
+      return {
+        ...state,
+        plugins: [...state.plugins, { source: "fixture:first", enabled: true }],
+      };
+    });
+    await firstEntered;
+    const second = secondStore.update((state) => ({
+      ...state,
+      plugins: [...state.plugins, { source: "fixture:second", enabled: true }],
+    }));
+    releaseFirst();
+
+    await Promise.all([first, second]);
+    assert.deepEqual((await firstStore.read()).plugins, [
+      { source: "fixture:first", enabled: true },
+      { source: "fixture:second", enabled: true },
+    ]);
+    assert.deepEqual(await readdir(directory), ["state.json"]);
+  });
+});
+
 test("compute instance bindings persist stable local and provider identities", async () => {
   await withTempDirectory(async (directory) => {
     const path = join(directory, "state.json");
