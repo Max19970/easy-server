@@ -1,0 +1,23 @@
+{
+  "name": "@easycompute/workspace",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": "24.18.1"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run build && npm run test --workspaces --if-present",
+    "easycompute": "npm run start --workspace=@easycompute/cli --"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "6.0.2"
+  }
+}
