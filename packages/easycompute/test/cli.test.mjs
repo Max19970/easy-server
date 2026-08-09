@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test, { after } from "node:test";
@@ -18,6 +20,9 @@ const inventoryPlugin = fileURLToPath(
 );
 const providerCliPlugin = fileURLToPath(
   new URL("./fixtures/provider-cli-plugin.mjs", import.meta.url),
+);
+const daemonPlugin = fileURLToPath(
+  new URL("./fixtures/daemon-plugin.mjs", import.meta.url),
 );
 const intelionPlugin = fileURLToPath(
   new URL("../../../plugins/intelion/dist/index.js", import.meta.url),
@@ -58,6 +63,88 @@ function runWithState(stateFile, ...args) {
     encoding: "utf8",
     env: { ...process.env, EASYCOMPUTE_STATE_FILE: stateFile },
   });
+}
+
+function runWithDaemon(stateFile, daemonFile, ...args) {
+  return spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      EASYCOMPUTE_STATE_FILE: stateFile,
+      EASYCOMPUTE_DAEMON_FILE: daemonFile,
+    },
+  });
+}
+
+function startDaemon(stateFile, daemonFile) {
+  const child = spawn(process.execPath, [cli, "daemon", "run"], {
+    env: {
+      ...process.env,
+      EASYCOMPUTE_STATE_FILE: stateFile,
+      EASYCOMPUTE_DAEMON_FILE: daemonFile,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => (stdout += chunk));
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  return { child, output: () => ({ stdout, stderr }) };
+}
+
+async function waitForDaemonFile(
+  path,
+  daemon,
+  timeoutMs = 5000,
+  previousAuthToken,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const descriptor = JSON.parse(await readFile(path, "utf8"));
+      if (
+        previousAuthToken === undefined ||
+        descriptor.authToken !== previousAuthToken
+      ) {
+        return descriptor;
+      }
+    } catch {
+      if (daemon.child.exitCode !== null) {
+        assert.fail(`daemon exited early: ${JSON.stringify(daemon.output())}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  assert.fail(`daemon control file was not created: ${JSON.stringify(daemon.output())}`);
+}
+
+async function roundTrip(endpoint, payload) {
+  const socket = connect(endpoint);
+  await once(socket, "connect");
+  const received = new Promise((resolve) => socket.once("data", resolve));
+  socket.write(payload);
+  const data = await received;
+  socket.destroy();
+  return data.toString();
+}
+
+async function waitForConnectionRefused(endpoint, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const socket = connect(endpoint);
+    const outcome = await new Promise((resolve) => {
+      socket.once("connect", () => resolve("connected"));
+      socket.once("error", () => resolve("error"));
+    });
+    socket.destroy();
+    if (outcome === "error") {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail(`endpoint remained reachable: ${endpoint.host}:${endpoint.port}`);
 }
 
 function relativePluginSource(source) {
@@ -404,6 +491,121 @@ test("mounts provider feature commands and reconciles requested inventory change
   );
   assert.equal(removed.status, 1);
   assert.match(removed.stderr, /Provider Feature not found/);
+});
+
+test("daemon-owned sessions survive the creating CLI and restart without phantom sessions", async () => {
+  const stateFile = join(testDirectory, "daemon-state.json");
+  const daemonFile = join(testDirectory, "daemon-control.json");
+  const instanceId = "instance:550e8400-e29b-41d4-a716-446655440000";
+  await writeFile(
+    stateFile,
+    `${JSON.stringify({
+      version: 1,
+      plugins: [{ source: daemonPlugin, enabled: true }],
+      instances: [
+        {
+          id: instanceId,
+          providerId: "daemon-fixture",
+          providerExternalId: "remote-1",
+        },
+      ],
+    })}\n`,
+    "utf8",
+  );
+
+  const echo = createServer((socket) => socket.pipe(socket));
+  echo.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+  await once(echo, "listening");
+  const echoAddress = echo.address();
+  assert.ok(echoAddress && typeof echoAddress !== "string");
+
+  let daemon = startDaemon(stateFile, daemonFile);
+  try {
+    const firstDescriptor = await waitForDaemonFile(daemonFile, daemon);
+    assert.doesNotMatch(
+      await readFile(stateFile, "utf8"),
+      new RegExp(firstDescriptor.authToken.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
+
+    const create = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "create",
+      instanceId,
+      "--port",
+      String(echoAddress.port),
+    );
+    assert.equal(create.status, 0, create.stderr);
+    const match = create.stdout.match(
+      /^(\S+) endpoint=(127\.0\.0\.1):(\d+)$/m,
+    );
+    assert.ok(match, create.stdout);
+    const [, sessionId, host, portText] = match;
+    const endpoint = { host, port: Number(portText) };
+
+    assert.equal(await roundTrip(endpoint, "after-cli-exit"), "after-cli-exit");
+
+    const list = runWithDaemon(stateFile, daemonFile, "sessions", "list");
+    assert.equal(list.status, 0, list.stderr);
+    assert.match(list.stdout, new RegExp(sessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+    const close = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "close",
+      sessionId,
+    );
+    assert.equal(close.status, 0, close.stderr);
+    await waitForConnectionRefused(endpoint);
+
+    const second = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "create",
+      instanceId,
+      "--port",
+      String(echoAddress.port),
+    );
+    assert.equal(second.status, 0, second.stderr);
+    const secondMatch = second.stdout.match(/endpoint=(127\.0\.0\.1):(\d+)/);
+    assert.ok(secondMatch, second.stdout);
+    const secondEndpoint = {
+      host: secondMatch[1],
+      port: Number(secondMatch[2]),
+    };
+    assert.equal(await roundTrip(secondEndpoint, "before-restart"), "before-restart");
+
+    daemon.child.kill();
+    await once(daemon.child, "exit");
+    await waitForConnectionRefused(secondEndpoint);
+
+    daemon = startDaemon(stateFile, daemonFile);
+    await waitForDaemonFile(
+      daemonFile,
+      daemon,
+      5000,
+      firstDescriptor.authToken,
+    );
+    const afterRestart = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "list",
+    );
+    assert.equal(afterRestart.status, 0, afterRestart.stderr);
+    assert.equal(afterRestart.stdout, "No connection sessions found.\n");
+  } finally {
+    if (daemon.child.exitCode === null) {
+      daemon.child.kill();
+      await once(daemon.child, "exit");
+    }
+    await new Promise((resolve, reject) =>
+      echo.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
 });
 
 test("rejects malformed plugin list arguments", () => {

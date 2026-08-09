@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -24,6 +25,14 @@ import { ProviderRegistry } from "./provider-registry.js";
 import { OsKeyringSecretStore } from "./secret-store.js";
 import { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
 import { JsonStateStore, type PluginRegistration } from "./state-store.js";
+import {
+  claimLocalDaemonDescriptor,
+  LocalDaemonClient,
+  readLocalDaemonDescriptor,
+  removeLocalDaemonDescriptor,
+  startLocalConnectionDaemon,
+  type PersistentConnectionSession,
+} from "./local-daemon.js";
 
 const VERSION = "0.0.0";
 
@@ -45,6 +54,10 @@ Usage:
   easycompute instances restart <instance-id>
   easycompute instances destroy <instance-id>
   easycompute connect <instance-id> --port <remote-port> [--host <remote-host>]
+  easycompute daemon run
+  easycompute sessions create <instance-id> --port <remote-port> [--host <remote-host>]
+  easycompute sessions list
+  easycompute sessions close <session-id>
   easycompute provider <provider-id> <feature-id> <command> [args...]
 `;
 
@@ -60,6 +73,26 @@ async function run(args: readonly string[]): Promise<void> {
 
   if (command === "--version" || command === "-v" || command === "version") {
     process.stdout.write(`${VERSION}\n`);
+    return;
+  }
+
+  if (command === "daemon") {
+    try {
+      await runDaemon(args.slice(1));
+    } catch (error) {
+      process.stderr.write(`${errorMessage(error)}\n\n${help}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (command === "sessions") {
+    try {
+      await runSessions(args.slice(1));
+    } catch (error) {
+      process.stderr.write(`${errorMessage(error)}\n\n${help}`);
+      process.exitCode = 1;
+    }
     return;
   }
 
@@ -105,6 +138,134 @@ async function run(args: readonly string[]): Promise<void> {
 
   process.stderr.write(`Unknown command: ${command}\n\n${help}`);
   process.exitCode = 1;
+}
+
+async function runDaemon(args: readonly string[]): Promise<void> {
+  if (args.length !== 1 || args[0] !== "run") {
+    throw new Error("daemon expects run");
+  }
+
+  const descriptorPath = daemonFilePath();
+  let existing;
+  try {
+    existing = await readLocalDaemonDescriptor(descriptorPath);
+  } catch {
+    await removeLocalDaemonDescriptor(descriptorPath);
+  }
+  if (existing !== undefined) {
+    let alive = false;
+    try {
+      await new LocalDaemonClient(existing.address, existing.authToken).ping();
+      alive = true;
+    } catch {
+      // A stale descriptor is not authoritative; a reachable authenticated daemon is.
+    }
+    if (alive) {
+      throw new Error("EasyCompute daemon is already running");
+    }
+    await removeLocalDaemonDescriptor(descriptorPath);
+  }
+
+  const store = new JsonStateStore(stateFilePath());
+  const state = await store.read();
+  const registry = new ProviderRegistry();
+  const secretStore = new OsKeyringSecretStore();
+  const host = new PluginHost(registry);
+  await host.load(configuredPluginLoads(state.plugins), secretStore);
+  const gateway = new ConnectionGateway(
+    registry,
+    new AccessAdapterRegistry(),
+    store,
+    secretStore,
+  );
+  const authToken = randomBytes(32).toString("base64url");
+  const daemon = await startLocalConnectionDaemon({ gateway, authToken });
+  let releaseDescriptor: (() => Promise<void>) | undefined;
+  let stop!: () => void;
+  const stopped = new Promise<void>((resolve) => {
+    stop = resolve;
+  });
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+
+  try {
+    releaseDescriptor = await claimLocalDaemonDescriptor(descriptorPath, {
+      version: 1,
+      address: daemon.address,
+      authToken,
+    });
+    process.stdout.write(
+      `EasyCompute daemon listening on ${daemon.address.host}:${daemon.address.port}\n`,
+    );
+    await stopped;
+  } finally {
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGTERM", stop);
+    try {
+      await daemon.close();
+    } finally {
+      await releaseDescriptor?.();
+    }
+  }
+}
+
+async function runSessions(args: readonly string[]): Promise<void> {
+  const [command] = args;
+
+  if (command === "list" && args.length === 1) {
+    const client = await localDaemonClient();
+    process.stdout.write(formatPersistentSessions(await client.listSessions()));
+    return;
+  }
+
+  if (command === "create") {
+    const { instanceId, remotePort, remoteHost } = parseConnectArgs(
+      args.slice(1),
+      "sessions create",
+    );
+    const client = await localDaemonClient();
+    const session = await client.createSession({
+      instanceId,
+      remotePort,
+      ...(remoteHost === undefined ? {} : { remoteHost }),
+    });
+    process.stdout.write(
+      `${session.id} endpoint=${session.endpoint.host}:${session.endpoint.port}\n`,
+    );
+    return;
+  }
+
+  if (command === "close" && args[1] !== undefined && args.length === 2) {
+    const client = await localDaemonClient();
+    await client.closeSession(args[1]);
+    process.stdout.write(`Closed ${args[1]}\n`);
+    return;
+  }
+
+  throw new Error(`Unknown sessions command: ${command ?? "(missing)"}`);
+}
+
+async function localDaemonClient(): Promise<LocalDaemonClient> {
+  const descriptor = await readLocalDaemonDescriptor(daemonFilePath());
+  if (descriptor === undefined) {
+    throw new Error("EasyCompute daemon is not running");
+  }
+  return new LocalDaemonClient(descriptor.address, descriptor.authToken);
+}
+
+function formatPersistentSessions(
+  sessions: readonly PersistentConnectionSession[],
+): string {
+  if (sessions.length === 0) {
+    return "No connection sessions found.\n";
+  }
+
+  return `${sessions
+    .map(
+      (session) =>
+        `${session.id} endpoint=${session.endpoint.host}:${session.endpoint.port} instance=${session.instanceId} target=${session.remoteHost}:${session.remotePort}`,
+    )
+    .join("\n")}\n`;
 }
 
 async function runConnect(args: readonly string[]): Promise<void> {
@@ -175,14 +336,17 @@ async function confirmHostTrustInteractively(
   }
 }
 
-function parseConnectArgs(args: readonly string[]): {
+function parseConnectArgs(
+  args: readonly string[],
+  commandName = "connect",
+): {
   readonly instanceId: string;
   readonly remotePort: number;
   readonly remoteHost?: string;
 } {
   const [instanceId, ...options] = args;
   if (instanceId === undefined || instanceId.trim().length === 0) {
-    throw new Error("connect requires <instance-id>");
+    throw new Error(`${commandName} requires <instance-id>`);
   }
 
   let remotePort: number | undefined;
@@ -192,16 +356,16 @@ function parseConnectArgs(args: readonly string[]): {
     const option = options[index];
     const value = options[index + 1];
     if (value === undefined) {
-      throw new Error(`connect option requires a value: ${option}`);
+      throw new Error(`${commandName} option requires a value: ${option}`);
     }
 
     if (option === "--port") {
       if (remotePort !== undefined) {
-        throw new Error("connect accepts --port only once");
+        throw new Error(`${commandName} accepts --port only once`);
       }
       const parsed = Number(value);
       if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) {
-        throw new Error("connect --port must be an integer between 1 and 65535");
+        throw new Error(`${commandName} --port must be an integer between 1 and 65535`);
       }
       remotePort = parsed;
       continue;
@@ -209,20 +373,20 @@ function parseConnectArgs(args: readonly string[]): {
 
     if (option === "--host") {
       if (remoteHost !== undefined) {
-        throw new Error("connect accepts --host only once");
+        throw new Error(`${commandName} accepts --host only once`);
       }
       if (value.trim().length === 0) {
-        throw new Error("connect --host must be non-empty");
+        throw new Error(`${commandName} --host must be non-empty`);
       }
       remoteHost = value;
       continue;
     }
 
-    throw new Error(`Unknown connect option: ${option}`);
+    throw new Error(`Unknown ${commandName} option: ${option}`);
   }
 
   if (remotePort === undefined) {
-    throw new Error("connect requires --port <remote-port>");
+    throw new Error(`${commandName} requires --port <remote-port>`);
   }
 
   return remoteHost === undefined
@@ -630,6 +794,13 @@ function stateFilePath(): string {
   return (
     process.env.EASYCOMPUTE_STATE_FILE ??
     join(homedir(), ".easycompute", "state.json")
+  );
+}
+
+function daemonFilePath(): string {
+  return (
+    process.env.EASYCOMPUTE_DAEMON_FILE ??
+    join(homedir(), ".easycompute", "daemon.json")
   );
 }
 
