@@ -93,6 +93,10 @@ export interface ProviderAdapter {
     providerExternalId: string,
     context: OperationContext,
   ): Promise<ProviderInstanceSnapshot | undefined>;
+  getAccessMethods?(
+    providerExternalId: string,
+    context: OperationContext,
+  ): Promise<readonly AccessMethod[]>;
   performPowerAction?(
     providerExternalId: string,
     action: PowerAction,
@@ -190,10 +194,55 @@ export interface ProviderFeature {
   readonly cli?: ProviderCliContribution;
 }
 
+export type AccessMethodMode = "tcp-forward" | "interactive";
+
+export type AccessCredentialSource =
+  | {
+      readonly kind: "secret-ref";
+      readonly secretRef: SecretReference;
+    }
+  | {
+      readonly kind: "provider-deferred";
+      readonly id: string;
+    };
+
+export interface AccessMethod {
+  readonly id: string;
+  readonly kind: string;
+  readonly mode: AccessMethodMode;
+  readonly credentialSources?: readonly AccessCredentialSource[];
+}
+
+export interface TcpForwardTarget {
+  readonly host: string;
+  readonly port: number;
+}
+
+export interface AccessAdapter {
+  readonly kind: string;
+  openTcpForward(
+    method: AccessMethod,
+    providerExternalId: string,
+    target: TcpForwardTarget,
+    context: OperationContext,
+  ): Promise<AccessTransportSession>;
+}
+
+export interface AccessTransportSession {
+  openChannel(context: OperationContext): Promise<AccessChannel>;
+  close(): Promise<void>;
+}
+
+export interface AccessChannel {
+  readonly stream: import("node:stream").Duplex;
+  close(): Promise<void>;
+}
+
 export interface ProviderPlugin {
   readonly manifest: PluginManifest;
   readonly provider: ProviderAdapter;
   readonly features?: readonly ProviderFeature[];
+  readonly accessAdapters?: readonly AccessAdapter[];
 }
 
 export const NORMALIZED_ERROR_CODES = [
@@ -304,6 +353,12 @@ export function parseProviderPlugin(value: unknown): ProviderPlugin {
     "provider plugin.provider.listInstances",
   );
   expectFunction(provider.getInstance, "provider plugin.provider.getInstance");
+  if (provider.getAccessMethods !== undefined) {
+    expectFunction(
+      provider.getAccessMethods,
+      "provider plugin.provider.getAccessMethods",
+    );
+  }
   assertLifecycleMethods(provider, manifest.provider.capabilities);
 
   if (providerId !== manifest.provider.id) {
@@ -313,17 +368,134 @@ export function parseProviderPlugin(value: unknown): ProviderPlugin {
   }
 
   const features = parseProviderFeatures(plugin.features);
+  const accessAdapters = parseAccessAdapters(
+    plugin.accessAdapters,
+    manifest.provider.id,
+  );
+  const parsed: ProviderPlugin = {
+    manifest,
+    provider: provider as unknown as ProviderAdapter,
+  };
 
-  return features.length === 0
-    ? {
-        manifest,
-        provider: provider as unknown as ProviderAdapter,
-      }
-    : {
-        manifest,
-        provider: provider as unknown as ProviderAdapter,
-        features,
+  return {
+    ...parsed,
+    ...(features.length === 0 ? {} : { features }),
+    ...(accessAdapters.length === 0 ? {} : { accessAdapters }),
+  };
+}
+
+export function parseAccessMethods(value: unknown): readonly AccessMethod[] {
+  if (!Array.isArray(value)) {
+    throw new PluginContractError("provider access methods must be an array");
+  }
+
+  const methods: AccessMethod[] = [];
+  const seen = new Set<string>();
+
+  for (const [index, candidate] of value.entries()) {
+    const path = `provider access methods[${index}]`;
+    const method = expectRecord(candidate, path);
+    assertOnlyKeys(method, ["id", "kind", "mode", "credentialSources"], path);
+    const id = expectId(method.id, `${path}.id`);
+    const kind = expectAccessKind(method.kind, `${path}.kind`);
+    const mode = expectAccessMethodMode(method.mode, `${path}.mode`);
+    const credentialSources = parseAccessCredentialSources(
+      method.credentialSources,
+      `${path}.credentialSources`,
+    );
+
+    if (seen.has(id)) {
+      throw new PluginContractError(
+        `provider access methods contains duplicate id: ${id}`,
+      );
+    }
+
+    seen.add(id);
+    methods.push(
+      credentialSources === undefined
+        ? { id, kind, mode }
+        : { id, kind, mode, credentialSources },
+    );
+  }
+
+  return methods;
+}
+
+function parseAccessCredentialSources(
+  value: unknown,
+  path: string,
+): readonly AccessCredentialSource[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new PluginContractError(`${path} must be an array`);
+  }
+
+  return value.map((candidate, index) => {
+    const sourcePath = `${path}[${index}]`;
+    const source = expectRecord(candidate, sourcePath);
+
+    if (source.kind === "secret-ref") {
+      assertOnlyKeys(source, ["kind", "secretRef"], sourcePath);
+      return {
+        kind: "secret-ref" as const,
+        secretRef: parseSecretReference(source.secretRef),
       };
+    }
+
+    if (source.kind === "provider-deferred") {
+      assertOnlyKeys(source, ["kind", "id"], sourcePath);
+      return {
+        kind: "provider-deferred" as const,
+        id: expectId(source.id, `${sourcePath}.id`),
+      };
+    }
+
+    throw new PluginContractError(
+      `${sourcePath}.kind must be secret-ref or provider-deferred`,
+    );
+  });
+}
+
+function parseAccessAdapters(
+  value: unknown,
+  providerId: string,
+): readonly AccessAdapter[] {
+  if (value === undefined) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw new PluginContractError("provider plugin.accessAdapters must be an array");
+  }
+
+  const adapters: AccessAdapter[] = [];
+  const seen = new Set<string>();
+
+  for (const [index, candidate] of value.entries()) {
+    const path = `provider plugin.accessAdapters[${index}]`;
+    const adapter = expectRecord(candidate, path);
+    const kind = expectAccessKind(adapter.kind, `${path}.kind`);
+    if (!kind.startsWith(`${providerId}:`)) {
+      throw new PluginContractError(
+        `${path}.kind must be namespaced to provider ${providerId}`,
+      );
+    }
+    expectFunction(adapter.openTcpForward, `${path}.openTcpForward`);
+
+    if (seen.has(kind)) {
+      throw new PluginContractError(
+        `provider plugin.accessAdapters contains duplicate kind: ${kind}`,
+      );
+    }
+
+    seen.add(kind);
+    adapters.push(adapter as unknown as AccessAdapter);
+  }
+
+  return adapters;
 }
 
 function parseProviderFeatures(value: unknown): readonly ProviderFeature[] {
@@ -392,6 +564,8 @@ function parseProviderCliContribution(value: unknown, path: string): void {
 }
 
 const ID_PATTERN = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
+const ACCESS_KIND_PATTERN =
+  /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*(?::[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*)?$/;
 const SECRET_REFERENCE_PATTERN =
   /^secret:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const VERSION_PATTERN =
@@ -419,6 +593,36 @@ function expectNonEmptyString(value: unknown, path: string): string {
   }
 
   return value;
+}
+
+function expectAccessKind(value: unknown, path: string): string {
+  const kind = expectNonEmptyString(value, path);
+  if (!ACCESS_KIND_PATTERN.test(kind)) {
+    throw new PluginContractError(`${path} must be a valid access kind`);
+  }
+
+  return kind;
+}
+
+function expectAccessMethodMode(value: unknown, path: string): AccessMethodMode {
+  if (value !== "tcp-forward" && value !== "interactive") {
+    throw new PluginContractError(`${path} must be tcp-forward or interactive`);
+  }
+
+  return value;
+}
+
+function assertOnlyKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  path: string,
+): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(value)) {
+    if (!allowedSet.has(key)) {
+      throw new PluginContractError(`${path}.${key} is not allowed`);
+    }
+  }
 }
 
 function expectId(value: unknown, path: string): string {

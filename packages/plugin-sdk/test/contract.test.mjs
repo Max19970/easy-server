@@ -5,6 +5,7 @@ import {
   isNormalizedError,
   isSecretReference,
   normalizedError,
+  parseAccessMethods,
   parsePluginManifest,
   parseProviderInstanceList,
   parseProviderPlugin,
@@ -175,6 +176,70 @@ test("validates provider CLI contributions without interpreting command argument
         ],
       }),
     /duplicate name/,
+  );
+});
+
+test("keeps access method discovery secret-free and validates adapter ownership", () => {
+  const secretRef = "secret:550e8400-e29b-41d4-a716-446655440000";
+  assert.deepEqual(
+    parseAccessMethods([
+      {
+        id: "proxy",
+        kind: "vastai:proxy",
+        mode: "tcp-forward",
+        credentialSources: [
+          { kind: "secret-ref", secretRef },
+          { kind: "provider-deferred", id: "temporary-ssh" },
+        ],
+      },
+    ]),
+    [
+      {
+        id: "proxy",
+        kind: "vastai:proxy",
+        mode: "tcp-forward",
+        credentialSources: [
+          { kind: "secret-ref", secretRef },
+          { kind: "provider-deferred", id: "temporary-ssh" },
+        ],
+      },
+    ],
+  );
+
+  assert.throws(
+    () =>
+      parseAccessMethods([
+        {
+          id: "bad",
+          kind: "ssh",
+          mode: "tcp-forward",
+          password: "raw-secret",
+        },
+      ]),
+    /password is not allowed/,
+  );
+
+  const accessAdapter = {
+    kind: "vastai:proxy",
+    async openTcpForward() {
+      throw new Error("not used");
+    },
+  };
+  const plugin = parseProviderPlugin({
+    manifest: validManifest,
+    provider: provider(),
+    accessAdapters: [accessAdapter],
+  });
+  assert.equal(plugin.accessAdapters?.[0], accessAdapter);
+
+  assert.throws(
+    () =>
+      parseProviderPlugin({
+        manifest: validManifest,
+        provider: provider(),
+        accessAdapters: [{ ...accessAdapter, kind: "proxy" }],
+      }),
+    /namespaced to provider vastai/,
   );
 });
 

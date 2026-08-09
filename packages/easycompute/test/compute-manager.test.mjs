@@ -53,6 +53,7 @@ function registerProvider(
     pluginId: `${providerId}.plugin`,
     provider,
     capabilities,
+    accessAdapters: [],
     release() {},
   }));
 }

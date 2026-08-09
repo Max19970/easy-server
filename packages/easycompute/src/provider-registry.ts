@@ -1,4 +1,5 @@
 import type {
+  AccessAdapter,
   ProviderAdapter,
   ProviderCapability,
 } from "@easycompute/plugin-sdk";
@@ -7,6 +8,7 @@ export interface ProviderAdmission {
   readonly pluginId: string;
   readonly provider: ProviderAdapter;
   readonly capabilities: readonly ProviderCapability[];
+  readonly accessAdapters: readonly AccessAdapter[];
   release(): void;
 }
 

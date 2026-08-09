@@ -2,6 +2,7 @@ import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   parseProviderPlugin,
+  type AccessAdapter,
   type ProviderFeature,
   type ProviderPlugin,
 } from "@easycompute/plugin-sdk";
@@ -129,6 +130,7 @@ class PluginRuntime {
   readonly pluginId: string;
   readonly providerId: string;
   readonly features: readonly ProviderFeature[];
+  readonly accessAdapters: readonly AccessAdapter[];
   readonly #plugin: ProviderPlugin;
   #admitting = true;
 
@@ -137,6 +139,7 @@ class PluginRuntime {
     this.pluginId = plugin.manifest.id;
     this.providerId = plugin.manifest.provider.id;
     this.features = plugin.features ?? [];
+    this.accessAdapters = plugin.accessAdapters ?? [];
   }
 
   admit(): ProviderAdmission | undefined {
@@ -149,6 +152,7 @@ class PluginRuntime {
       pluginId: this.pluginId,
       provider,
       capabilities: this.#plugin.manifest.provider.capabilities,
+      accessAdapters: this.accessAdapters,
       release() {},
     };
   }
