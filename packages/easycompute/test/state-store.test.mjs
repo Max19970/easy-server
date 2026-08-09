@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { parseSecretReference } from "@easycompute/plugin-sdk";
 import { JsonStateStore } from "../dist/state-store.js";
 
 async function withTempDirectory(run) {
@@ -42,6 +43,68 @@ test("state survives a fresh store instance and atomic replacement", async () =>
       plugins: [{ source: "fixture:second", enabled: false }],
     });
     assert.deepEqual(await readdir(join(directory, "nested")), ["state.json"]);
+  });
+});
+
+test("provider credential configuration persists only opaque secret references", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    const store = new JsonStateStore(path);
+    const secretRef = parseSecretReference(
+      "secret:550e8400-e29b-41d4-a716-446655440000",
+    );
+
+    await store.write({
+      version: 1,
+      plugins: [
+        {
+          source: "fixture:provider",
+          enabled: true,
+          credentials: [
+            {
+              name: "apiToken",
+              secretRef,
+              value: "fixture-secret-value",
+            },
+          ],
+        },
+      ],
+    });
+
+    assert.deepEqual(await store.read(), {
+      version: 1,
+      plugins: [
+        {
+          source: "fixture:provider",
+          enabled: true,
+          credentials: [{ name: "apiToken", secretRef }],
+        },
+      ],
+    });
+
+    const serialized = await readFile(path, "utf8");
+    assert.match(serialized, /secret:550e8400-e29b-41d4-a716-446655440000/);
+    assert.doesNotMatch(serialized, /fixture-secret-value/);
+  });
+});
+
+test("rejects raw credential values where a secret reference is required", async () => {
+  await withTempDirectory(async (directory) => {
+    const store = new JsonStateStore(join(directory, "state.json"));
+
+    await assert.rejects(
+      store.write({
+        version: 1,
+        plugins: [
+          {
+            source: "fixture:provider",
+            enabled: true,
+            credentials: [{ name: "apiToken", secretRef: "fixture-secret-value" }],
+          },
+        ],
+      }),
+      /opaque secret reference/,
+    );
   });
 });
 

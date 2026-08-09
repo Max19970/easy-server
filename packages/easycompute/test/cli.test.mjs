@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test, { after } from "node:test";
@@ -118,6 +118,39 @@ test("plugin configuration survives separate CLI processes", () => {
   const enabledList = runWithState(stateFile, "plugins", "list");
   assert.equal(enabledList.status, 0);
   assert.match(enabledList.stdout, /^loaded\s+fixture\.plugin provider=fixture/m);
+});
+
+test("enable and disable preserve provider credential references", async () => {
+  const stateFile = join(testDirectory, "credential-state.json");
+  const secretRef = "secret:550e8400-e29b-41d4-a716-446655440000";
+  await writeFile(
+    stateFile,
+    `${JSON.stringify({
+      version: 1,
+      plugins: [
+        {
+          source: validPlugin,
+          enabled: true,
+          credentials: [{ name: "apiToken", secretRef }],
+        },
+      ],
+    })}\n`,
+    "utf8",
+  );
+
+  assert.equal(
+    runWithState(stateFile, "plugins", "disable", validPlugin).status,
+    0,
+  );
+  assert.equal(
+    runWithState(stateFile, "plugins", "enable", validPlugin).status,
+    0,
+  );
+
+  const persisted = JSON.parse(await readFile(stateFile, "utf8"));
+  assert.deepEqual(persisted.plugins[0].credentials, [
+    { name: "apiToken", secretRef },
+  ]);
 });
 
 test("plugins add rejects collisions with enabled configured plugins", () => {

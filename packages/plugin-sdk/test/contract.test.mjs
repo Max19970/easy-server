@@ -4,8 +4,10 @@ import test from "node:test";
 import {
   isNormalizedError,
   normalizedError,
+  isSecretReference,
   parsePluginManifest,
   parseProviderPlugin,
+  parseSecretReference,
   PluginContractError,
 } from "../dist/index.js";
 
@@ -67,6 +69,14 @@ test("rejects malformed manifests at the plugin boundary", () => {
       }),
     PluginContractError,
   );
+});
+
+test("validates opaque secret references", () => {
+  const ref = parseSecretReference("secret:550e8400-e29b-41d4-a716-446655440000");
+
+  assert.equal(isSecretReference(ref), true);
+  assert.equal(isSecretReference("not-a-secret-ref"), false);
+  assert.throws(() => parseSecretReference("secret:banana"), PluginContractError);
 });
 
 test("a host-owned abort signal reaches a blocking plugin invocation", async () => {

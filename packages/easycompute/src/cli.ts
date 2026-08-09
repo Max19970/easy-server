@@ -142,7 +142,7 @@ async function setPluginEnabled(
   }
 
   const plugins = state.plugins.map<PluginRegistration>((plugin, pluginIndex) =>
-    pluginIndex === index ? { source, enabled } : plugin,
+    pluginIndex === index ? { ...plugin, source, enabled } : plugin,
   );
   await store.write({ ...state, plugins });
   process.stdout.write(`${enabled ? "Enabled" : "Disabled"} ${source}\n`);

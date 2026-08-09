@@ -1,10 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { open, mkdir, readFile, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
+import {
+  parseSecretReference,
+  type SecretReference,
+} from "@easycompute/plugin-sdk";
+
+export interface ProviderCredentialBinding {
+  readonly name: string;
+  readonly secretRef: SecretReference;
+}
 
 export interface PluginRegistration {
   readonly source: string;
   readonly enabled: boolean;
+  readonly credentials?: readonly ProviderCredentialBinding[];
 }
 
 export interface EasyComputeState {
@@ -99,11 +109,59 @@ function parseState(value: unknown): EasyComputeState {
       throw new TypeError(`state.plugins contains duplicate source: ${source}`);
     }
 
+    const credentials = parseCredentialBindings(
+      plugin.credentials,
+      `state.plugins[${index}].credentials`,
+    );
+
     seenSources.add(source);
-    plugins.push({ source, enabled: plugin.enabled });
+    plugins.push(
+      credentials === undefined
+        ? { source, enabled: plugin.enabled }
+        : { source, enabled: plugin.enabled, credentials },
+    );
   }
 
   return { version: 1, plugins };
+}
+
+function parseCredentialBindings(
+  value: unknown,
+  path: string,
+): readonly ProviderCredentialBinding[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${path} must be an array`);
+  }
+
+  const bindings: ProviderCredentialBinding[] = [];
+  const seenNames = new Set<string>();
+
+  for (const [index, candidate] of value.entries()) {
+    const binding = expectRecord(candidate, `${path}[${index}]`);
+    const name = expectNonEmptyString(binding.name, `${path}[${index}].name`);
+
+    if (seenNames.has(name)) {
+      throw new TypeError(`${path} contains duplicate name: ${name}`);
+    }
+
+    let secretRef: SecretReference;
+    try {
+      secretRef = parseSecretReference(binding.secretRef);
+    } catch {
+      throw new TypeError(
+        `${path}[${index}].secretRef must be an opaque secret reference`,
+      );
+    }
+
+    seenNames.add(name);
+    bindings.push({ name, secretRef });
+  }
+
+  return bindings;
 }
 
 function expectRecord(value: unknown, path: string): Record<string, unknown> {

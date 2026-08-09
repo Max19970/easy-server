@@ -7,6 +7,26 @@ export const PROVIDER_CAPABILITIES = [
 
 export type ProviderCapability = (typeof PROVIDER_CAPABILITIES)[number];
 
+declare const secretReferenceBrand: unique symbol;
+
+export type SecretReference = string & {
+  readonly [secretReferenceBrand]: true;
+};
+
+export function parseSecretReference(value: unknown): SecretReference {
+  if (typeof value !== "string" || !SECRET_REFERENCE_PATTERN.test(value)) {
+    throw new PluginContractError(
+      "secret reference must have the form secret:<uuid>",
+    );
+  }
+
+  return value as SecretReference;
+}
+
+export function isSecretReference(value: unknown): value is SecretReference {
+  return typeof value === "string" && SECRET_REFERENCE_PATTERN.test(value);
+}
+
 export interface ProviderIdentity {
   readonly id: string;
   readonly displayName: string;
@@ -158,6 +178,8 @@ export function parseProviderPlugin(value: unknown): ProviderPlugin {
 }
 
 const ID_PATTERN = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
+const SECRET_REFERENCE_PATTERN =
+  /^secret:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const VERSION_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const PROVIDER_CAPABILITY_SET = new Set<string>(PROVIDER_CAPABILITIES);

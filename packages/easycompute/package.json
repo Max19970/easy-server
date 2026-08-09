@@ -13,6 +13,7 @@
     "start": "node dist/cli.js"
   },
   "dependencies": {
-    "@easycompute/plugin-sdk": "0.0.0"
+    "@easycompute/plugin-sdk": "0.0.0",
+    "@napi-rs/keyring": "1.3.0"
   }
 }
