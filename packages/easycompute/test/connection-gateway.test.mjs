@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { connect, createServer } from "node:net";
+import { connect, createServer, Server } from "node:net";
 import { PassThrough } from "node:stream";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -224,6 +224,47 @@ test("setup failure cleans setup-owned resources and provider admission", async 
       /fixture setup failure/,
     );
     assert.equal(setupCleanups, 1);
+    assert.equal(releases, 1);
+  });
+});
+
+test("local listen collision before Endpoint publication cleans setup resources", async (t) => {
+  await withState(async (store) => {
+    const providers = new ProviderRegistry();
+    const access = new AccessAdapterRegistry();
+    let releases = 0;
+    let setupCleanups = 0;
+    let transportCloses = 0;
+    registerProvider(providers, { onRelease: () => (releases += 1) });
+    access.registerBuiltIn(
+      loopbackAdapter({
+        onSetupCleanup: () => {
+          setupCleanups += 1;
+        },
+        onTransportClose: () => {
+          transportCloses += 1;
+        },
+      }),
+    );
+
+    t.mock.method(Server.prototype, "listen", function () {
+      const error = Object.assign(new Error("fixture local port collision"), {
+        code: "EADDRINUSE",
+      });
+      queueMicrotask(() => this.emit("error", error));
+      return this;
+    });
+
+    await assert.rejects(
+      new ConnectionGateway(providers, access, store).openEndpoint(
+        INSTANCE_ID,
+        12345,
+        operationContext(),
+      ),
+      (error) => error?.code === "EADDRINUSE",
+    );
+    assert.equal(setupCleanups, 1);
+    assert.equal(transportCloses, 1);
     assert.equal(releases, 1);
   });
 });
