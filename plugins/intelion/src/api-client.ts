@@ -118,6 +118,9 @@ export class IntelionApiClient {
     if (allowNotFound && response.status === 404) {
       return undefined;
     }
+    if (mutation && response.status === 404) {
+      throw normalizedError("not-found", "Intelion resource was not found");
+    }
     if (response.status === 401 || response.status === 403) {
       throw normalizedError(
         "authentication",

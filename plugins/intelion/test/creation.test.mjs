@@ -80,7 +80,7 @@ test("server configurator creates REQUESTED resources that converge on inventory
       name: "training-box",
       state: "provisioning",
       rawState: -2,
-      availableActions: [],
+      availableActions: ["instance.start", "instance.destroy"],
     },
   ]);
 });

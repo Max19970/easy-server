@@ -56,21 +56,25 @@ test("lists all Intelion cloud-server pages with Token authentication", async ()
       name: "training",
       state: "running",
       rawState: 2,
-      availableActions: [],
+      availableActions: [
+        "instance.stop",
+        "instance.restart",
+        "instance.destroy",
+      ],
     },
     {
       providerExternalId: "102",
       name: "waiting",
       state: "provisioning",
       rawState: -2,
-      availableActions: [],
+      availableActions: ["instance.start", "instance.destroy"],
     },
     {
       providerExternalId: "103",
       name: "parked",
       state: "stopped",
       rawState: -1,
-      availableActions: [],
+      availableActions: ["instance.start", "instance.destroy"],
     },
   ]);
   assert.equal(calls.length, 2);
@@ -93,7 +97,7 @@ test("gets one Intelion cloud server and preserves unknown status", async () => 
     name: "mystery",
     state: "unknown",
     rawState: 999,
-    availableActions: [],
+    availableActions: ["instance.destroy"],
   });
 });
 
@@ -164,4 +168,110 @@ test("404 Intelion cloud-server lookup returns undefined", async () => {
   });
 
   assert.equal(await plugin.provider.getInstance("404", context()), undefined);
+});
+
+test("Intelion lifecycle actions follow provider status semantics", async () => {
+  let status = -2;
+  const plugin = createIntelionProviderPlugin({
+    baseUrl: "https://fixture.intelion.test",
+    async fetch() {
+      return json({ id: 42, name: "server", status });
+    },
+  });
+
+  assert.deepEqual(plugin.manifest.provider.capabilities, [
+    "instance.start",
+    "instance.stop",
+    "instance.restart",
+    "instance.destroy",
+  ]);
+
+  for (const [rawState, actions] of [
+    [-2, ["instance.start", "instance.destroy"]],
+    [-1, ["instance.start", "instance.destroy"]],
+    [2, ["instance.stop", "instance.restart", "instance.destroy"]],
+    [-3, []],
+    [-4, ["instance.destroy"]],
+    [0, ["instance.destroy"]],
+    [1, ["instance.destroy"]],
+    [3, ["instance.destroy"]],
+    [999, ["instance.destroy"]],
+  ]) {
+    status = rawState;
+    assert.deepEqual(
+      (await plugin.provider.getInstance("42", context())).availableActions,
+      actions,
+    );
+  }
+});
+
+test("Intelion lifecycle mutations use the documented actions endpoint", async () => {
+  const calls = [];
+  const plugin = createIntelionProviderPlugin({
+    baseUrl: "https://fixture.intelion.test",
+    async fetch(input, init) {
+      calls.push({ url: new URL(input), init });
+      return json({ id: 42, name: "server", status: 2 });
+    },
+  });
+
+  await plugin.provider.performPowerAction("42", "instance.start", context());
+  await plugin.provider.performPowerAction("42", "instance.stop", context());
+  await plugin.provider.performPowerAction("42", "instance.restart", context());
+  await plugin.provider.destroy("42", context());
+
+  assert.deepEqual(
+    calls.map(({ url, init }) => ({
+      path: url.pathname,
+      method: init.method,
+      body: JSON.parse(init.body),
+    })),
+    [
+      {
+        path: "/api/v2/cloud-servers/42/actions/",
+        method: "POST",
+        body: { status: 2 },
+      },
+      {
+        path: "/api/v2/cloud-servers/42/actions/",
+        method: "POST",
+        body: { status: -1 },
+      },
+      {
+        path: "/api/v2/cloud-servers/42/actions/",
+        method: "POST",
+        body: { status: "REBOOT" },
+      },
+      {
+        path: "/api/v2/cloud-servers/42/actions/",
+        method: "POST",
+        body: { status: -3 },
+      },
+    ],
+  );
+});
+
+test("Intelion lifecycle keeps definite conflicts separate from unknown outcomes", async () => {
+  let status = 404;
+  const plugin = createIntelionProviderPlugin({
+    baseUrl: "https://fixture.intelion.test",
+    async fetch() {
+      return json({ detail: "failure" }, status);
+    },
+  });
+
+  await assert.rejects(
+    plugin.provider.performPowerAction("42", "instance.start", context()),
+    (error) => isNormalizedError(error) && error.code === "not-found",
+  );
+  status = 409;
+  await assert.rejects(
+    plugin.provider.performPowerAction("42", "instance.stop", context()),
+    (error) => isNormalizedError(error) && error.code === "conflict",
+  );
+  status = 503;
+  await assert.rejects(
+    plugin.provider.destroy("42", context()),
+    (error) => isNormalizedError(error) && error.code === "outcome-unknown",
+  );
 });

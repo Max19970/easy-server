@@ -1,6 +1,7 @@
 import {
   isNormalizedError,
   normalizedError,
+  type PowerAction,
   type ProviderAdapter,
   type ProviderInstanceSnapshot,
   type ProviderOperationContext,
@@ -54,7 +55,12 @@ export function createIntelionProviderPlugin(
       provider: {
         id: "intelion",
         displayName: "Intelion.cloud",
-        capabilities: [],
+        capabilities: [
+          "instance.start",
+          "instance.stop",
+          "instance.restart",
+          "instance.destroy",
+        ],
       },
     },
     provider: new IntelionProviderAdapter(client),
@@ -105,6 +111,35 @@ class IntelionProviderAdapter implements ProviderAdapter {
     );
     return body === undefined ? undefined : parseServer(body);
   }
+
+  async performPowerAction(
+    providerExternalId: string,
+    action: PowerAction,
+    context: ProviderOperationContext,
+  ): Promise<void> {
+    const status =
+      action === "instance.start"
+        ? 2
+        : action === "instance.stop"
+          ? -1
+          : "REBOOT";
+    await this.client.postJsonMutation(
+      `/api/v2/cloud-servers/${encodeServerId(providerExternalId)}/actions/`,
+      { status },
+      context,
+    );
+  }
+
+  async destroy(
+    providerExternalId: string,
+    context: ProviderOperationContext,
+  ): Promise<void> {
+    await this.client.postJsonMutation(
+      `/api/v2/cloud-servers/${encodeServerId(providerExternalId)}/actions/`,
+      { status: -3 },
+      context,
+    );
+  }
 }
 
 function parseServerPage(value: unknown): {
@@ -153,7 +188,7 @@ function parseServer(value: unknown): ProviderInstanceSnapshot {
       providerExternalId: String(id),
       state: normalizeServerStatus(status),
       rawState: status,
-      availableActions: [],
+      availableActions: availableActions(status),
       ...(name === undefined ? {} : { name }),
     };
   } catch (error) {
@@ -165,6 +200,22 @@ function parseServer(value: unknown): ProviderInstanceSnapshot {
       "Intelion returned an invalid cloud-server payload",
       error,
     );
+  }
+}
+
+function availableActions(
+  status: number,
+): ProviderInstanceSnapshot["availableActions"] {
+  switch (status) {
+    case -3:
+      return [];
+    case -2:
+    case -1:
+      return ["instance.start", "instance.destroy"];
+    case 2:
+      return ["instance.stop", "instance.restart", "instance.destroy"];
+    default:
+      return ["instance.destroy"];
   }
 }
 
