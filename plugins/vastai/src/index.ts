@@ -3,6 +3,7 @@ import {
   normalizedError,
   type ProviderAdapter,
   type ProviderInstanceSnapshot,
+  type AccessMethod,
   type PowerAction,
   type ProviderOperationContext,
   type ProviderPlugin,
@@ -124,6 +125,60 @@ class VastProviderAdapter implements ProviderAdapter {
 
     const response = expectRecord(body, "Vast.ai instance response");
     return parseInstance(response.instances);
+  }
+
+  async getAccessMethods(
+    providerExternalId: string,
+    context: ProviderOperationContext,
+  ): Promise<readonly AccessMethod[]> {
+    const body = await this.client.getJson(
+      `/api/v0/instances/${encodeInstanceId(providerExternalId)}/`,
+      context,
+      true,
+    );
+    if (body === undefined) {
+      return [];
+    }
+
+    const response = expectRecord(body, "Vast.ai instance response");
+    const instance = expectRecord(response.instances, "Vast.ai instance");
+    const snapshot = parseInstance(instance);
+    if (snapshot.providerExternalId !== providerExternalId) {
+      throw normalizedError(
+        "plugin-failure",
+        `Vast.ai returned instance ${snapshot.providerExternalId} for requested ${providerExternalId}`,
+      );
+    }
+    if (snapshot.rawState !== "running") {
+      return [];
+    }
+
+    const host = instance.ssh_host;
+    const port = instance.ssh_port;
+    if (host === null || host === undefined || port === null || port === undefined) {
+      return [];
+    }
+    if (typeof host !== "string" || host.trim().length === 0) {
+      throw pluginResponseError("Vast.ai instance.ssh_host must be a non-empty string or null");
+    }
+    if (!Number.isInteger(port) || (port as number) < 1 || (port as number) > 65_535) {
+      throw pluginResponseError(
+        "Vast.ai instance.ssh_port must be an integer between 1 and 65535 or null",
+      );
+    }
+
+    return [
+      {
+        id: "ssh",
+        kind: "ssh",
+        mode: "tcp-forward",
+        ssh: {
+          host,
+          port: port as number,
+          username: "root",
+        },
+      },
+    ];
   }
 
   async performPowerAction(

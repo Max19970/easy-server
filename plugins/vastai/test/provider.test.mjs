@@ -191,6 +191,59 @@ test("Vast lifecycle actions follow provider raw-state semantics", async () => {
   }
 });
 
+test("Vast exposes a generic SSH access method only when the instance is ready", async () => {
+  let status = "running";
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch() {
+      return json({
+        instances: {
+          id: 42,
+          actual_status: status,
+          label: null,
+          ssh_host: "ssh42.vast.test",
+          ssh_port: 10422,
+        },
+      });
+    },
+  });
+
+  assert.deepEqual(await plugin.provider.getAccessMethods("42", context()), [
+    {
+      id: "ssh",
+      kind: "ssh",
+      mode: "tcp-forward",
+      ssh: {
+        host: "ssh42.vast.test",
+        port: 10422,
+        username: "root",
+      },
+    },
+  ]);
+
+  status = "loading";
+  assert.deepEqual(await plugin.provider.getAccessMethods("42", context()), []);
+});
+
+test("Vast treats absent SSH routing as unavailable without inventing credentials", async () => {
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch() {
+      return json({
+        instances: {
+          id: 42,
+          actual_status: "running",
+          label: null,
+          ssh_host: null,
+          ssh_port: null,
+        },
+      });
+    },
+  });
+
+  assert.deepEqual(await plugin.provider.getAccessMethods("42", context()), []);
+});
+
 test("Vast lifecycle mutations use documented endpoints", async () => {
   const calls = [];
   const plugin = createVastProviderPlugin({
