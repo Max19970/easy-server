@@ -1,5 +1,6 @@
 import {
   normalizedError,
+  type NormalizedErrorCode,
   type ProviderOperationContext,
 } from "@easycompute/plugin-sdk";
 
@@ -37,6 +38,7 @@ export class VastApiClient {
     path: string | URL,
     body: unknown,
     context: ProviderOperationContext,
+    badRequestCode?: NormalizedErrorCode,
   ): Promise<unknown> {
     return this.#requestJson(
       path,
@@ -48,6 +50,37 @@ export class VastApiClient {
       },
       false,
       true,
+      badRequestCode,
+    );
+  }
+
+  putMutation(
+    path: string | URL,
+    context: ProviderOperationContext,
+    badRequestCode?: NormalizedErrorCode,
+  ): Promise<unknown> {
+    return this.#requestJson(
+      path,
+      context,
+      { method: "PUT" },
+      false,
+      true,
+      badRequestCode,
+    );
+  }
+
+  deleteMutation(
+    path: string | URL,
+    context: ProviderOperationContext,
+    badRequestCode?: NormalizedErrorCode,
+  ): Promise<unknown> {
+    return this.#requestJson(
+      path,
+      context,
+      { method: "DELETE" },
+      false,
+      true,
+      badRequestCode,
     );
   }
 
@@ -61,6 +94,7 @@ export class VastApiClient {
     init: RequestInit,
     allowNotFound = false,
     mutation = false,
+    badRequestCode?: NormalizedErrorCode,
   ): Promise<unknown | undefined> {
     if (context.signal.aborted) {
       throw normalizedError(
@@ -127,6 +161,15 @@ export class VastApiClient {
 
     if (allowNotFound && response.status === 404) {
       return undefined;
+    }
+    if (mutation && response.status === 404) {
+      throw normalizedError("not-found", "Vast.ai resource was not found");
+    }
+    if (mutation && response.status === 400 && badRequestCode !== undefined) {
+      throw normalizedError(
+        badRequestCode,
+        `Vast.ai rejected the mutation with HTTP ${response.status}`,
+      );
     }
     if (response.status === 401 || response.status === 403) {
       throw normalizedError(

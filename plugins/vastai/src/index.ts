@@ -3,6 +3,7 @@ import {
   normalizedError,
   type ProviderAdapter,
   type ProviderInstanceSnapshot,
+  type PowerAction,
   type ProviderOperationContext,
   type ProviderPlugin,
 } from "@easycompute/plugin-sdk";
@@ -58,7 +59,12 @@ export function createVastProviderPlugin(
       provider: {
         id: "vastai",
         displayName: "Vast.ai",
-        capabilities: [],
+        capabilities: [
+          "instance.start",
+          "instance.stop",
+          "instance.restart",
+          "instance.destroy",
+        ],
       },
     },
     provider: new VastProviderAdapter(client),
@@ -119,6 +125,40 @@ class VastProviderAdapter implements ProviderAdapter {
     const response = expectRecord(body, "Vast.ai instance response");
     return parseInstance(response.instances);
   }
+
+  async performPowerAction(
+    providerExternalId: string,
+    action: PowerAction,
+    context: ProviderOperationContext,
+  ): Promise<void> {
+    const id = encodeInstanceId(providerExternalId);
+    const response =
+      action === "instance.restart"
+        ? await this.client.putMutation(
+            `/api/v0/instances/reboot/${id}/`,
+            context,
+            "conflict",
+          )
+        : await this.client.putJsonMutation(
+            `/api/v0/instances/${id}/`,
+            { state: action === "instance.start" ? "running" : "stopped" },
+            context,
+            "conflict",
+          );
+    assertMutationSuccess(response, `Vast.ai ${action} response`);
+  }
+
+  async destroy(
+    providerExternalId: string,
+    context: ProviderOperationContext,
+  ): Promise<void> {
+    const response = await this.client.deleteMutation(
+      `/api/v0/instances/${encodeInstanceId(providerExternalId)}/`,
+      context,
+      "conflict",
+    );
+    assertMutationSuccess(response, "Vast.ai destroy response");
+  }
 }
 
 function parseInstancePage(value: unknown): {
@@ -171,7 +211,7 @@ function parseInstance(value: unknown): ProviderInstanceSnapshot {
       providerExternalId: String(instance.id),
       state: normalizeInstanceState(rawState),
       rawState,
-      availableActions: [],
+      availableActions: availableActions(rawState),
       ...(name === undefined ? {} : { name }),
     };
   } catch (error) {
@@ -183,6 +223,36 @@ function parseInstance(value: unknown): ProviderInstanceSnapshot {
       "Vast.ai returned an invalid instance payload",
       error,
     );
+  }
+}
+
+function availableActions(
+  status: string | null,
+): ProviderInstanceSnapshot["availableActions"] {
+  switch (status) {
+    case "running":
+      return ["instance.stop", "instance.restart", "instance.destroy"];
+    case "stopped":
+      return ["instance.start", "instance.destroy"];
+    default:
+      return ["instance.destroy"];
+  }
+}
+
+function encodeInstanceId(value: string): string {
+  if (!/^(?:0|[1-9]\d*)$/u.test(value)) {
+    throw normalizedError(
+      "plugin-failure",
+      `Vast.ai providerExternalId must be a non-negative integer: ${value}`,
+    );
+  }
+  return value;
+}
+
+function assertMutationSuccess(value: unknown, path: string): void {
+  const response = expectRecord(value, path);
+  if (response.success !== true) {
+    throw normalizedError("plugin-failure", `${path}.success must be true`);
   }
 }
 

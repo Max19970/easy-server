@@ -62,19 +62,23 @@ test("lists all Vast.ai instance pages with Bearer authentication", async () => 
       name: "trainer",
       state: "running",
       rawState: "running",
-      availableActions: [],
+      availableActions: [
+        "instance.stop",
+        "instance.restart",
+        "instance.destroy",
+      ],
     },
     {
       providerExternalId: "102",
       state: "unknown",
       rawState: "frozen",
-      availableActions: [],
+      availableActions: ["instance.destroy"],
     },
     {
       providerExternalId: "103",
       state: "stopped",
       rawState: "stopped",
-      availableActions: [],
+      availableActions: ["instance.start", "instance.destroy"],
     },
   ]);
 });
@@ -100,7 +104,7 @@ test("gets one instance and preserves unknown raw status", async () => {
     name: "worker",
     state: "unknown",
     rawState: "offline",
-    availableActions: [],
+    availableActions: ["instance.destroy"],
   });
 });
 
@@ -147,6 +151,115 @@ test("404 instance lookup returns undefined without weakening other HTTP errors"
   });
 
   assert.equal(await plugin.provider.getInstance("404", context()), undefined);
+});
+
+test("Vast lifecycle actions follow provider raw-state semantics", async () => {
+  const statuses = ["running", "stopped", "loading", "frozen", "offline"];
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch(input) {
+      const id = Number(new URL(input).pathname.split("/").filter(Boolean).at(-1));
+      return json({
+        instances: {
+          id,
+          actual_status: statuses[id - 1],
+          label: null,
+        },
+      });
+    },
+  });
+
+  assert.deepEqual(plugin.manifest.provider.capabilities, [
+    "instance.start",
+    "instance.stop",
+    "instance.restart",
+    "instance.destroy",
+  ]);
+  assert.deepEqual(
+    (await plugin.provider.getInstance("1", context())).availableActions,
+    ["instance.stop", "instance.restart", "instance.destroy"],
+  );
+  assert.deepEqual(
+    (await plugin.provider.getInstance("2", context())).availableActions,
+    ["instance.start", "instance.destroy"],
+  );
+  for (const id of ["3", "4", "5"]) {
+    assert.deepEqual(
+      (await plugin.provider.getInstance(id, context())).availableActions,
+      ["instance.destroy"],
+    );
+  }
+});
+
+test("Vast lifecycle mutations use documented endpoints", async () => {
+  const calls = [];
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch(input, init) {
+      calls.push({ url: new URL(input), init });
+      return json({ success: true });
+    },
+  });
+
+  await plugin.provider.performPowerAction("42", "instance.start", context());
+  await plugin.provider.performPowerAction("42", "instance.stop", context());
+  await plugin.provider.performPowerAction("42", "instance.restart", context());
+  await plugin.provider.destroy("42", context());
+
+  assert.deepEqual(
+    calls.map(({ url, init }) => ({
+      path: url.pathname,
+      method: init.method,
+      body: init.body === undefined ? undefined : JSON.parse(init.body),
+    })),
+    [
+      {
+        path: "/api/v0/instances/42/",
+        method: "PUT",
+        body: { state: "running" },
+      },
+      {
+        path: "/api/v0/instances/42/",
+        method: "PUT",
+        body: { state: "stopped" },
+      },
+      {
+        path: "/api/v0/instances/reboot/42/",
+        method: "PUT",
+        body: undefined,
+      },
+      {
+        path: "/api/v0/instances/42/",
+        method: "DELETE",
+        body: undefined,
+      },
+    ],
+  );
+});
+
+test("Vast lifecycle definite rejections and uncertain failures stay distinct", async () => {
+  let status = 404;
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch() {
+      return json({ detail: "failure" }, status);
+    },
+  });
+
+  await assert.rejects(
+    plugin.provider.performPowerAction("42", "instance.start", context()),
+    (error) => isNormalizedError(error) && error.code === "not-found",
+  );
+  status = 400;
+  await assert.rejects(
+    plugin.provider.performPowerAction("42", "instance.stop", context()),
+    (error) => isNormalizedError(error) && error.code === "conflict",
+  );
+  status = 503;
+  await assert.rejects(
+    plugin.provider.destroy("42", context()),
+    (error) => isNormalizedError(error) && error.code === "outcome-unknown",
+  );
 });
 
 test("marketplace feature searches Vast offers with plugin-owned filters", async () => {
@@ -261,7 +374,7 @@ test("marketplace feature rents an offer and the new instance converges on inven
       name: "rented-worker",
       state: "starting",
       rawState: "loading",
-      availableActions: [],
+      availableActions: ["instance.destroy"],
     },
   ]);
 });
