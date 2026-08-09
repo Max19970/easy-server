@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,9 @@ const fakeKeyscan = fileURLToPath(
 );
 const fakeSsh = fileURLToPath(
   new URL("./fixtures/fake-ssh.mjs", import.meta.url),
+);
+const fakeSshExit = fileURLToPath(
+  new URL("./fixtures/fake-ssh-exit.mjs", import.meta.url),
 );
 const noopCommand = fileURLToPath(
   new URL("./fixtures/noop-command.mjs", import.meta.url),
@@ -72,7 +76,7 @@ function passwordSshMethod() {
   ])[0];
 }
 
-function adapter(directory, keySpecPath, recordPath) {
+function adapter(directory, keySpecPath, recordPath, sshFixture = fakeSsh) {
   return new OpenSshAccessAdapter({
     knownHostsPath: join(directory, "known_hosts"),
     keyscanCommand: {
@@ -81,7 +85,7 @@ function adapter(directory, keySpecPath, recordPath) {
     },
     sshCommand: {
       executable: process.execPath,
-      prefixArgs: [fakeSsh, recordPath],
+      prefixArgs: [sshFixture, recordPath],
     },
     icaclsCommand: {
       executable: process.execPath,
@@ -309,6 +313,43 @@ test("SSH channel abort during spawn rejects and cleans up", async () => {
         (error) => error?.code === "cancelled",
       );
     } finally {
+      await transport.close();
+      await setup.cleanup();
+    }
+  });
+});
+
+test("abrupt OpenSSH child exit fails the channel instead of leaving a dead stream", async () => {
+  await withTempDirectory(async (directory) => {
+    const keySpecPath = join(directory, "host-key.json");
+    const recordPath = join(directory, "ssh-args.json");
+    await writeFile(keySpecPath, JSON.stringify(key("host-key-one")), "utf8");
+    const access = adapter(directory, keySpecPath, recordPath, fakeSshExit);
+    const method = sshMethod();
+    const setup = setupContext();
+    const trust = await captureTrustError(() =>
+      access.openTcpForward(
+        method,
+        "remote-1",
+        { host: "service.internal", port: 443 },
+        setup.context,
+      ),
+    );
+    await access.enrollHostKey(trust, context.signal);
+    const transport = await access.openTcpForward(
+      method,
+      "remote-1",
+      { host: "service.internal", port: 443 },
+      setup.context,
+    );
+    const channel = await transport.openChannel(context);
+
+    try {
+      const [error] = await once(channel.stream, "error");
+      assert.match(error.message, /OpenSSH channel exited with code 7/);
+      assert.match(error.message, /fixture abrupt SSH exit/);
+    } finally {
+      await channel.close();
       await transport.close();
       await setup.cleanup();
     }
