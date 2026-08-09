@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { isNormalizedError, type AvailableAction } from "@easycompute/plugin-sdk";
 import { ComputeManager } from "./compute-manager.js";
 import {
   formatPluginStatuses,
@@ -22,6 +23,10 @@ Usage:
   easycompute plugins disable <module>
   easycompute instances list
   easycompute instances inspect <instance-id>
+  easycompute instances start <instance-id>
+  easycompute instances stop <instance-id>
+  easycompute instances restart <instance-id>
+  easycompute instances destroy <instance-id>
 `;
 
 await run(process.argv.slice(2));
@@ -90,6 +95,13 @@ async function runInstances(args: readonly string[]): Promise<void> {
     }
 
     process.stdout.write(`${JSON.stringify(instance, null, 2)}\n`);
+    return;
+  }
+
+  const action = instanceAction(command);
+  if (action !== undefined && instanceId !== undefined && args.length === 2) {
+    await manager.performAction(instanceId, action, context);
+    process.stdout.write(`Requested ${action} for ${instanceId}\n`);
     return;
   }
 
@@ -215,6 +227,21 @@ async function validatePluginActivation(
   return status;
 }
 
+function instanceAction(command: string | undefined): AvailableAction | undefined {
+  switch (command) {
+    case "start":
+      return "instance.start";
+    case "stop":
+      return "instance.stop";
+    case "restart":
+      return "instance.restart";
+    case "destroy":
+      return "instance.destroy";
+    default:
+      return undefined;
+  }
+}
+
 function formatInstances(instances: readonly import("./compute-manager.js").ComputeInstance[]): string {
   if (instances.length === 0) {
     return "No compute instances found.\n";
@@ -271,5 +298,9 @@ function stateFilePath(): string {
 }
 
 function errorMessage(error: unknown): string {
+  if (isNormalizedError(error)) {
+    return `${error.code}: ${error.message}`;
+  }
+
   return error instanceof Error ? error.message : String(error);
 }

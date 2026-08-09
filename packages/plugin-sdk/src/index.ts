@@ -7,6 +7,14 @@ export const PROVIDER_CAPABILITIES = [
 
 export type ProviderCapability = (typeof PROVIDER_CAPABILITIES)[number];
 
+export const POWER_ACTIONS = [
+  "instance.start",
+  "instance.stop",
+  "instance.restart",
+] as const;
+
+export type PowerAction = (typeof POWER_ACTIONS)[number];
+
 declare const secretReferenceBrand: unique symbol;
 
 export type SecretReference = string & {
@@ -85,6 +93,15 @@ export interface ProviderAdapter {
     providerExternalId: string,
     context: OperationContext,
   ): Promise<ProviderInstanceSnapshot | undefined>;
+  performPowerAction?(
+    providerExternalId: string,
+    action: PowerAction,
+    context: OperationContext,
+  ): Promise<void>;
+  destroy?(
+    providerExternalId: string,
+    context: OperationContext,
+  ): Promise<void>;
 }
 
 export function parseProviderInstanceSnapshot(
@@ -262,6 +279,7 @@ export function parseProviderPlugin(value: unknown): ProviderPlugin {
     "provider plugin.provider.listInstances",
   );
   expectFunction(provider.getInstance, "provider plugin.provider.getInstance");
+  assertLifecycleMethods(provider, manifest.provider.capabilities);
 
   if (providerId !== manifest.provider.id) {
     throw new PluginContractError(
@@ -281,6 +299,7 @@ const SECRET_REFERENCE_PATTERN =
 const VERSION_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const PROVIDER_CAPABILITY_SET = new Set<string>(PROVIDER_CAPABILITIES);
+const POWER_ACTION_SET = new Set<string>(POWER_ACTIONS);
 const INSTANCE_STATE_SET = new Set<string>(INSTANCE_STATES);
 const NORMALIZED_ERROR_CODE_SET = new Set<string>(NORMALIZED_ERROR_CODES);
 
@@ -324,6 +343,29 @@ function expectVersion(value: unknown, path: string): string {
   }
 
   return version;
+}
+
+function assertLifecycleMethods(
+  provider: Record<string, unknown>,
+  capabilities: readonly ProviderCapability[],
+): void {
+  if (
+    capabilities.some((capability) => POWER_ACTION_SET.has(capability)) &&
+    typeof provider.performPowerAction !== "function"
+  ) {
+    throw new PluginContractError(
+      "provider plugin.provider.performPowerAction must be a function when power capabilities are declared",
+    );
+  }
+
+  if (
+    capabilities.includes("instance.destroy") &&
+    typeof provider.destroy !== "function"
+  ) {
+    throw new PluginContractError(
+      "provider plugin.provider.destroy must be a function when instance.destroy is declared",
+    );
+  }
 }
 
 function expectFunction(value: unknown, path: string): void {

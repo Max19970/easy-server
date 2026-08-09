@@ -39,5 +39,10 @@ export default {
         availableActions: ["instance.stop"],
       };
     },
+    async performPowerAction(providerExternalId, action) {
+      if (providerExternalId !== "remote-1" || action !== "instance.stop") {
+        throw new Error("fixture action mismatch");
+      }
+    },
   },
 };

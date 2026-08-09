@@ -3,8 +3,8 @@ import test from "node:test";
 
 import {
   isNormalizedError,
-  normalizedError,
   isSecretReference,
+  normalizedError,
   parsePluginManifest,
   parseProviderInstanceList,
   parseProviderPlugin,
@@ -27,18 +27,25 @@ const validManifest = {
   },
 };
 
+function provider(overrides = {}) {
+  return {
+    providerId: "vastai",
+    async listInstances() {
+      return [];
+    },
+    async getInstance() {
+      return undefined;
+    },
+    async performPowerAction() {},
+    async destroy() {},
+    ...overrides,
+  };
+}
+
 test("accepts a valid provider plugin", () => {
   const plugin = parseProviderPlugin({
     manifest: validManifest,
-    provider: {
-      providerId: "vastai",
-      async listInstances() {
-        return [];
-      },
-      async getInstance() {
-        return undefined;
-      },
-    },
+    provider: provider(),
   });
 
   assert.equal(plugin.manifest.provider.id, "vastai");
@@ -74,17 +81,33 @@ test("rejects malformed manifests at the plugin boundary", () => {
     () =>
       parseProviderPlugin({
         manifest: validManifest,
-        provider: {
-          providerId: "intelion",
-          async listInstances() {
-            return [];
-          },
-          async getInstance() {
-            return undefined;
-          },
-        },
+        provider: provider({ providerId: "intelion" }),
       }),
     PluginContractError,
+  );
+});
+
+test("declared lifecycle capabilities require matching adapter methods", () => {
+  const withoutPowerAction = provider();
+  delete withoutPowerAction.performPowerAction;
+  assert.throws(
+    () =>
+      parseProviderPlugin({
+        manifest: validManifest,
+        provider: withoutPowerAction,
+      }),
+    /performPowerAction/,
+  );
+
+  const withoutDestroy = provider();
+  delete withoutDestroy.destroy;
+  assert.throws(
+    () =>
+      parseProviderPlugin({
+        manifest: validManifest,
+        provider: withoutDestroy,
+      }),
+    /destroy/,
   );
 });
 

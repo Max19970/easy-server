@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
+  isNormalizedError,
+  normalizedError,
   parseProviderInstanceList,
   parseProviderInstanceSnapshot,
   PluginContractError,
@@ -9,7 +11,10 @@ import {
   type ProviderInstanceSnapshot,
   type ProviderRawState,
 } from "@easycompute/plugin-sdk";
-import { ProviderRegistry } from "./provider-registry.js";
+import {
+  ProviderRegistry,
+  type ProviderAdmission,
+} from "./provider-registry.js";
 import {
   JsonStateStore,
   type EasyComputeState,
@@ -106,21 +111,131 @@ export class ComputeManager {
       }
 
       const snapshot = parseProviderInstanceSnapshot(value, admission.capabilities);
-      if (snapshot.providerExternalId !== binding.providerExternalId) {
-        throw new PluginContractError(
-          `provider getInstance returned ${snapshot.providerExternalId} for requested ${binding.providerExternalId}`,
-        );
-      }
-
+      assertRequestedIdentity(snapshot, binding.providerExternalId);
       return toComputeInstance(binding, snapshot);
     } finally {
       admission.release();
     }
   }
 
+  async performAction(
+    id: string,
+    action: AvailableAction,
+    context: OperationContext,
+  ): Promise<void> {
+    const state = await this.stateStore.read();
+    const binding = state.instances?.find((candidate) => candidate.id === id);
+    if (binding === undefined) {
+      throw normalizedError("not-found", `Compute Instance not found: ${id}`);
+    }
+
+    const admission = this.registry.acquire(binding.providerId);
+    if (admission === undefined) {
+      throw normalizedError(
+        "provider-unavailable",
+        `Provider is not available: ${binding.providerId}`,
+      );
+    }
+
+    try {
+      if (!admission.capabilities.includes(action)) {
+        throw normalizedError(
+          "unsupported-operation",
+          `Provider ${binding.providerId} does not support ${action}`,
+        );
+      }
+
+      const before = await admission.provider.getInstance(
+        binding.providerExternalId,
+        context,
+      );
+      if (before === undefined) {
+        await this.removeBinding(state, binding.id);
+        throw normalizedError("not-found", `Compute Instance not found: ${id}`);
+      }
+
+      const current = parseProviderInstanceSnapshot(before, admission.capabilities);
+      assertRequestedIdentity(current, binding.providerExternalId);
+      if (!current.availableActions.includes(action)) {
+        throw normalizedError(
+          "conflict",
+          `${action} is not available for Compute Instance ${id}`,
+        );
+      }
+
+      try {
+        if (action === "instance.destroy") {
+          if (admission.provider.destroy === undefined) {
+            throw normalizedError(
+              "plugin-failure",
+              `Provider ${binding.providerId} declared ${action} without destroy()`,
+            );
+          }
+          await admission.provider.destroy(binding.providerExternalId, context);
+        } else {
+          if (admission.provider.performPowerAction === undefined) {
+            throw normalizedError(
+              "plugin-failure",
+              `Provider ${binding.providerId} declared ${action} without performPowerAction()`,
+            );
+          }
+          await admission.provider.performPowerAction(
+            binding.providerExternalId,
+            action,
+            context,
+          );
+        }
+      } catch (error) {
+        if (isNormalizedError(error) && error.code === "conflict") {
+          await this.refreshBindingAfterConflict(
+            state,
+            binding,
+            admission,
+            context,
+          ).catch(() => undefined);
+        }
+        throw error;
+      }
+    } finally {
+      admission.release();
+    }
+  }
+
+  private async refreshBindingAfterConflict(
+    state: EasyComputeState,
+    binding: InstanceBinding,
+    admission: ProviderAdmission,
+    context: OperationContext,
+  ): Promise<void> {
+    const snapshot = await admission.provider.getInstance(
+      binding.providerExternalId,
+      context,
+    );
+    if (snapshot === undefined) {
+      await this.removeBinding(state, binding.id);
+      return;
+    }
+
+    assertRequestedIdentity(
+      parseProviderInstanceSnapshot(snapshot, admission.capabilities),
+      binding.providerExternalId,
+    );
+  }
+
   private async removeBinding(state: EasyComputeState, id: string): Promise<void> {
     const instances = (state.instances ?? []).filter((binding) => binding.id !== id);
     await this.stateStore.write({ ...state, instances });
+  }
+}
+
+function assertRequestedIdentity(
+  snapshot: ProviderInstanceSnapshot,
+  providerExternalId: string,
+): void {
+  if (snapshot.providerExternalId !== providerExternalId) {
+    throw new PluginContractError(
+      `provider getInstance returned ${snapshot.providerExternalId} for requested ${providerExternalId}`,
+    );
   }
 }
 

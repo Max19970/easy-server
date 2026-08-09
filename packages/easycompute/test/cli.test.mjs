@@ -290,6 +290,14 @@ test("lists and inspects compute instances through configured providers", () => 
     availableActions: ["instance.stop"],
     name: "Fixture GPU",
   });
+
+  const stop = runWithState(stateFile, "instances", "stop", instanceId);
+  assert.equal(stop.status, 0);
+  assert.equal(stop.stdout, `Requested instance.stop for ${instanceId}\n`);
+
+  const start = runWithState(stateFile, "instances", "start", instanceId);
+  assert.equal(start.status, 1);
+  assert.match(start.stderr, /conflict: instance\.start is not available/);
 });
 
 test("rejects malformed plugin list arguments", () => {

@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { normalizedError } from "@easycompute/plugin-sdk";
 import { ComputeManager } from "../dist/compute-manager.js";
 import { ProviderRegistry } from "../dist/provider-registry.js";
 import { JsonStateStore } from "../dist/state-store.js";
@@ -20,7 +21,10 @@ async function withStore(run) {
   }
 }
 
-function registerProvider(registry, { providerId, capabilities, list, get }) {
+function registerProvider(
+  registry,
+  { providerId, capabilities, list, get, powerAction, destroy },
+) {
   const provider = {
     providerId,
     async listInstances(operationContext) {
@@ -29,6 +33,20 @@ function registerProvider(registry, { providerId, capabilities, list, get }) {
     async getInstance(providerExternalId, operationContext) {
       return get(providerExternalId, operationContext);
     },
+    ...(powerAction === undefined
+      ? {}
+      : {
+          async performPowerAction(providerExternalId, action, operationContext) {
+            return powerAction(providerExternalId, action, operationContext);
+          },
+        }),
+    ...(destroy === undefined
+      ? {}
+      : {
+          async destroy(providerExternalId, operationContext) {
+            return destroy(providerExternalId, operationContext);
+          },
+        }),
   };
 
   registry.register(providerId, `${providerId}.plugin`, () => ({
@@ -125,6 +143,221 @@ test("local instance IDs survive a fresh manager and successful inventory refres
     assert.equal(second[0].id, first[0].id);
     assert.equal(inspected?.id, first[0].id);
     assert.equal(inspected?.providerExternalId, "remote-1");
+  });
+});
+
+test("per-instance available actions gate lifecycle mutations without a core state table", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const calls = [];
+    const snapshots = new Map([
+      [
+        "can-stop",
+        {
+          providerExternalId: "can-stop",
+          state: "running",
+          rawState: "running",
+          availableActions: ["instance.stop"],
+        },
+      ],
+      [
+        "cannot-stop",
+        {
+          providerExternalId: "cannot-stop",
+          state: "running",
+          rawState: "running",
+          availableActions: [],
+        },
+      ],
+    ]);
+
+    registerProvider(registry, {
+      providerId: "actions",
+      capabilities: ["instance.stop"],
+      list: async () => [...snapshots.values()],
+      get: async (providerExternalId) => snapshots.get(providerExternalId),
+      powerAction: async (providerExternalId, action) => {
+        calls.push([providerExternalId, action]);
+      },
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const instances = await manager.listInstances(context);
+    const allowed = instances.find(
+      (instance) => instance.providerExternalId === "can-stop",
+    );
+    const blocked = instances.find(
+      (instance) => instance.providerExternalId === "cannot-stop",
+    );
+
+    await assert.rejects(
+      manager.performAction(blocked.id, "instance.stop", context),
+      (error) => error.code === "conflict",
+    );
+    assert.deepEqual(calls, []);
+
+    await manager.performAction(allowed.id, "instance.stop", context);
+    assert.deepEqual(calls, [["can-stop", "instance.stop"]]);
+  });
+});
+
+test("provider capabilities reject unsupported actions before provider lookup", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    let getCalls = 0;
+    const snapshot = {
+      providerExternalId: "remote",
+      state: "running",
+      rawState: "running",
+      availableActions: [],
+    };
+    registerProvider(registry, {
+      providerId: "limited",
+      capabilities: [],
+      list: async () => [snapshot],
+      get: async () => {
+        getCalls += 1;
+        return snapshot;
+      },
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const [instance] = await manager.listInstances(context);
+
+    await assert.rejects(
+      manager.performAction(instance.id, "instance.stop", context),
+      (error) => error.code === "unsupported-operation",
+    );
+    assert.equal(getCalls, 0);
+  });
+});
+
+test("destroy uses its distinct destructive provider operation", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    let destroyCall;
+    let powerCalls = 0;
+    const snapshot = {
+      providerExternalId: "destroy-me",
+      state: "stopped",
+      rawState: "stopped",
+      availableActions: ["instance.destroy"],
+    };
+    registerProvider(registry, {
+      providerId: "destructive",
+      capabilities: ["instance.destroy"],
+      list: async () => [snapshot],
+      get: async () => snapshot,
+      powerAction: async () => {
+        powerCalls += 1;
+      },
+      destroy: async (providerExternalId) => {
+        destroyCall = providerExternalId;
+      },
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const [instance] = await manager.listInstances(context);
+    await manager.performAction(instance.id, "instance.destroy", context);
+
+    assert.equal(destroyCall, "destroy-me");
+    assert.equal(powerCalls, 0);
+  });
+});
+
+test("a provider conflict triggers reconciliation without blind retry", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    let getCalls = 0;
+    let mutationCalls = 0;
+    const before = {
+      providerExternalId: "racy",
+      state: "running",
+      rawState: "running",
+      availableActions: ["instance.stop"],
+    };
+    const after = {
+      providerExternalId: "racy",
+      state: "stopped",
+      rawState: "stopped",
+      availableActions: ["instance.start"],
+    };
+    registerProvider(registry, {
+      providerId: "racy-provider",
+      capabilities: ["instance.start", "instance.stop"],
+      list: async () => [before],
+      get: async () => {
+        getCalls += 1;
+        return getCalls === 1 ? before : after;
+      },
+      powerAction: async () => {
+        mutationCalls += 1;
+        throw normalizedError("conflict", "remote state changed");
+      },
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const [instance] = await manager.listInstances(context);
+
+    await assert.rejects(
+      manager.performAction(instance.id, "instance.stop", context),
+      (error) => error.code === "conflict",
+    );
+    assert.equal(mutationCalls, 1);
+    assert.equal(getCalls, 2);
+  });
+});
+
+test("a failed provider action does not corrupt another provider binding", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const failing = {
+      providerExternalId: "fails",
+      state: "running",
+      rawState: "running",
+      availableActions: ["instance.stop"],
+    };
+    const healthy = {
+      providerExternalId: "healthy",
+      state: "running",
+      rawState: "running",
+      availableActions: [],
+    };
+    registerProvider(registry, {
+      providerId: "failing",
+      capabilities: ["instance.stop"],
+      list: async () => [failing],
+      get: async () => failing,
+      powerAction: async () => {
+        throw normalizedError("provider-unavailable", "provider outage");
+      },
+    });
+    registerProvider(registry, {
+      providerId: "healthy",
+      capabilities: [],
+      list: async () => [healthy],
+      get: async () => healthy,
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const instances = await manager.listInstances(context);
+    const failingInstance = instances.find(
+      (instance) => instance.providerId === "failing",
+    );
+    const healthyInstance = instances.find(
+      (instance) => instance.providerId === "healthy",
+    );
+
+    await assert.rejects(
+      manager.performAction(failingInstance.id, "instance.stop", context),
+      (error) => error.code === "provider-unavailable",
+    );
+
+    const persisted = await store.read();
+    assert.equal(
+      persisted.instances.some((binding) => binding.id === healthyInstance.id),
+      true,
+    );
   });
 });
 
