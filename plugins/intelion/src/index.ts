@@ -11,19 +11,32 @@ import {
   INTELION_API_TOKEN_CREDENTIAL,
   type IntelionFetch,
 } from "./api-client.js";
+import {
+  createIntelionServerConfiguratorFeature,
+  type IntelionServerConfiguratorFeature,
+} from "./configurator.js";
 
 const DEFAULT_BASE_URL = "https://intelion.cloud";
 
 export { INTELION_API_TOKEN_CREDENTIAL } from "./api-client.js";
+export type {
+  IntelionServerConfiguration,
+  IntelionServerConfigurationInput,
+  IntelionServerConfiguratorFeature,
+} from "./configurator.js";
 
 export interface IntelionPluginOptions {
   readonly baseUrl?: string;
   readonly fetch?: IntelionFetch;
 }
 
+export interface IntelionProviderPlugin extends ProviderPlugin {
+  readonly features: readonly [IntelionServerConfiguratorFeature];
+}
+
 export function createIntelionProviderPlugin(
   options: IntelionPluginOptions = {},
-): ProviderPlugin {
+): IntelionProviderPlugin {
   const client = new IntelionApiClient(
     options.baseUrl ?? DEFAULT_BASE_URL,
     options.fetch ?? globalThis.fetch,
@@ -44,6 +57,7 @@ export function createIntelionProviderPlugin(
       },
     },
     provider: new IntelionProviderAdapter(client),
+    features: [createIntelionServerConfiguratorFeature()],
   };
 }
 
