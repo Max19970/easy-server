@@ -15,8 +15,8 @@ function plugin({
       displayName: "Fake Plugin",
       version: "1.0.0",
       compatibility: {
-        easycompute: "0.0.0",
-        pluginSdk: "0.0.0",
+        easycompute: "^0.1.0",
+        pluginSdk: "^0.1.0",
       },
       provider: {
         id: providerId,
@@ -238,6 +238,34 @@ test("disable stops new admission while an existing lease keeps its adapter", as
 
   admitted.release();
   assert.equal(host.disable("fake.plugin"), false);
+});
+
+test("accepts release-compatible SemVer ranges and rejects the next incompatible minor", async () => {
+  const registry = new ProviderRegistry();
+  const candidate = plugin();
+  candidate.manifest.compatibility.easycompute = "^0.1.0";
+  candidate.manifest.compatibility.pluginSdk = ">=0.1.0 <0.2.0";
+  const host = new PluginHost(registry, async () => candidate);
+
+  await host.load(["compatible-release-plugin"]);
+
+  assert.equal(host.listPlugins()[0].state, "loaded");
+  assert.deepEqual(registry.listProviderIds(), ["fake"]);
+
+  const futureRegistry = new ProviderRegistry();
+  const futureCandidate = plugin({
+    pluginId: "future.plugin",
+    providerId: "future",
+  });
+  futureCandidate.manifest.compatibility.easycompute = "^0.2.0";
+  futureCandidate.manifest.compatibility.pluginSdk = "^0.1.0";
+  const futureHost = new PluginHost(futureRegistry, async () => futureCandidate);
+
+  await futureHost.load(["future-release-plugin"]);
+
+  assert.equal(futureHost.listPlugins()[0].state, "failed");
+  assert.match(futureHost.listPlugins()[0].error, /requires EasyCompute \^0\.2\.0/);
+  assert.deepEqual(futureRegistry.listProviderIds(), []);
 });
 
 test("rejects an incompatible plugin before provider registration", async () => {

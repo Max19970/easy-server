@@ -1,6 +1,6 @@
 {
   "name": "@easycompute/workspace",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "workspaces": [
     "packages/*",
@@ -8,16 +8,19 @@
   ],
   "packageManager": "npm@11.16.0",
   "engines": {
-    "node": "24.18.1"
+    "node": "24.18.1",
+    "npm": "11.16.0"
   },
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run build && npm run test --workspaces --if-present",
+    "release:check": "npm run typecheck && npm test && npm pack --workspaces --dry-run",
     "easycompute": "npm run start --workspace=@easycompute/cli --"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
+    "@types/semver": "7.7.1",
     "typescript": "6.0.2"
   }
 }

@@ -26,6 +26,7 @@ import { ProviderRegistry } from "./provider-registry.js";
 import { OsKeyringSecretStore } from "./secret-store.js";
 import { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
 import { JsonStateStore, type PluginRegistration } from "./state-store.js";
+import { EASYCOMPUTE_VERSION } from "./version.js";
 import {
   claimLocalDaemonDescriptor,
   LocalDaemonClient,
@@ -35,7 +36,6 @@ import {
   type PersistentConnectionSession,
 } from "./local-daemon.js";
 
-const VERSION = "0.0.0";
 
 const help = `EasyCompute
 
@@ -73,7 +73,7 @@ async function run(args: readonly string[]): Promise<void> {
   }
 
   if (command === "--version" || command === "-v" || command === "version") {
-    process.stdout.write(`${VERSION}\n`);
+    process.stdout.write(`${EASYCOMPUTE_VERSION}\n`);
     return;
   }
 

@@ -1,19 +1,31 @@
 {
   "name": "@easycompute/cli",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
   "bin": {
     "easycompute": "dist/cli.js"
   },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24.18.1 <25"
+  },
   "scripts": {
+    "prebuild": "npm run build --workspace=@easycompute/plugin-sdk",
     "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "pretypecheck": "npm run build --workspace=@easycompute/plugin-sdk",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test test/*.test.mjs",
     "start": "node dist/cli.js"
   },
   "dependencies": {
-    "@easycompute/plugin-sdk": "0.0.0",
-    "@napi-rs/keyring": "1.3.0"
+    "@easycompute/plugin-sdk": "^0.1.0",
+    "@napi-rs/keyring": "1.3.0",
+    "semver": "7.7.2"
   }
 }

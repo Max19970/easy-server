@@ -1,8 +1,10 @@
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { satisfies, validRange } from "semver";
 import {
   normalizedError,
   parseProviderPlugin,
+  PLUGIN_SDK_VERSION,
   type AccessAdapter,
   type ProviderFeature,
   type ProviderPlugin,
@@ -17,9 +19,7 @@ import {
   type ProviderAdmission,
 } from "./provider-registry.js";
 import type { SecretStore } from "./secret-store.js";
-
-const EASYCMP_VERSION = "0.0.0";
-const PLUGIN_SDK_VERSION = "0.0.0";
+import { EASYCOMPUTE_VERSION } from "./version.js";
 
 export type PluginState = "loaded" | "disabled" | "failed";
 
@@ -289,9 +289,9 @@ function isPathSpecifier(source: string): boolean {
 function assertCompatibility(plugin: ProviderPlugin): void {
   const { compatibility } = plugin.manifest;
 
-  if (!acceptsVersion(compatibility.easycompute, EASYCMP_VERSION)) {
+  if (!acceptsVersion(compatibility.easycompute, EASYCOMPUTE_VERSION)) {
     throw new Error(
-      `Plugin ${plugin.manifest.id} requires EasyCompute ${compatibility.easycompute}; current version is ${EASYCMP_VERSION}`,
+      `Plugin ${plugin.manifest.id} requires EasyCompute ${compatibility.easycompute}; current version is ${EASYCOMPUTE_VERSION}`,
     );
   }
 
@@ -303,8 +303,7 @@ function assertCompatibility(plugin: ProviderPlugin): void {
 }
 
 function acceptsVersion(requirement: string, version: string): boolean {
-  // ponytail: pre-release compatibility accepts exact versions or "*"; use a SemVer range library when published plugin ranges are required.
-  return requirement === "*" || requirement === version;
+  return validRange(requirement) !== null && satisfies(version, requirement);
 }
 
 function credentialMap(

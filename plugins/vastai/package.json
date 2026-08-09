@@ -1,16 +1,33 @@
 {
   "name": "@easycompute/plugin-vastai",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24.18.1 <25"
+  },
   "scripts": {
+    "prebuild": "npm run build --workspace=@easycompute/plugin-sdk",
     "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "pretypecheck": "npm run build --workspace=@easycompute/plugin-sdk",
     "test": "node --test test/*.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@easycompute/plugin-sdk": "0.0.0"
+    "@easycompute/plugin-sdk": "^0.1.0"
   }
 }

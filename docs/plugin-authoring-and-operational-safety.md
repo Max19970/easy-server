@@ -50,10 +50,10 @@ const plugin: ProviderPlugin = {
   manifest: {
     id: "example.provider-plugin",
     displayName: "Example Provider",
-    version: "0.0.0",
+    version: "0.1.0",
     compatibility: {
-      easycompute: "*",
-      pluginSdk: "*",
+      easycompute: "^0.1.0",
+      pluginSdk: "^0.1.0",
     },
     provider: {
       id: "example",
@@ -392,14 +392,16 @@ A plugin manifest declares compatibility independently for EasyCompute and the p
 
 ```ts
 compatibility: {
-  easycompute: "0.0.0",
-  pluginSdk: "0.0.0",
+  easycompute: "^0.1.0",
+  pluginSdk: "^0.1.0",
 }
 ```
 
-During the private `0.0.0` development phase the host intentionally accepts only an exact current version or `"*"`. This avoids pretending to implement full SemVer ranges before packages are actually versioned and published.
+From the first `0.1.0` release onward, compatibility strings are standard SemVer ranges. The host checks the running EasyCompute and plugin-SDK versions with SemVer range semantics before registering the plugin. Invalid ranges and ranges that exclude the running version fail plugin loading without replacing healthy registrations.
 
-For a published release, use the compatibility range policy documented by that release. Do not depend on undocumented core internals even when the plugin currently runs in-process.
+For the `0.x` line, remember that caret ranges are intentionally narrow: `^0.1.0` accepts compatible `0.1.x` releases but not `0.2.0`. Widen a range only after testing the plugin against that SDK/host line. `"*"` remains syntactically valid but should be reserved for development fixtures rather than published plugins.
+
+Do not depend on undocumented core internals even when the plugin currently runs in-process.
 
 ## 13. Author checklist
 

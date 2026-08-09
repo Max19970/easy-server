@@ -33,7 +33,7 @@ const providerCollisionPlugin = `data:text/javascript,${encodeURIComponent(`
       id: "fixture.collision",
       displayName: "Provider Collision Fixture",
       version: "1.0.0",
-      compatibility: { easycompute: "0.0.0", pluginSdk: "0.0.0" },
+      compatibility: { easycompute: "^0.1.0", pluginSdk: "^0.1.0" },
       provider: {
         id: "fixture",
         displayName: "Fixture Provider",
@@ -163,7 +163,7 @@ test("prints help", () => {
 test("prints version", () => {
   const result = run("--version");
   assert.equal(result.status, 0);
-  assert.equal(result.stdout, "0.0.0\n");
+  assert.equal(result.stdout, "0.1.0\n");
 });
 
 test("loads first-party workspace packages as explicit provider plugins", () => {

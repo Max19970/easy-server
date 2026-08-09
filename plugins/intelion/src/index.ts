@@ -49,10 +49,10 @@ export function createIntelionProviderPlugin(
     manifest: {
       id: "intelion",
       displayName: "Intelion.cloud",
-      version: "0.0.0",
+      version: "0.1.0",
       compatibility: {
-        easycompute: "*",
-        pluginSdk: "*",
+        easycompute: "^0.1.0",
+        pluginSdk: "^0.1.0",
       },
       provider: {
         id: "intelion",

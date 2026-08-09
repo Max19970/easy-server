@@ -75,7 +75,7 @@ function syntheticPlugin({ pluginId, providerId, feature }) {
       id: pluginId,
       displayName: pluginId,
       version: "1.0.0",
-      compatibility: { easycompute: "0.0.0", pluginSdk: "0.0.0" },
+      compatibility: { easycompute: "^0.1.0", pluginSdk: "^0.1.0" },
       provider: {
         id: providerId,
         displayName: providerId,
