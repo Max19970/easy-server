@@ -305,7 +305,7 @@ export function hostTrustRequiredError(
   return {
     kind: "easycompute-error",
     code: "host-trust-required",
-    message: `SSH host trust is required for ${host}:${port} (${fingerprint})`,
+    message: `SSH host trust is required for ${host}:${port}`,
     host,
     port,
     keyType,

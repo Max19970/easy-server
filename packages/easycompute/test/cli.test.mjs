@@ -67,6 +67,7 @@ test("prints help", () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /EasyCompute/);
   assert.match(result.stdout, /--version/);
+  assert.match(result.stdout, /connect <instance-id> --port <remote-port>/);
 });
 
 test("prints version", () => {
@@ -354,6 +355,16 @@ test("rejects malformed plugin list arguments", () => {
   const result = run("plugins", "list", "--plugin");
   assert.equal(result.status, 1);
   assert.match(result.stderr, /accepts only --plugin <module> pairs/);
+});
+
+test("connect validates its target before opening providers", () => {
+  const missingPort = run("connect", "instance:test");
+  assert.equal(missingPort.status, 1);
+  assert.match(missingPort.stderr, /connect requires --port/);
+
+  const invalidPort = run("connect", "instance:test", "--port", "70000");
+  assert.equal(invalidPort.status, 1);
+  assert.match(invalidPort.stderr, /between 1 and 65535/);
 });
 
 test("rejects unknown commands", () => {

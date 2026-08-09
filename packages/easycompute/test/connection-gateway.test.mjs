@@ -189,6 +189,7 @@ test("local Endpoint forwards TCP bytes and close releases listener and admissio
     assert.equal(releases, 0);
 
     await result.session.close();
+    await result.session.closed;
     assert.equal(releases, 1);
     await expectConnectionRefused(result.endpoint);
     await echo.close();
@@ -360,7 +361,7 @@ test("upstream channel failure tears down the published Endpoint", async () => {
     socket.on("error", () => undefined);
     await once(socket, "connect");
     await once(socket, "close");
-    await result.session.close();
+    await result.session.closed;
     await expectConnectionRefused(result.endpoint);
   });
 });

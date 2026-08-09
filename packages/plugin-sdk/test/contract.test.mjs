@@ -315,6 +315,7 @@ test("validates SSH access descriptors and typed host-trust errors", () => {
     "SHA256:fixture",
   );
   assert.equal(isHostTrustRequiredError(trust), true);
+  assert.equal(trust.message.includes(trust.fingerprint), false);
   assert.equal(isHostTrustRequiredError(normalizedError("authentication", "no")), false);
 });
 

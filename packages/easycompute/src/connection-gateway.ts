@@ -20,6 +20,7 @@ export interface Endpoint {
 }
 
 export interface ConnectionSession {
+  readonly closed: Promise<void>;
   close(): Promise<void>;
 }
 
@@ -219,13 +220,26 @@ class LiveConnectionSession implements ConnectionSession {
   readonly #connections = new Map<Socket, AccessChannel | undefined>();
   readonly #pendingCleanups = new Set<Promise<void>>();
   readonly #lifecycleErrors: unknown[] = [];
+  readonly closed: Promise<void>;
+  readonly #resolveClosed: () => void;
+  readonly #rejectClosed: (reason: unknown) => void;
   #closePromise: Promise<void> | undefined;
 
   constructor(
     private readonly server: Server,
     private readonly transport: AccessTransportSession,
     private readonly scope: CleanupScope,
-  ) {}
+  ) {
+    let resolveClosed!: () => void;
+    let rejectClosed!: (reason: unknown) => void;
+    this.closed = new Promise<void>((resolve, reject) => {
+      resolveClosed = resolve;
+      rejectClosed = reject;
+    });
+    this.#resolveClosed = resolveClosed;
+    this.#rejectClosed = rejectClosed;
+    void this.closed.catch(() => undefined);
+  }
 
   accept(socket: Socket): void {
     if (this.#controller.signal.aborted) {
@@ -247,7 +261,10 @@ class LiveConnectionSession implements ConnectionSession {
   }
 
   close(): Promise<void> {
-    this.#closePromise ??= this.#close();
+    if (this.#closePromise === undefined) {
+      this.#closePromise = this.#close();
+      void this.#closePromise.then(this.#resolveClosed, this.#rejectClosed);
+    }
     return this.#closePromise;
   }
 

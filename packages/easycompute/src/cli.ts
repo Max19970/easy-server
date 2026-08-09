@@ -1,6 +1,14 @@
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { isNormalizedError, type AvailableAction } from "@easycompute/plugin-sdk";
+import { createInterface } from "node:readline/promises";
+import {
+  isNormalizedError,
+  type AvailableAction,
+  type HostTrustRequiredError,
+} from "@easycompute/plugin-sdk";
+import { AccessAdapterRegistry } from "./access-adapter-registry.js";
+import { runForegroundConnect } from "./connect-command.js";
+import { ConnectionGateway } from "./connection-gateway.js";
 import { ComputeManager } from "./compute-manager.js";
 import { ProviderFeatureHost } from "./provider-feature-host.js";
 import {
@@ -9,6 +17,8 @@ import {
   type PluginStatus,
 } from "./plugin-host.js";
 import { ProviderRegistry } from "./provider-registry.js";
+import { OsKeyringSecretStore } from "./secret-store.js";
+import { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
 import { JsonStateStore, type PluginRegistration } from "./state-store.js";
 
 const VERSION = "0.0.0";
@@ -28,6 +38,7 @@ Usage:
   easycompute instances stop <instance-id>
   easycompute instances restart <instance-id>
   easycompute instances destroy <instance-id>
+  easycompute connect <instance-id> --port <remote-port> [--host <remote-host>]
   easycompute provider <provider-id> <feature-id> <command> [args...]
 `;
 
@@ -43,6 +54,16 @@ async function run(args: readonly string[]): Promise<void> {
 
   if (command === "--version" || command === "-v" || command === "version") {
     process.stdout.write(`${VERSION}\n`);
+    return;
+  }
+
+  if (command === "connect") {
+    try {
+      await runConnect(args.slice(1));
+    } catch (error) {
+      process.stderr.write(`${errorMessage(error)}\n\n${help}`);
+      process.exitCode = 1;
+    }
     return;
   }
 
@@ -78,6 +99,132 @@ async function run(args: readonly string[]): Promise<void> {
 
   process.stderr.write(`Unknown command: ${command}\n\n${help}`);
   process.exitCode = 1;
+}
+
+async function runConnect(args: readonly string[]): Promise<void> {
+  const { instanceId, remotePort, remoteHost } = parseConnectArgs(args);
+  const store = new JsonStateStore(stateFilePath());
+  const state = await store.read();
+  const registry = new ProviderRegistry();
+  const host = new PluginHost(registry);
+  await host.load(
+    state.plugins
+      .filter((plugin) => plugin.enabled)
+      .map((plugin) => canonicalPluginSource(plugin.source)),
+  );
+
+  const sshAdapter = new OpenSshAccessAdapter();
+  const accessAdapters = new AccessAdapterRegistry([sshAdapter]);
+  const gateway = new ConnectionGateway(
+    registry,
+    accessAdapters,
+    store,
+    new OsKeyringSecretStore(),
+  );
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  process.once("SIGINT", cancel);
+  process.once("SIGTERM", cancel);
+
+  try {
+    await runForegroundConnect({
+      gateway,
+      sshAdapter,
+      instanceId,
+      remotePort,
+      remoteHost,
+      context: { signal: controller.signal },
+      ...(process.stdin.isTTY && process.stdout.isTTY
+        ? { confirmHostTrust: confirmHostTrustInteractively }
+        : {}),
+      onEndpoint(endpoint) {
+        process.stdout.write(`${endpoint.host}:${endpoint.port}\n`);
+      },
+    });
+  } finally {
+    process.removeListener("SIGINT", cancel);
+    process.removeListener("SIGTERM", cancel);
+  }
+}
+
+async function confirmHostTrustInteractively(
+  trust: HostTrustRequiredError,
+  signal: AbortSignal,
+): Promise<boolean> {
+  process.stdout.write(
+    `Unknown SSH host ${trust.host}:${trust.port}\n${trust.keyType} fingerprint: ${trust.fingerprint}\n`,
+  );
+  const readline = createInterface({ input: process.stdin, output: process.stdout });
+
+  try {
+    const answer = await readline.question(
+      'Trust this host? Type "yes" to continue: ',
+      { signal },
+    );
+    return answer.trim().toLowerCase() === "yes";
+  } catch (error) {
+    if (signal.aborted) {
+      return false;
+    }
+    throw error;
+  } finally {
+    readline.close();
+  }
+}
+
+function parseConnectArgs(args: readonly string[]): {
+  readonly instanceId: string;
+  readonly remotePort: number;
+  readonly remoteHost?: string;
+} {
+  const [instanceId, ...options] = args;
+  if (instanceId === undefined || instanceId.trim().length === 0) {
+    throw new Error("connect requires <instance-id>");
+  }
+
+  let remotePort: number | undefined;
+  let remoteHost: string | undefined;
+
+  for (let index = 0; index < options.length; index += 2) {
+    const option = options[index];
+    const value = options[index + 1];
+    if (value === undefined) {
+      throw new Error(`connect option requires a value: ${option}`);
+    }
+
+    if (option === "--port") {
+      if (remotePort !== undefined) {
+        throw new Error("connect accepts --port only once");
+      }
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) {
+        throw new Error("connect --port must be an integer between 1 and 65535");
+      }
+      remotePort = parsed;
+      continue;
+    }
+
+    if (option === "--host") {
+      if (remoteHost !== undefined) {
+        throw new Error("connect accepts --host only once");
+      }
+      if (value.trim().length === 0) {
+        throw new Error("connect --host must be non-empty");
+      }
+      remoteHost = value;
+      continue;
+    }
+
+    throw new Error(`Unknown connect option: ${option}`);
+  }
+
+  if (remotePort === undefined) {
+    throw new Error("connect requires --port <remote-port>");
+  }
+
+  return remoteHost === undefined
+    ? { instanceId, remotePort }
+    : { instanceId, remotePort, remoteHost };
 }
 
 async function runProvider(args: readonly string[]): Promise<void> {
