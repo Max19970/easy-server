@@ -98,6 +98,7 @@ test("server configurator is usable through the provider-scoped CLI seam", async
       async resolveCredential() {
         return undefined;
       },
+      markMutationDispatched() {},
       write(text) {
         output += text;
       },

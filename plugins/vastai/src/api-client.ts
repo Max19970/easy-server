@@ -125,6 +125,9 @@ export class VastApiClient {
 
     let response: Response;
     try {
+      if (mutation) {
+        context.markMutationDispatched();
+      }
       response = await this.fetchImpl(
         path instanceof URL ? path : this.url(path),
         {
@@ -199,8 +202,10 @@ export class VastApiClient {
       return await response.json();
     } catch (error) {
       throw normalizedError(
-        "plugin-failure",
-        "Vast.ai returned an invalid JSON response",
+        mutation ? "outcome-unknown" : "plugin-failure",
+        mutation
+          ? "Vast.ai mutation outcome is unknown because the success response was unreadable"
+          : "Vast.ai returned an invalid JSON response",
         error,
       );
     }

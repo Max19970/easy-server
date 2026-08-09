@@ -191,9 +191,9 @@ The CLI command must declare `operation: "read" | "mutation"` so the host can ap
 
 Every potentially blocking host-invoked Provider, Provider Feature and connection-setup operation receives a host-owned `AbortSignal`.
 
-Plugins must propagate that signal into network/process work and stop cooperatively when possible.
+Plugins must propagate that signal into network/process work and stop cooperatively when possible. Provider operation contexts also expose `markMutationDispatched()`. A mutation transport **must** call this idempotent marker synchronously immediately before the first remote side-effecting request may be sent, after credential resolution and other preflight work. Read operations must not call it.
 
-EasyCompute applies a host deadline to blocking operations. A timeout means only that the host stopped waiting; it does **not** prove that a remote mutation rolled back.
+EasyCompute applies a host deadline to blocking operations. A timeout means only that the host stopped waiting; it does **not** prove that a remote mutation rolled back. The dispatch marker is how the host distinguishes a cancellation/deadline that happened during local preflight from one that happened after a remote mutation may have escaped.
 
 Use the normalized distinction:
 
@@ -213,6 +213,7 @@ if (context.signal.aborted) {
 }
 
 try {
+  context.markMutationDispatched();
   await fetch(url, { method: "POST", signal: context.signal });
 } catch (error) {
   // If the request may have been dispatched, mutation outcome is unknown.

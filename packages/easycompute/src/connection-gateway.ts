@@ -96,6 +96,8 @@ export class ConnectionGateway {
 
     const scope = new CleanupScope();
     scope.register(() => admission.release());
+    let pendingTransport: Promise<AccessTransportSession> | undefined;
+    let transportOwnedByScope = false;
 
     try {
       if (admission.provider.getAccessMethods === undefined) {
@@ -142,8 +144,8 @@ export class ConnectionGateway {
         "read",
         `Access setup for ${instanceId}`,
         context,
-        (operationContext) =>
-          selected.adapter.openTcpForward(
+        (operationContext) => {
+          pendingTransport = selected.adapter.openTcpForward(
             selected.method,
             binding.providerExternalId,
             target,
@@ -207,8 +209,11 @@ export class ConnectionGateway {
                 return credential;
               },
             },
-          ),
+          );
+          return pendingTransport;
+        },
       );
+      transportOwnedByScope = true;
       scope.register(() => transport.close());
 
       let session: LiveConnectionSession | undefined;
@@ -246,6 +251,11 @@ export class ConnectionGateway {
         session,
       };
     } catch (error) {
+      if (pendingTransport !== undefined && !transportOwnedByScope) {
+        void pendingTransport
+          .then((transport) => transport.close())
+          .catch(() => undefined);
+      }
       try {
         await scope.close();
       } catch (cleanupError) {

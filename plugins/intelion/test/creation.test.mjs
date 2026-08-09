@@ -13,6 +13,7 @@ function context() {
       assert.equal(name, INTELION_API_TOKEN_CREDENTIAL);
       return "fixture-token";
     },
+    markMutationDispatched() {},
   };
 }
 

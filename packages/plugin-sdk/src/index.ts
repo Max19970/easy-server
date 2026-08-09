@@ -65,6 +65,8 @@ export interface OperationContext {
 export interface ProviderOperationContext extends OperationContext {
   /** Resolve one configured provider credential by stable plugin-owned name. */
   resolveCredential(name: string): Promise<string | undefined>;
+  /** Mark the point immediately before a remote mutation may be dispatched. */
+  markMutationDispatched(): void;
 }
 
 export const INSTANCE_STATES = [

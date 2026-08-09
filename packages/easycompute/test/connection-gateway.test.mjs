@@ -260,6 +260,50 @@ test("host deadline cancels connection setup and releases setup-owned resources"
   });
 });
 
+test("late transport returned after setup timeout is closed when it eventually resolves", async () => {
+  await withState(async (store) => {
+    const providers = new ProviderRegistry();
+    const access = new AccessAdapterRegistry();
+    let releases = 0;
+    let setupCleanups = 0;
+    let transportCloses = 0;
+    registerProvider(providers, { onRelease: () => (releases += 1) });
+    access.registerBuiltIn({
+      kind: "loopback",
+      async openTcpForward(_method, _providerExternalId, _target, setupContext) {
+        setupContext.registerCleanup(() => {
+          setupCleanups += 1;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return {
+          async openChannel() {
+            throw new Error("late transport must never publish an Endpoint");
+          },
+          async close() {
+            transportCloses += 1;
+          },
+        };
+      },
+    });
+
+    await assert.rejects(
+      new ConnectionGateway(
+        providers,
+        access,
+        store,
+        undefined,
+        new HostOperationRunner(10),
+      ).openEndpoint(INSTANCE_ID, 12345, operationContext()),
+      (error) => error?.code === "timeout",
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    assert.equal(setupCleanups, 1);
+    assert.equal(transportCloses, 1);
+    assert.equal(releases, 1);
+  });
+});
+
 test("selected Access Method can resolve only its declared secret references", async () => {
   await withState(async (store) => {
     const declaredRef = "secret:550e8400-e29b-41d4-a716-446655440000";

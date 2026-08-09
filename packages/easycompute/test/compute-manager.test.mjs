@@ -410,6 +410,7 @@ test("cancelled lifecycle mutation after dispatch reports outcome unknown, is no
       },
       powerAction: async (_providerExternalId, _action, operationContext) => {
         powerCalls += 1;
+        operationContext.markMutationDispatched();
         markDispatched();
         await new Promise((resolve) =>
           operationContext.signal.addEventListener("abort", resolve, { once: true }),
@@ -434,6 +435,45 @@ test("cancelled lifecycle mutation after dispatch reports outcome unknown, is no
     await assert.rejects(action, (error) => error?.code === "outcome-unknown");
     assert.equal(powerCalls, 1);
     assert.equal(getCalls, 2);
+  });
+});
+
+test("uncertain mutation does not discard stable local identity on a transient missing lookup", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const snapshot = {
+      providerExternalId: "remote",
+      state: "running",
+      rawState: "running",
+      availableActions: ["instance.destroy"],
+    };
+    let getCalls = 0;
+
+    registerProvider(registry, {
+      providerId: "uncertain",
+      capabilities: ["instance.destroy"],
+      list: async () => [snapshot],
+      get: async () => {
+        getCalls += 1;
+        return getCalls === 1 ? snapshot : undefined;
+      },
+      destroy: async () => {
+        throw normalizedError("outcome-unknown", "fixture destroy is uncertain");
+      },
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const [before] = await manager.listInstances(context);
+
+    await assert.rejects(
+      manager.performAction(before.id, "instance.destroy", context),
+      (error) => error?.code === "outcome-unknown",
+    );
+    assert.equal(getCalls, 2);
+
+    const [after] = await manager.listInstances(context);
+    assert.equal(after.providerExternalId, before.providerExternalId);
+    assert.equal(after.id, before.id);
   });
 });
 

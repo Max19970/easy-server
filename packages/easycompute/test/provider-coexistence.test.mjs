@@ -41,6 +41,7 @@ function featureContext(admission) {
   return {
     signal,
     resolveCredential: (name) => admission.resolveCredential(name, signal),
+    markMutationDispatched() {},
   };
 }
 

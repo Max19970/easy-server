@@ -454,6 +454,7 @@ async function runProvider(args: readonly string[]): Promise<void> {
             signal: operationContext.signal,
             resolveCredential: (name) =>
               admission.resolveCredential(name, operationContext.signal),
+            markMutationDispatched: operationContext.markMutationDispatched,
             write(text) {
               process.stdout.write(text);
             },

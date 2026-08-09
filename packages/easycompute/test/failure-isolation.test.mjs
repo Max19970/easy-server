@@ -28,6 +28,7 @@ function context(credentialName, signal = new AbortController().signal) {
       assert.equal(name, credentialName);
       return "fixture-secret";
     },
+    markMutationDispatched() {},
   };
 }
 

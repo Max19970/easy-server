@@ -305,9 +305,21 @@ function encodeInstanceId(value: string): string {
 }
 
 function assertMutationSuccess(value: unknown, path: string): void {
-  const response = expectRecord(value, path);
+  let response: Record<string, unknown>;
+  try {
+    response = expectRecord(value, path);
+  } catch (error) {
+    throw normalizedError(
+      "outcome-unknown",
+      `${path} is ambiguous after mutation dispatch`,
+      error,
+    );
+  }
   if (response.success !== true) {
-    throw normalizedError("plugin-failure", `${path}.success must be true`);
+    throw normalizedError(
+      "outcome-unknown",
+      `${path}.success did not confirm the mutation result`,
+    );
   }
 }
 

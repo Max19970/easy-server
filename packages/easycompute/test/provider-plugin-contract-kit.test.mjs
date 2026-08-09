@@ -9,6 +9,7 @@ import {
   VAST_API_KEY_CREDENTIAL,
 } from "../../../plugins/vastai/dist/index.js";
 import daemonPlugin from "./fixtures/daemon-plugin.mjs";
+import { HostOperationRunner } from "../dist/host-operation.js";
 import {
   assertAccessAdapterRegistration,
   assertNormalizedOperationError,
@@ -30,6 +31,7 @@ function providerContext(credentialName, signal = new AbortController().signal) 
       assert.equal(name, credentialName);
       return "fixture-secret";
     },
+    markMutationDispatched() {},
   };
 }
 
@@ -128,6 +130,118 @@ test("contract kit exercises host-owned cancellation through first-party provide
     await dispatched;
     controller.abort();
     await assertNormalizedOperationError(operation, "cancelled");
+  }
+});
+
+test("contract kit keeps first-party mutation dispatch after credential preflight", async () => {
+  for (const subject of [
+    {
+      name: "Vast",
+      credential: VAST_API_KEY_CREDENTIAL,
+      create(fetch) {
+        return createVastProviderPlugin({
+          baseUrl: "https://fixture.vast.test",
+          fetch,
+        });
+      },
+    },
+    {
+      name: "Intelion",
+      credential: INTELION_API_TOKEN_CREDENTIAL,
+      create(fetch) {
+        return createIntelionProviderPlugin({
+          baseUrl: "https://fixture.intelion.test",
+          fetch,
+        });
+      },
+    },
+  ]) {
+    let fetchCalls = 0;
+    const plugin = subject.create(async () => {
+      fetchCalls += 1;
+      return json({ success: true });
+    });
+    const controller = new AbortController();
+    let resolverEntered;
+    const didEnterResolver = new Promise((resolve) => {
+      resolverEntered = resolve;
+    });
+    const operation = new HostOperationRunner(500).run(
+      "mutation",
+      `${subject.name} destroy`,
+      { signal: controller.signal },
+      (operationContext) =>
+        plugin.provider.destroy("42", {
+          signal: operationContext.signal,
+          async resolveCredential(name) {
+            assert.equal(name, subject.credential);
+            resolverEntered();
+            await new Promise((resolve) =>
+              operationContext.signal.addEventListener("abort", resolve, {
+                once: true,
+              }),
+            );
+            return "fixture-secret";
+          },
+          markMutationDispatched: operationContext.markMutationDispatched,
+        }),
+    );
+
+    await didEnterResolver;
+    controller.abort();
+
+    await assertNormalizedOperationError(operation, "cancelled");
+    assert.equal(fetchCalls, 0);
+  }
+});
+
+test("contract kit keeps first-party mutation deadline before dispatch definite", async () => {
+  for (const subject of [
+    {
+      name: "Vast",
+      credential: VAST_API_KEY_CREDENTIAL,
+      create(fetch) {
+        return createVastProviderPlugin({
+          baseUrl: "https://fixture.vast.test",
+          fetch,
+        });
+      },
+    },
+    {
+      name: "Intelion",
+      credential: INTELION_API_TOKEN_CREDENTIAL,
+      create(fetch) {
+        return createIntelionProviderPlugin({
+          baseUrl: "https://fixture.intelion.test",
+          fetch,
+        });
+      },
+    },
+  ]) {
+    let fetchCalls = 0;
+    const plugin = subject.create(async () => {
+      fetchCalls += 1;
+      return json({ success: true });
+    });
+    const operation = new HostOperationRunner(10).run(
+      "mutation",
+      `${subject.name} destroy`,
+      { signal: new AbortController().signal },
+      (operationContext) =>
+        plugin.provider.destroy("42", {
+          signal: operationContext.signal,
+          async resolveCredential(name) {
+            assert.equal(name, subject.credential);
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            return "fixture-secret";
+          },
+          markMutationDispatched: operationContext.markMutationDispatched,
+        }),
+    );
+
+    await assertNormalizedOperationError(operation, "timeout");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(fetchCalls, 0);
   }
 });
 

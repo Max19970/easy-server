@@ -25,6 +25,47 @@ test("cancelled mutation is rejected before provider dispatch", async () => {
   assert.equal(calls, 0);
 });
 
+test("caller cancellation while mutation callback is still pre-dispatch stays definite", async () => {
+  const controller = new AbortController();
+  let entered;
+  const didEnter = new Promise((resolve) => {
+    entered = resolve;
+  });
+  let remoteDispatches = 0;
+  const run = new HostOperationRunner(500).run(
+    "mutation",
+    "fixture mutation",
+    context(controller.signal),
+    async ({ signal }) => {
+      entered();
+      await new Promise((resolve) =>
+        signal.addEventListener("abort", resolve, { once: true }),
+      );
+      if (!signal.aborted) {
+        remoteDispatches += 1;
+      }
+    },
+  );
+
+  await didEnter;
+  controller.abort();
+
+  await assert.rejects(run, (error) => error?.code === "cancelled");
+  assert.equal(remoteDispatches, 0);
+});
+
+test("host deadline while mutation callback is still pre-dispatch stays a timeout", async () => {
+  await assert.rejects(
+    new HostOperationRunner(20).run(
+      "mutation",
+      "fixture mutation",
+      context(),
+      async () => new Promise(() => {}),
+    ),
+    (error) => error?.code === "timeout",
+  );
+});
+
 test("host deadline bounds a non-cooperative read", async () => {
   await assert.rejects(
     new HostOperationRunner(20).run(
@@ -45,8 +86,9 @@ test("host deadline after mutation dispatch reports outcome unknown without retr
       "mutation",
       "fixture mutation",
       context(),
-      async () => {
+      async ({ markMutationDispatched }) => {
         calls += 1;
+        markMutationDispatched();
         return new Promise(() => {});
       },
     ),
@@ -65,7 +107,8 @@ test("caller cancellation after mutation dispatch reports outcome unknown", asyn
     "mutation",
     "fixture mutation",
     context(controller.signal),
-    async ({ signal }) => {
+    async ({ signal, markMutationDispatched }) => {
+      markMutationDispatched();
       dispatched();
       await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
     },

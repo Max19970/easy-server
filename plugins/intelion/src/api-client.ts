@@ -84,6 +84,9 @@ export class IntelionApiClient {
 
     let response: Response;
     try {
+      if (mutation) {
+        context.markMutationDispatched();
+      }
       response = await this.fetchImpl(url, {
         ...init,
         headers: {

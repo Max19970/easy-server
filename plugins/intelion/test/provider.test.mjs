@@ -13,6 +13,7 @@ function context(token = "fixture-token") {
       assert.equal(name, INTELION_API_TOKEN_CREDENTIAL);
       return token;
     },
+    markMutationDispatched() {},
   };
 }
 
@@ -142,6 +143,7 @@ test("missing and rejected Intelion API tokens become authentication errors", as
       async resolveCredential() {
         return undefined;
       },
+      markMutationDispatched() {},
     }),
     (error) => isNormalizedError(error) && error.code === "authentication",
   );

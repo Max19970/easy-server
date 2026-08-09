@@ -244,8 +244,8 @@ function parseRentalResult(value: unknown): VastRentalResult {
       throw error;
     }
     throw normalizedError(
-      "plugin-failure",
-      "Vast.ai returned an invalid create-instance payload",
+      "outcome-unknown",
+      "Vast.ai rental outcome is unknown because the success payload was ambiguous",
       error,
     );
   }

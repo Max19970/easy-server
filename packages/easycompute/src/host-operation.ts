@@ -5,6 +5,10 @@ import {
 
 export type HostOperationKind = "read" | "mutation";
 
+export interface HostOperationContext extends OperationContext {
+  markMutationDispatched(): void;
+}
+
 export const DEFAULT_HOST_OPERATION_TIMEOUT_MS = 60_000;
 
 export class HostOperationRunner {
@@ -20,7 +24,7 @@ export class HostOperationRunner {
     kind: HostOperationKind,
     label: string,
     context: OperationContext,
-    invoke: (context: OperationContext) => Promise<T>,
+    invoke: (context: HostOperationContext) => Promise<T>,
   ): Promise<T> {
     if (context.signal.aborted) {
       throw normalizedError("cancelled", `${label} was cancelled before dispatch`);
@@ -28,7 +32,7 @@ export class HostOperationRunner {
 
     const timeout = new AbortController();
     const signal = AbortSignal.any([context.signal, timeout.signal]);
-    let dispatched = false;
+    let mutationDispatched = false;
     let onAbort!: () => void;
     const aborted = new Promise<never>((_, reject) => {
       onAbort = () => reject(new HostOperationAbort());
@@ -40,8 +44,14 @@ export class HostOperationRunner {
       if (signal.aborted) {
         throw new HostOperationAbort();
       }
-      dispatched = true;
-      return invoke({ signal });
+      return invoke({
+        signal,
+        markMutationDispatched() {
+          if (kind === "mutation") {
+            mutationDispatched = true;
+          }
+        },
+      });
     });
 
     try {
@@ -51,7 +61,7 @@ export class HostOperationRunner {
         throw error;
       }
 
-      if (kind === "mutation" && dispatched) {
+      if (kind === "mutation" && mutationDispatched) {
         throw normalizedError(
           "outcome-unknown",
           `${label} outcome is unknown after possible dispatch`,
@@ -61,13 +71,13 @@ export class HostOperationRunner {
       if (timeout.signal.aborted && !context.signal.aborted) {
         throw normalizedError(
           "timeout",
-          `${label} timed out${dispatched ? "" : " before dispatch"}`,
+          `${label} timed out${kind === "mutation" ? " before dispatch" : ""}`,
         );
       }
 
       throw normalizedError(
         "cancelled",
-        `${label} was cancelled${dispatched ? "" : " before dispatch"}`,
+        `${label} was cancelled${kind === "mutation" ? " before dispatch" : ""}`,
       );
     } finally {
       clearTimeout(timer);

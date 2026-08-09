@@ -16,6 +16,7 @@ function context(apiKey = DEFAULT_API_KEY) {
       assert.equal(name, VAST_API_KEY_CREDENTIAL);
       return apiKey === DEFAULT_API_KEY ? "fixture-key" : apiKey;
     },
+    markMutationDispatched() {},
   };
 }
 
@@ -125,6 +126,7 @@ test("missing and rejected API keys become normalized authentication errors", as
         assert.equal(name, VAST_API_KEY_CREDENTIAL);
         return undefined;
       },
+      markMutationDispatched() {},
     }),
     (error) => isNormalizedError(error) && error.code === "authentication",
   );
@@ -315,6 +317,34 @@ test("Vast lifecycle definite rejections and uncertain failures stay distinct", 
   );
 });
 
+test("Vast mutation with an unreadable success response remains outcome-unknown", async () => {
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch() {
+      return new Response("", { status: 200 });
+    },
+  });
+
+  await assert.rejects(
+    plugin.provider.performPowerAction("42", "instance.start", context()),
+    (error) => isNormalizedError(error) && error.code === "outcome-unknown",
+  );
+});
+
+test("Vast lifecycle mutation with an ambiguous success payload remains outcome-unknown", async () => {
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch() {
+      return json({ accepted: true });
+    },
+  });
+
+  await assert.rejects(
+    plugin.provider.performPowerAction("42", "instance.start", context()),
+    (error) => isNormalizedError(error) && error.code === "outcome-unknown",
+  );
+});
+
 test("marketplace feature searches Vast offers with plugin-owned filters", async () => {
   const calls = [];
   const plugin = createVastProviderPlugin({
@@ -430,6 +460,23 @@ test("marketplace feature rents an offer and the new instance converges on inven
       availableActions: ["instance.destroy"],
     },
   ]);
+});
+
+test("marketplace rental with an ambiguous success payload remains outcome-unknown", async () => {
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch() {
+      return json({ success: true });
+    },
+  });
+
+  await assert.rejects(
+    plugin.features[0].rentOffer(
+      { offerId: "901", image: "ubuntu:22.04" },
+      context(),
+    ),
+    (error) => isNormalizedError(error) && error.code === "outcome-unknown",
+  );
 });
 
 test("marketplace rental reports outcome-unknown after dispatch transport failure", async () => {

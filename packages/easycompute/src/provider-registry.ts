@@ -24,11 +24,12 @@ interface ProviderRegistration {
 
 export function providerOperationContext(
   admission: Pick<ProviderAdmission, "resolveCredential">,
-  context: OperationContext,
+  context: OperationContext & Pick<ProviderOperationContext, "markMutationDispatched">,
 ): ProviderOperationContext {
   return {
     signal: context.signal,
     resolveCredential: (name) => admission.resolveCredential(name, context.signal),
+    markMutationDispatched: context.markMutationDispatched,
   };
 }
 
