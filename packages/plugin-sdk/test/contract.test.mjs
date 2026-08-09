@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  hostTrustRequiredError,
+  isHostTrustRequiredError,
   isNormalizedError,
   isSecretReference,
+  isSshAccessMethod,
   normalizedError,
   parseAccessMethods,
   parsePluginManifest,
@@ -241,6 +244,78 @@ test("keeps access method discovery secret-free and validates adapter ownership"
       }),
     /namespaced to provider vastai/,
   );
+});
+
+test("validates SSH access descriptors and typed host-trust errors", () => {
+  const secretRef = "secret:550e8400-e29b-41d4-a716-446655440000";
+  const [method] = parseAccessMethods([
+    {
+      id: "direct-ssh",
+      kind: "ssh",
+      mode: "tcp-forward",
+      ssh: {
+        host: "gpu.example.net",
+        port: 2222,
+        username: "ubuntu",
+        privateKeySecretRef: secretRef,
+      },
+    },
+  ]);
+
+  assert.equal(isSshAccessMethod(method), true);
+  assert.equal(method.ssh.host, "gpu.example.net");
+  assert.equal(method.ssh.port, 2222);
+  assert.equal(method.ssh.privateKeySecretRef, secretRef);
+
+  assert.throws(
+    () =>
+      parseAccessMethods([
+        {
+          id: "interactive-ssh",
+          kind: "ssh",
+          mode: "interactive",
+          ssh: { host: "gpu.example.net", port: 22, username: "ubuntu" },
+        },
+      ]),
+    /must use tcp-forward mode/,
+  );
+  assert.throws(
+    () =>
+      parseAccessMethods([
+        {
+          id: "missing-ssh",
+          kind: "ssh",
+          mode: "tcp-forward",
+        },
+      ]),
+    /\.ssh must be an object/,
+  );
+  assert.throws(
+    () =>
+      parseAccessMethods([
+        {
+          id: "raw-password",
+          kind: "ssh",
+          mode: "tcp-forward",
+          ssh: {
+            host: "gpu.example.net",
+            port: 22,
+            username: "ubuntu",
+            password: "raw-secret",
+          },
+        },
+      ]),
+    /password is not allowed/,
+  );
+
+  const trust = hostTrustRequiredError(
+    "gpu.example.net",
+    22,
+    "ssh-ed25519",
+    "SHA256:fixture",
+  );
+  assert.equal(isHostTrustRequiredError(trust), true);
+  assert.equal(isHostTrustRequiredError(normalizedError("authentication", "no")), false);
 });
 
 test("validates opaque secret references", () => {

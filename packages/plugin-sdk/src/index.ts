@@ -206,11 +206,25 @@ export type AccessCredentialSource =
       readonly id: string;
     };
 
+export interface SshAccessDescriptor {
+  readonly host: string;
+  readonly port: number;
+  readonly username: string;
+  readonly privateKeySecretRef?: SecretReference;
+}
+
 export interface AccessMethod {
   readonly id: string;
   readonly kind: string;
   readonly mode: AccessMethodMode;
   readonly credentialSources?: readonly AccessCredentialSource[];
+  readonly ssh?: SshAccessDescriptor;
+}
+
+export function isSshAccessMethod(
+  method: AccessMethod,
+): method is AccessMethod & { readonly kind: "ssh"; readonly ssh: SshAccessDescriptor } {
+  return method.kind === "ssh" && method.ssh !== undefined;
 }
 
 export interface TcpForwardTarget {
@@ -220,6 +234,7 @@ export interface TcpForwardTarget {
 
 export interface AccessSetupContext extends OperationContext {
   registerCleanup(cleanup: () => void | Promise<void>): void;
+  resolveSecret(ref: SecretReference): Promise<string>;
 }
 
 export interface AccessAdapter {
@@ -260,6 +275,7 @@ export const NORMALIZED_ERROR_CODES = [
   "timeout",
   "outcome-unknown",
   "plugin-failure",
+  "host-trust-required",
   "unknown-provider-error",
 ] as const;
 
@@ -270,6 +286,44 @@ export interface NormalizedError {
   readonly code: NormalizedErrorCode;
   readonly message: string;
   readonly cause?: unknown;
+}
+
+export interface HostTrustRequiredError extends NormalizedError {
+  readonly code: "host-trust-required";
+  readonly host: string;
+  readonly port: number;
+  readonly keyType: string;
+  readonly fingerprint: string;
+}
+
+export function hostTrustRequiredError(
+  host: string,
+  port: number,
+  keyType: string,
+  fingerprint: string,
+): HostTrustRequiredError {
+  return {
+    kind: "easycompute-error",
+    code: "host-trust-required",
+    message: `SSH host trust is required for ${host}:${port} (${fingerprint})`,
+    host,
+    port,
+    keyType,
+    fingerprint,
+  };
+}
+
+export function isHostTrustRequiredError(
+  value: unknown,
+): value is HostTrustRequiredError {
+  return (
+    isNormalizedError(value) &&
+    value.code === "host-trust-required" &&
+    typeof (value as Partial<HostTrustRequiredError>).host === "string" &&
+    typeof (value as Partial<HostTrustRequiredError>).port === "number" &&
+    typeof (value as Partial<HostTrustRequiredError>).keyType === "string" &&
+    typeof (value as Partial<HostTrustRequiredError>).fingerprint === "string"
+  );
 }
 
 export function normalizedError(
@@ -399,7 +453,11 @@ export function parseAccessMethods(value: unknown): readonly AccessMethod[] {
   for (const [index, candidate] of value.entries()) {
     const path = `provider access methods[${index}]`;
     const method = expectRecord(candidate, path);
-    assertOnlyKeys(method, ["id", "kind", "mode", "credentialSources"], path);
+    assertOnlyKeys(
+      method,
+      ["id", "kind", "mode", "credentialSources", "ssh"],
+      path,
+    );
     const id = expectId(method.id, `${path}.id`);
     const kind = expectAccessKind(method.kind, `${path}.kind`);
     const mode = expectAccessMethodMode(method.mode, `${path}.mode`);
@@ -407,6 +465,7 @@ export function parseAccessMethods(value: unknown): readonly AccessMethod[] {
       method.credentialSources,
       `${path}.credentialSources`,
     );
+    const ssh = parseSshAccessDescriptor(method.ssh, kind, mode, `${path}.ssh`);
 
     if (seen.has(id)) {
       throw new PluginContractError(
@@ -415,14 +474,49 @@ export function parseAccessMethods(value: unknown): readonly AccessMethod[] {
     }
 
     seen.add(id);
-    methods.push(
-      credentialSources === undefined
-        ? { id, kind, mode }
-        : { id, kind, mode, credentialSources },
-    );
+    methods.push({
+      id,
+      kind,
+      mode,
+      ...(credentialSources === undefined ? {} : { credentialSources }),
+      ...(ssh === undefined ? {} : { ssh }),
+    });
   }
 
   return methods;
+}
+
+function parseSshAccessDescriptor(
+  value: unknown,
+  kind: string,
+  mode: AccessMethodMode,
+  path: string,
+): SshAccessDescriptor | undefined {
+  if (kind !== "ssh") {
+    if (value !== undefined) {
+      throw new PluginContractError(`${path} is only valid for kind ssh`);
+    }
+    return undefined;
+  }
+
+  if (mode !== "tcp-forward") {
+    throw new PluginContractError("SSH Access Methods must use tcp-forward mode");
+  }
+
+  const ssh = expectRecord(value, path);
+  assertOnlyKeys(ssh, ["host", "port", "username", "privateKeySecretRef"], path);
+  const parsed: SshAccessDescriptor = {
+    host: expectSshToken(ssh.host, `${path}.host`),
+    port: expectTcpPort(ssh.port, `${path}.port`),
+    username: expectSshToken(ssh.username, `${path}.username`),
+  };
+
+  return ssh.privateKeySecretRef === undefined
+    ? parsed
+    : {
+        ...parsed,
+        privateKeySecretRef: parseSecretReference(ssh.privateKeySecretRef),
+      };
 }
 
 function parseAccessCredentialSources(
@@ -597,6 +691,25 @@ function expectNonEmptyString(value: unknown, path: string): string {
   }
 
   return value;
+}
+
+function expectSshToken(value: unknown, path: string): string {
+  const token = expectNonEmptyString(value, path);
+  if (/[,\[\]\s\u0000-\u001f\u007f]/u.test(token)) {
+    throw new PluginContractError(
+      `${path} must not contain whitespace, control characters, commas or brackets`,
+    );
+  }
+
+  return token;
+}
+
+function expectTcpPort(value: unknown, path: string): number {
+  if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > 65_535) {
+    throw new PluginContractError(`${path} must be an integer between 1 and 65535`);
+  }
+
+  return value as number;
 }
 
 function expectAccessKind(value: unknown, path: string): string {

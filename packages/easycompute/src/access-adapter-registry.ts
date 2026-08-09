@@ -1,8 +1,15 @@
 import type { AccessAdapter, AccessMethod } from "@easycompute/plugin-sdk";
 import type { ProviderAdmission } from "./provider-registry.js";
+import { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
 
 export class AccessAdapterRegistry {
   readonly #builtIns = new Map<string, AccessAdapter>();
+
+  constructor(builtIns: readonly AccessAdapter[] = [new OpenSshAccessAdapter()]) {
+    for (const adapter of builtIns) {
+      this.registerBuiltIn(adapter);
+    }
+  }
 
   registerBuiltIn(adapter: AccessAdapter): void {
     if (this.#builtIns.has(adapter.kind)) {

@@ -224,6 +224,58 @@ test("setup failure cleans setup-owned resources and provider admission", async 
   });
 });
 
+test("selected Access Method can resolve only its declared secret references", async () => {
+  await withState(async (store) => {
+    const declaredRef = "secret:550e8400-e29b-41d4-a716-446655440000";
+    const otherRef = "secret:11111111-1111-4111-8111-111111111111";
+    const providers = new ProviderRegistry();
+    const access = new AccessAdapterRegistry();
+    let secretReads = 0;
+    registerProvider(providers, {
+      getAccessMethods: async () => [
+        {
+          id: "guarded",
+          kind: "guarded",
+          mode: "tcp-forward",
+          credentialSources: [{ kind: "secret-ref", secretRef: declaredRef }],
+        },
+      ],
+    });
+    access.registerBuiltIn({
+      kind: "guarded",
+      async openTcpForward(_method, _providerExternalId, _target, setupContext) {
+        await assert.rejects(
+          setupContext.resolveSecret(otherRef),
+          (error) => error.code === "authentication" && /not declared/.test(error.message),
+        );
+        assert.equal(await setupContext.resolveSecret(declaredRef), "fixture-secret");
+        return {
+          async openChannel() {
+            throw new Error("not used");
+          },
+          async close() {},
+        };
+      },
+    });
+    const secrets = {
+      async get(ref) {
+        secretReads += 1;
+        assert.equal(ref, declaredRef);
+        return "fixture-secret";
+      },
+    };
+
+    const result = await new ConnectionGateway(
+      providers,
+      access,
+      store,
+      secrets,
+    ).openEndpoint(INSTANCE_ID, 12345, operationContext());
+    assert.equal(secretReads, 1);
+    await result.session.close();
+  });
+});
+
 test("setup admitted before disable may finish, but new setup cannot start afterward", async () => {
   await withState(async (store) => {
     let enteredResolve;

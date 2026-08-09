@@ -3,12 +3,15 @@ import {
   normalizedError,
   parseAccessMethods,
   type AccessChannel,
+  type AccessMethod,
   type AccessTransportSession,
   type OperationContext,
+  type SecretReference,
   type TcpForwardTarget,
 } from "@easycompute/plugin-sdk";
 import { AccessAdapterRegistry } from "./access-adapter-registry.js";
 import { ProviderRegistry } from "./provider-registry.js";
+import type { SecretStore } from "./secret-store.js";
 import { JsonStateStore } from "./state-store.js";
 
 export interface Endpoint {
@@ -32,6 +35,7 @@ export class ConnectionGateway {
     private readonly providers: ProviderRegistry,
     private readonly accessAdapters: AccessAdapterRegistry,
     private readonly stateStore: JsonStateStore,
+    private readonly secretStore?: SecretStore,
   ) {}
 
   async openEndpoint(
@@ -120,6 +124,7 @@ export class ConnectionGateway {
       }
 
       const target: TcpForwardTarget = { host: remoteHost, port: remotePort };
+      const allowedSecretRefs = accessMethodSecretRefs(selected.method);
       const transport = await selected.adapter.openTcpForward(
         selected.method,
         binding.providerExternalId,
@@ -128,6 +133,30 @@ export class ConnectionGateway {
           signal: context.signal,
           registerCleanup(cleanup) {
             scope.register(cleanup);
+          },
+          resolveSecret: async (ref) => {
+            if (!allowedSecretRefs.has(ref)) {
+              throw normalizedError(
+                "authentication",
+                "Access Adapter requested a secret that is not declared by the selected Access Method",
+              );
+            }
+            if (this.secretStore === undefined) {
+              throw normalizedError(
+                "authentication",
+                "No Secret Store is configured for the selected Access Method",
+              );
+            }
+
+            const secret = await this.secretStore.get(ref, context.signal);
+            if (secret === undefined) {
+              throw normalizedError(
+                "authentication",
+                `Secret is unavailable: ${ref}`,
+              );
+            }
+
+            return secret;
           },
         },
       );
@@ -375,6 +404,21 @@ async function closeServer(server: Server): Promise<void> {
       }
     });
   });
+}
+
+function accessMethodSecretRefs(method: AccessMethod): Set<SecretReference> {
+  const refs = new Set<SecretReference>();
+
+  for (const source of method.credentialSources ?? []) {
+    if (source.kind === "secret-ref") {
+      refs.add(source.secretRef);
+    }
+  }
+  if (method.ssh?.privateKeySecretRef !== undefined) {
+    refs.add(method.ssh.privateKeySecretRef);
+  }
+
+  return refs;
 }
 
 function validateTarget(host: string, port: number): void {

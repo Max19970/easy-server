@@ -44,6 +44,21 @@ test("resolves a provider-specific TCP adapter without provider branches", () =>
   );
 });
 
+test("registers OpenSSH as a production built-in", () => {
+  const registry = new AccessAdapterRegistry();
+  const resolved = registry.resolveTcpForward(
+    {
+      id: "direct-ssh",
+      kind: "ssh",
+      mode: "tcp-forward",
+      ssh: { host: "ssh.example.test", port: 22, username: "ubuntu" },
+    },
+    admission(),
+  );
+
+  assert.equal(resolved?.kind, "ssh");
+});
+
 test("resolves built-in adapters and rejects interactive-only access", () => {
   const registry = new AccessAdapterRegistry();
   const builtIn = adapter("loopback");
