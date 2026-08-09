@@ -1,0 +1,122 @@
+import assert from "node:assert/strict";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { JsonStateStore } from "../dist/state-store.js";
+
+async function withTempDirectory(run) {
+  const directory = await mkdtemp(join(tmpdir(), "easycompute-state-"));
+
+  try {
+    await run(directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+test("missing state starts empty", async () => {
+  await withTempDirectory(async (directory) => {
+    const store = new JsonStateStore(join(directory, "state.json"));
+    assert.deepEqual(await store.read(), { version: 1, plugins: [] });
+  });
+});
+
+test("state survives a fresh store instance and atomic replacement", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "nested", "state.json");
+    const first = new JsonStateStore(path);
+
+    await first.write({
+      version: 1,
+      plugins: [{ source: "fixture:first", enabled: true }],
+    });
+    await first.write({
+      version: 1,
+      plugins: [{ source: "fixture:second", enabled: false }],
+    });
+
+    const second = new JsonStateStore(path);
+    assert.deepEqual(await second.read(), {
+      version: 1,
+      plugins: [{ source: "fixture:second", enabled: false }],
+    });
+    assert.deepEqual(await readdir(join(directory, "nested")), ["state.json"]);
+  });
+});
+
+test("an interrupted temporary write cannot replace good state", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    const store = new JsonStateStore(path);
+    const goodState = {
+      version: 1,
+      plugins: [{ source: "fixture:good", enabled: true }],
+    };
+
+    await store.write(goodState);
+    await writeFile(`${path}.interrupted.tmp`, '{"version":1,"plugins":[', "utf8");
+
+    assert.deepEqual(await new JsonStateStore(path).read(), goodState);
+  });
+});
+
+test("a rejected write leaves the previous state intact", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    const store = new JsonStateStore(path);
+    const goodState = {
+      version: 1,
+      plugins: [{ source: "fixture:good", enabled: true }],
+    };
+
+    await store.write(goodState);
+
+    await assert.rejects(
+      store.write({
+        version: 1,
+        plugins: [{ source: "fixture:bad", enabled: "yes" }],
+      }),
+      /enabled must be a boolean/,
+    );
+
+    assert.deepEqual(await store.read(), goodState);
+  });
+});
+
+test("replacement failure leaves the previous state intact", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    const goodState = {
+      version: 1,
+      plugins: [{ source: "fixture:good", enabled: true }],
+    };
+    await new JsonStateStore(path).write(goodState);
+
+    const store = new JsonStateStore(path, async () => {
+      throw new Error("fixture replacement failure");
+    });
+    await assert.rejects(
+      store.write({
+        version: 1,
+        plugins: [{ source: "fixture:new", enabled: false }],
+      }),
+      /fixture replacement failure/,
+    );
+
+    assert.deepEqual(await new JsonStateStore(path).read(), goodState);
+    assert.deepEqual(await readdir(directory), ["state.json"]);
+  });
+});
+
+test("corrupt primary state is reported instead of silently reset", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    await writeFile(path, "{not json", "utf8");
+
+    await assert.rejects(
+      new JsonStateStore(path).read(),
+      /Invalid EasyCompute state file/,
+    );
+  });
+});
