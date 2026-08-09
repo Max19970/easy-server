@@ -111,6 +111,31 @@ test("declared lifecycle capabilities require matching adapter methods", () => {
   );
 });
 
+test("validates provider feature identities without interpreting feature payloads", () => {
+  const feature = {
+    id: "marketplace",
+    displayName: "Marketplace",
+    fixturePayload: { providerOwned: true },
+  };
+  const plugin = parseProviderPlugin({
+    manifest: validManifest,
+    provider: provider(),
+    features: [feature],
+  });
+
+  assert.equal(plugin.features?.[0], feature);
+
+  assert.throws(
+    () =>
+      parseProviderPlugin({
+        manifest: validManifest,
+        provider: provider(),
+        features: [feature, feature],
+      }),
+    /duplicate id/,
+  );
+});
+
 test("validates opaque secret references", () => {
   const ref = parseSecretReference("secret:550e8400-e29b-41d4-a716-446655440000");
 

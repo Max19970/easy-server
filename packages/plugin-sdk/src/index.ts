@@ -166,9 +166,15 @@ export function parseProviderInstanceList(
   return instances;
 }
 
+export interface ProviderFeature {
+  readonly id: string;
+  readonly displayName: string;
+}
+
 export interface ProviderPlugin {
   readonly manifest: PluginManifest;
   readonly provider: ProviderAdapter;
+  readonly features?: readonly ProviderFeature[];
 }
 
 export const NORMALIZED_ERROR_CODES = [
@@ -287,10 +293,51 @@ export function parseProviderPlugin(value: unknown): ProviderPlugin {
     );
   }
 
-  return {
-    manifest,
-    provider: provider as unknown as ProviderAdapter,
-  };
+  const features = parseProviderFeatures(plugin.features);
+
+  return features.length === 0
+    ? {
+        manifest,
+        provider: provider as unknown as ProviderAdapter,
+      }
+    : {
+        manifest,
+        provider: provider as unknown as ProviderAdapter,
+        features,
+      };
+}
+
+function parseProviderFeatures(value: unknown): readonly ProviderFeature[] {
+  if (value === undefined) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw new PluginContractError("provider plugin.features must be an array");
+  }
+
+  const features: ProviderFeature[] = [];
+  const seen = new Set<string>();
+
+  for (const [index, candidate] of value.entries()) {
+    const feature = expectRecord(candidate, `provider plugin.features[${index}]`);
+    const id = expectId(feature.id, `provider plugin.features[${index}].id`);
+    expectNonEmptyString(
+      feature.displayName,
+      `provider plugin.features[${index}].displayName`,
+    );
+
+    if (seen.has(id)) {
+      throw new PluginContractError(
+        `provider plugin.features contains duplicate id: ${id}`,
+      );
+    }
+
+    seen.add(id);
+    features.push(feature as unknown as ProviderFeature);
+  }
+
+  return features;
 }
 
 const ID_PATTERN = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;

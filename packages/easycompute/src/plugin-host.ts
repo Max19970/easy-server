@@ -2,8 +2,13 @@ import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   parseProviderPlugin,
+  type ProviderFeature,
   type ProviderPlugin,
 } from "@easycompute/plugin-sdk";
+import {
+  ProviderFeatureHost,
+  type ProviderFeatureAdmission,
+} from "./provider-feature-host.js";
 import {
   ProviderRegistry,
   type ProviderAdmission,
@@ -31,6 +36,7 @@ type PluginRecord =
 
 export class PluginHost {
   readonly #registry: ProviderRegistry;
+  readonly #featureHost: ProviderFeatureHost;
   readonly #importer: PluginImporter;
   readonly #records: PluginRecord[] = [];
   readonly #runtimes = new Map<string, PluginRuntime>();
@@ -38,9 +44,11 @@ export class PluginHost {
   constructor(
     registry: ProviderRegistry,
     importer: PluginImporter = importProviderPlugin,
+    featureHost: ProviderFeatureHost = new ProviderFeatureHost(),
   ) {
     this.#registry = registry;
     this.#importer = importer;
+    this.#featureHost = featureHost;
   }
 
   async load(sources: readonly string[]): Promise<void> {
@@ -71,6 +79,7 @@ export class PluginHost {
     }
 
     this.#registry.unregister(runtime.providerId, runtime.pluginId);
+    this.#featureHost.unregisterPlugin(runtime.pluginId);
     return true;
   }
 
@@ -89,6 +98,25 @@ export class PluginHost {
         runtime.pluginId,
         () => runtime.admit(),
       );
+
+      try {
+        for (const feature of runtime.features) {
+          this.#featureHost.register(
+            {
+              pluginId: runtime.pluginId,
+              providerId: runtime.providerId,
+              featureId: feature.id,
+              displayName: feature.displayName,
+            },
+            () => runtime.admitFeature(feature.id),
+          );
+        }
+      } catch (error) {
+        this.#featureHost.unregisterPlugin(runtime.pluginId);
+        this.#registry.unregister(runtime.providerId, runtime.pluginId);
+        throw error;
+      }
+
       this.#runtimes.set(runtime.pluginId, runtime);
       this.#records.push({ source, runtime });
     } catch (error) {
@@ -100,6 +128,7 @@ export class PluginHost {
 class PluginRuntime {
   readonly pluginId: string;
   readonly providerId: string;
+  readonly features: readonly ProviderFeature[];
   readonly #plugin: ProviderPlugin;
   #admitting = true;
 
@@ -107,6 +136,7 @@ class PluginRuntime {
     this.#plugin = plugin;
     this.pluginId = plugin.manifest.id;
     this.providerId = plugin.manifest.provider.id;
+    this.features = plugin.features ?? [];
   }
 
   admit(): ProviderAdmission | undefined {
@@ -119,6 +149,26 @@ class PluginRuntime {
       pluginId: this.pluginId,
       provider,
       capabilities: this.#plugin.manifest.provider.capabilities,
+      release() {},
+    };
+  }
+
+  admitFeature(featureId: string): ProviderFeatureAdmission | undefined {
+    if (!this.#admitting) {
+      return undefined;
+    }
+
+    const feature = this.features.find((candidate) => candidate.id === featureId);
+    if (feature === undefined) {
+      return undefined;
+    }
+
+    return {
+      pluginId: this.pluginId,
+      providerId: this.providerId,
+      featureId: feature.id,
+      displayName: feature.displayName,
+      feature,
       release() {},
     };
   }

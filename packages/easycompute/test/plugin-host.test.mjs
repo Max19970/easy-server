@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PluginHost, formatPluginStatuses } from "../dist/plugin-host.js";
+import { ProviderFeatureHost } from "../dist/provider-feature-host.js";
 import { ProviderRegistry } from "../dist/provider-registry.js";
 
-function plugin({ pluginId = "fake.plugin", providerId = "fake" } = {}) {
+function plugin({
+  pluginId = "fake.plugin",
+  providerId = "fake",
+  features = [],
+} = {}) {
   return {
     manifest: {
       id: pluginId,
@@ -28,6 +33,7 @@ function plugin({ pluginId = "fake.plugin", providerId = "fake" } = {}) {
         return undefined;
       },
     },
+    features,
   };
 }
 
@@ -48,6 +54,106 @@ test("loads an explicitly requested plugin into the provider registry", async ()
   ]);
   assert.deepEqual(registry.listProviderIds(), ["fake"]);
   assert.equal(registry.acquire("fake")?.provider.providerId, "fake");
+});
+
+test("registers zero or more provider features with provider-scoped identity", async () => {
+  const registry = new ProviderRegistry();
+  const features = new ProviderFeatureHost();
+  const plugins = new Map([
+    [
+      "alpha",
+      plugin({
+        pluginId: "alpha.plugin",
+        providerId: "alpha",
+        features: [{ id: "marketplace", displayName: "Alpha Marketplace" }],
+      }),
+    ],
+    [
+      "beta",
+      plugin({
+        pluginId: "beta.plugin",
+        providerId: "beta",
+        features: [{ id: "marketplace", displayName: "Beta Marketplace" }],
+      }),
+    ],
+    [
+      "empty",
+      plugin({ pluginId: "empty.plugin", providerId: "empty" }),
+    ],
+  ]);
+  const host = new PluginHost(
+    registry,
+    async (source) => plugins.get(source),
+    features,
+  );
+
+  await host.load(["alpha", "beta", "empty"]);
+
+  assert.deepEqual(features.listFeatures(), [
+    {
+      pluginId: "alpha.plugin",
+      providerId: "alpha",
+      featureId: "marketplace",
+      displayName: "Alpha Marketplace",
+    },
+    {
+      pluginId: "beta.plugin",
+      providerId: "beta",
+      featureId: "marketplace",
+      displayName: "Beta Marketplace",
+    },
+  ]);
+  assert.equal(features.acquire("empty", "marketplace"), undefined);
+});
+
+test("feature admission linearizes with plugin disable while admitted work may finish", async () => {
+  const registry = new ProviderRegistry();
+  const features = new ProviderFeatureHost();
+  const feature = {
+    id: "marketplace",
+    displayName: "Marketplace",
+    async run() {
+      return "finished";
+    },
+  };
+  const host = new PluginHost(
+    registry,
+    async () => plugin({ features: [feature] }),
+    features,
+  );
+  await host.load(["fake"]);
+
+  const admitted = features.acquire("fake", "marketplace");
+  assert.ok(admitted);
+  assert.equal(host.disable("fake.plugin"), true);
+  assert.equal(features.acquire("fake", "marketplace"), undefined);
+  assert.equal(await admitted.feature.run(), "finished");
+  admitted.release();
+});
+
+test("failed plugins do not remove healthy provider features", async () => {
+  const registry = new ProviderRegistry();
+  const features = new ProviderFeatureHost();
+  const host = new PluginHost(
+    registry,
+    async (source) => {
+      if (source === "broken") {
+        throw new Error("feature plugin exploded");
+      }
+
+      return plugin({
+        features: [{ id: "configurator", displayName: "Configurator" }],
+      });
+    },
+    features,
+  );
+
+  await host.load(["broken", "healthy"]);
+
+  assert.equal(host.listPlugins()[0].state, "failed");
+  assert.deepEqual(features.listFeatures().map((feature) => feature.featureId), [
+    "configurator",
+  ]);
 });
 
 test("isolates catchable import and manifest failures", async () => {
