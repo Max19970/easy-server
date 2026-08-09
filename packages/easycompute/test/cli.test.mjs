@@ -19,6 +19,9 @@ const inventoryPlugin = fileURLToPath(
 const providerCliPlugin = fileURLToPath(
   new URL("./fixtures/provider-cli-plugin.mjs", import.meta.url),
 );
+const intelionPlugin = fileURLToPath(
+  new URL("../../../plugins/intelion/dist/index.js", import.meta.url),
+);
 const providerCollisionPlugin = `data:text/javascript,${encodeURIComponent(`
   export default {
     manifest: {
@@ -76,15 +79,18 @@ test("prints version", () => {
   assert.equal(result.stdout, "0.0.0\n");
 });
 
-test("loads the Vast.ai workspace package as an explicit provider plugin", () => {
-  const result = run(
-    "plugins",
-    "list",
-    "--plugin",
-    "@easycompute/plugin-vastai",
-  );
-  assert.equal(result.status, 0);
-  assert.match(result.stdout, /^loaded\s+vastai provider=vastai$/m);
+test("loads first-party workspace packages as explicit provider plugins", () => {
+  for (const [source, providerId] of [
+    ["@easycompute/plugin-vastai", "vastai"],
+    [intelionPlugin, "intelion"],
+  ]) {
+    const result = run("plugins", "list", "--plugin", source);
+    assert.equal(result.status, 0);
+    assert.match(
+      result.stdout,
+      new RegExp(`^loaded\\s+${providerId} provider=${providerId}$`, "m"),
+    );
+  }
 });
 
 test("lists zero configured plugins", () => {
