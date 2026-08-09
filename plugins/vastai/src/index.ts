@@ -25,6 +25,9 @@ export type {
   VastMarketplaceFeature,
   VastOffer,
   VastOfferSearch,
+  VastRentalRequest,
+  VastRentalResult,
+  VastRuntype,
 } from "./marketplace.js";
 
 export interface VastPluginOptions {

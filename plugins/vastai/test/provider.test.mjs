@@ -214,6 +214,120 @@ test("marketplace feature searches Vast offers with plugin-owned filters", async
   ]);
 });
 
+test("marketplace feature rents an offer and the new instance converges on inventory", async () => {
+  const calls = [];
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch(input, init) {
+      const url = new URL(input);
+      calls.push({ url, init });
+      if (init.method === "PUT") {
+        return json({ success: true, new_contract: 777 });
+      }
+      return json({
+        instances: [
+          { id: 777, actual_status: "loading", label: "rented-worker" },
+        ],
+        next_token: null,
+      });
+    },
+  });
+  const marketplace = plugin.features[0];
+
+  const rental = await marketplace.rentOffer(
+    {
+      offerId: "901",
+      image: "ubuntu:22.04",
+      diskGb: 16,
+      runtype: "ssh_direct",
+      label: "rented-worker",
+    },
+    context(),
+  );
+
+  assert.deepEqual(rental, { providerExternalId: "777" });
+  assert.equal(calls[0].url.pathname, "/api/v0/asks/901/");
+  assert.equal(calls[0].init.method, "PUT");
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    image: "ubuntu:22.04",
+    disk: 16,
+    runtype: "ssh_direct",
+    label: "rented-worker",
+  });
+
+  assert.deepEqual(await plugin.provider.listInstances(context()), [
+    {
+      providerExternalId: "777",
+      name: "rented-worker",
+      state: "starting",
+      rawState: "loading",
+      availableActions: [],
+    },
+  ]);
+});
+
+test("marketplace rental reports outcome-unknown after dispatch transport failure", async () => {
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch() {
+      throw new Error("connection reset");
+    },
+  });
+
+  await assert.rejects(
+    plugin.features[0].rentOffer(
+      { offerId: "901", image: "ubuntu:22.04" },
+      context(),
+    ),
+    (error) => isNormalizedError(error) && error.code === "outcome-unknown",
+  );
+});
+
+test("marketplace feature exposes rental through the provider-scoped CLI seam", async () => {
+  let requestBody;
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch(_input, init) {
+      requestBody = JSON.parse(init.body);
+      return json({ success: true, new_contract: 778 });
+    },
+  });
+  const marketplace = plugin.features[0];
+  const rent = marketplace.cli?.commands.find((command) => command.name === "rent");
+  assert.ok(rent);
+
+  let output = "";
+  const commandResult = await rent.run(
+    [
+      "901",
+      "--image",
+      "ubuntu:22.04",
+      "--disk",
+      "20",
+      "--runtype",
+      "ssh_direct",
+      "--label",
+      "cli-worker",
+    ],
+    {
+      ...context(),
+      write(text) {
+        output += text;
+      },
+      writeError() {},
+    },
+  );
+
+  assert.deepEqual(requestBody, {
+    image: "ubuntu:22.04",
+    disk: 20,
+    runtype: "ssh_direct",
+    label: "cli-worker",
+  });
+  assert.equal(output, '{"providerExternalId":"778"}\n');
+  assert.deepEqual(commandResult, { refreshProviderInventory: true });
+});
+
 test("marketplace feature exposes search through the provider-scoped CLI seam", async () => {
   let requestBody;
   const plugin = createVastProviderPlugin({

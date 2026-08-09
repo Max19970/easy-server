@@ -33,6 +33,24 @@ export class VastApiClient {
     });
   }
 
+  putJsonMutation(
+    path: string | URL,
+    body: unknown,
+    context: ProviderOperationContext,
+  ): Promise<unknown> {
+    return this.#requestJson(
+      path,
+      context,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      false,
+      true,
+    );
+  }
+
   url(path: string): URL {
     return new URL(path, this.baseUrl);
   }
@@ -42,8 +60,35 @@ export class VastApiClient {
     context: ProviderOperationContext,
     init: RequestInit,
     allowNotFound = false,
+    mutation = false,
   ): Promise<unknown | undefined> {
-    const apiKey = await requireApiKey(context);
+    if (context.signal.aborted) {
+      throw normalizedError(
+        "cancelled",
+        "Vast.ai request was cancelled before dispatch",
+      );
+    }
+
+    let apiKey: string;
+    try {
+      apiKey = await requireApiKey(context);
+    } catch (error) {
+      if (context.signal.aborted) {
+        throw normalizedError(
+          "cancelled",
+          "Vast.ai request was cancelled before dispatch",
+          error,
+        );
+      }
+      throw error;
+    }
+    if (context.signal.aborted) {
+      throw normalizedError(
+        "cancelled",
+        "Vast.ai request was cancelled before dispatch",
+      );
+    }
+
     let response: Response;
     try {
       response = await this.fetchImpl(
@@ -59,6 +104,13 @@ export class VastApiClient {
         },
       );
     } catch (error) {
+      if (mutation) {
+        throw normalizedError(
+          "outcome-unknown",
+          "Vast.ai mutation outcome is unknown after request dispatch",
+          error,
+        );
+      }
       if (context.signal.aborted) {
         throw normalizedError(
           "cancelled",
@@ -87,8 +139,10 @@ export class VastApiClient {
     }
     if (response.status >= 500) {
       throw normalizedError(
-        "provider-unavailable",
-        `Vast.ai returned HTTP ${response.status}`,
+        mutation ? "outcome-unknown" : "provider-unavailable",
+        mutation
+          ? `Vast.ai mutation outcome is unknown after HTTP ${response.status}`
+          : `Vast.ai returned HTTP ${response.status}`,
       );
     }
     if (!response.ok) {

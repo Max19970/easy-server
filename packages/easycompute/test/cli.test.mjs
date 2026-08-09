@@ -339,7 +339,7 @@ test("lists and inspects compute instances through configured providers", () => 
   assert.match(start.stderr, /conflict: instance\.start is not available/);
 });
 
-test("mounts and removes provider-scoped CLI feature commands with plugin lifecycle", () => {
+test("mounts provider feature commands and reconciles requested inventory changes", async () => {
   const stateFile = join(testDirectory, "provider-cli-state.json");
   assert.equal(
     runWithState(stateFile, "plugins", "add", providerCliPlugin).status,
@@ -370,6 +370,20 @@ test("mounts and removes provider-scoped CLI feature commands with plugin lifecy
   );
   assert.equal(execute.status, 0);
   assert.equal(execute.stdout, "provider-owned:alpha|beta\n");
+
+  const create = runWithState(
+    stateFile,
+    "provider",
+    "provider-cli",
+    "marketplace",
+    "create",
+  );
+  assert.equal(create.status, 0);
+  assert.equal(create.stdout, "created:created-1\n");
+  const reconciledState = JSON.parse(await readFile(stateFile, "utf8"));
+  assert.equal(reconciledState.instances.length, 1);
+  assert.equal(reconciledState.instances[0].providerId, "provider-cli");
+  assert.equal(reconciledState.instances[0].providerExternalId, "created-1");
 
   assert.equal(
     runWithState(stateFile, "plugins", "disable", providerCliPlugin).status,

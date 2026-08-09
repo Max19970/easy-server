@@ -1,3 +1,5 @@
+let created = false;
+
 export default {
   manifest: {
     id: "fixture.provider-cli",
@@ -16,7 +18,17 @@ export default {
   provider: {
     providerId: "provider-cli",
     async listInstances() {
-      return [];
+      return created
+        ? [
+            {
+              providerExternalId: "created-1",
+              state: "running",
+              rawState: "READY",
+              availableActions: [],
+              name: "Created from feature",
+            },
+          ]
+        : [];
     },
     async getInstance() {
       return undefined;
@@ -33,6 +45,15 @@ export default {
             description: "Echo provider-owned arguments",
             async run(args, context) {
               context.write(`provider-owned:${args.join("|")}\n`);
+            },
+          },
+          {
+            name: "create",
+            description: "Create a provider-owned resource",
+            async run(_args, context) {
+              created = true;
+              context.write("created:created-1\n");
+              return { refreshProviderInventory: true };
             },
           },
         ],

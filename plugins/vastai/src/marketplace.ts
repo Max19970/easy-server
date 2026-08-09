@@ -2,6 +2,7 @@ import {
   isNormalizedError,
   normalizedError,
   type ProviderCliCommandContext,
+  type ProviderCliCommandResult,
   type ProviderCliContribution,
   type ProviderFeature,
   type ProviderOperationContext,
@@ -28,12 +29,37 @@ export interface VastOffer {
   readonly location: string;
 }
 
+export type VastRuntype =
+  | "ssh"
+  | "jupyter"
+  | "args"
+  | "ssh_proxy"
+  | "ssh_direct"
+  | "jupyter_proxy"
+  | "jupyter_direct";
+
+export interface VastRentalRequest {
+  readonly offerId: VastOffer["id"];
+  readonly image: string;
+  readonly diskGb?: number;
+  readonly runtype?: VastRuntype;
+  readonly label?: string;
+}
+
+export interface VastRentalResult {
+  readonly providerExternalId: string;
+}
+
 export interface VastMarketplaceFeature extends ProviderFeature {
   readonly id: "marketplace";
   searchOffers(
     search: VastOfferSearch,
     context: ProviderOperationContext,
   ): Promise<readonly VastOffer[]>;
+  rentOffer(
+    request: VastRentalRequest,
+    context: ProviderOperationContext,
+  ): Promise<VastRentalResult>;
 }
 
 export function createVastMarketplaceFeature(
@@ -52,6 +78,11 @@ class MarketplaceFeature implements VastMarketplaceFeature {
         description: "Search Vast.ai marketplace offers",
         run: (args, context) => this.#runSearchCommand(args, context),
       },
+      {
+        name: "rent",
+        description: "Rent a Vast.ai marketplace offer",
+        run: (args, context) => this.#runRentCommand(args, context),
+      },
     ],
   };
 
@@ -69,6 +100,19 @@ class MarketplaceFeature implements VastMarketplaceFeature {
     return parseOffers(body);
   }
 
+  async rentOffer(
+    request: VastRentalRequest,
+    context: ProviderOperationContext,
+  ): Promise<VastRentalResult> {
+    const offerId = expectOfferId(request.offerId);
+    const body = await this.client.putJsonMutation(
+      `/api/v0/asks/${offerId}/`,
+      buildRentalRequest(request),
+      context,
+    );
+    return parseRentalResult(body);
+  }
+
   async #runSearchCommand(
     args: readonly string[],
     context: ProviderCliCommandContext,
@@ -76,6 +120,144 @@ class MarketplaceFeature implements VastMarketplaceFeature {
     const offers = await this.searchOffers(parseSearchArgs(args), context);
     context.write(`${JSON.stringify(offers)}\n`);
   }
+
+  async #runRentCommand(
+    args: readonly string[],
+    context: ProviderCliCommandContext,
+  ): Promise<ProviderCliCommandResult> {
+    const rental = await this.rentOffer(parseRentalArgs(args), context);
+    context.write(`${JSON.stringify(rental)}\n`);
+    return { refreshProviderInventory: true };
+  }
+}
+
+const VAST_RUNTYPES: readonly VastRuntype[] = [
+  "ssh",
+  "jupyter",
+  "args",
+  "ssh_proxy",
+  "ssh_direct",
+  "jupyter_proxy",
+  "jupyter_direct",
+];
+
+function parseRentalArgs(args: readonly string[]): VastRentalRequest {
+  const [offerId, ...options] = args;
+  if (offerId === undefined) {
+    throw new Error("Vast marketplace rent requires <offer-id>");
+  }
+
+  let image: string | undefined;
+  let diskGb: number | undefined;
+  let runtype: VastRuntype | undefined;
+  let label: string | undefined;
+
+  for (let index = 0; index < options.length; index += 2) {
+    const option = options[index];
+    const value = options[index + 1];
+    if (value === undefined) {
+      throw new Error(`Missing value for Vast rental option ${option}`);
+    }
+
+    switch (option) {
+      case "--image":
+        image = value;
+        break;
+      case "--disk":
+        diskGb = Number(value);
+        break;
+      case "--runtype":
+        if (!isVastRuntype(value)) {
+          throw new Error(`Unsupported Vast runtype: ${value}`);
+        }
+        runtype = value;
+        break;
+      case "--label":
+        label = value;
+        break;
+      default:
+        throw new Error(`Unknown Vast rental option: ${option}`);
+    }
+  }
+
+  if (image === undefined) {
+    throw new Error("Vast marketplace rent requires --image <image>");
+  }
+
+  return {
+    offerId,
+    image,
+    ...(diskGb === undefined ? {} : { diskGb }),
+    ...(runtype === undefined ? {} : { runtype }),
+    ...(label === undefined ? {} : { label }),
+  };
+}
+
+function buildRentalRequest(request: VastRentalRequest): Record<string, unknown> {
+  const image = request.image.trim();
+  if (image.length === 0) {
+    throw new TypeError("Vast rental image must be non-empty");
+  }
+
+  const body: Record<string, unknown> = { image };
+  if (request.diskGb !== undefined) {
+    if (!Number.isFinite(request.diskGb) || request.diskGb <= 0) {
+      throw new TypeError("Vast rental diskGb must be positive");
+    }
+    body.disk = request.diskGb;
+  }
+  if (request.runtype !== undefined) {
+    if (!isVastRuntype(request.runtype)) {
+      throw new TypeError(`Unsupported Vast runtype: ${request.runtype}`);
+    }
+    body.runtype = request.runtype;
+  }
+  if (request.label !== undefined) {
+    const label = request.label.trim();
+    if (label.length === 0) {
+      throw new TypeError("Vast rental label must be non-empty");
+    }
+    body.label = label;
+  }
+  return body;
+}
+
+function parseRentalResult(value: unknown): VastRentalResult {
+  try {
+    const response = expectRecord(value, "Vast.ai create instance response");
+    if (response.success !== true) {
+      throw new TypeError("Vast.ai create instance response.success must be true");
+    }
+    return {
+      providerExternalId: String(
+        expectInteger(
+          response.new_contract,
+          "Vast.ai create instance response.new_contract",
+          0,
+        ),
+      ),
+    };
+  } catch (error) {
+    if (isNormalizedError(error)) {
+      throw error;
+    }
+    throw normalizedError(
+      "plugin-failure",
+      "Vast.ai returned an invalid create-instance payload",
+      error,
+    );
+  }
+}
+
+function isVastRuntype(value: string): value is VastRuntype {
+  return VAST_RUNTYPES.includes(value as VastRuntype);
+}
+
+function expectOfferId(value: string): string {
+  if (!/^(?:0|[1-9]\d*)$/u.test(value)) {
+    throw new TypeError("Vast rental offerId must be a non-negative integer ID");
+  }
+  return value;
 }
 
 function parseSearchArgs(args: readonly string[]): VastOfferSearch {

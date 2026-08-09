@@ -276,7 +276,7 @@ async function runProvider(args: readonly string[]): Promise<void> {
     }
 
     const signal = new AbortController().signal;
-    await command.run(commandArgs, {
+    const result = await command.run(commandArgs, {
       signal,
       resolveCredential: (name) => admission.resolveCredential(name, signal),
       write(text) {
@@ -286,6 +286,11 @@ async function runProvider(args: readonly string[]): Promise<void> {
         process.stderr.write(text);
       },
     });
+    if (result?.refreshProviderInventory) {
+      await new ComputeManager(registry, store).refreshProvider(providerId, {
+        signal,
+      });
+    }
   } finally {
     admission.release();
   }

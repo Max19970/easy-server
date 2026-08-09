@@ -180,13 +180,17 @@ export interface ProviderCliCommandContext extends ProviderOperationContext {
   writeError(text: string): void;
 }
 
+export interface ProviderCliCommandResult {
+  readonly refreshProviderInventory?: boolean;
+}
+
 export interface ProviderCliCommand {
   readonly name: string;
   readonly description: string;
   run(
     args: readonly string[],
     context: ProviderCliCommandContext,
-  ): Promise<void>;
+  ): Promise<void | ProviderCliCommandResult>;
 }
 
 export interface ProviderCliContribution {

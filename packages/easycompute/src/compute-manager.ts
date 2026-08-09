@@ -67,35 +67,52 @@ export class ComputeManager {
 
     const instances: ComputeInstance[] = [];
     await this.stateStore.update((state) => {
-      let bindings = [...(state.instances ?? [])];
-
+      let nextState = state;
       for (const [providerId, snapshots] of snapshotsByProvider) {
-        const existing = new Map(
-          bindings
-            .filter((binding) => binding.providerId === providerId)
-            .map((binding) => [binding.providerExternalId, binding]),
+        const reconciled = reconcileProviderInventory(
+          nextState,
+          providerId,
+          snapshots,
         );
-        const currentBindings: InstanceBinding[] = [];
-
-        for (const snapshot of snapshots) {
-          const binding =
-            existing.get(snapshot.providerExternalId) ??
-            newBinding(providerId, snapshot.providerExternalId);
-          currentBindings.push(binding);
-          instances.push(toComputeInstance(binding, snapshot));
-        }
-
-        bindings = [
-          ...bindings.filter((binding) => binding.providerId !== providerId),
-          ...currentBindings,
-        ];
+        nextState = reconciled.state;
+        instances.push(...reconciled.instances);
       }
-
-      return sameBindings(state.instances ?? [], bindings)
-        ? state
-        : { ...state, instances: bindings };
+      return nextState;
     });
 
+    return instances;
+  }
+
+  async refreshProvider(
+    providerId: string,
+    context: OperationContext,
+  ): Promise<readonly ComputeInstance[]> {
+    const admission = this.registry.acquire(providerId);
+    if (admission === undefined) {
+      throw normalizedError(
+        "provider-unavailable",
+        `Provider is not available: ${providerId}`,
+      );
+    }
+
+    let snapshots: readonly ProviderInstanceSnapshot[];
+    try {
+      snapshots = parseProviderInstanceList(
+        await admission.provider.listInstances(
+          providerOperationContext(admission, context),
+        ),
+        admission.capabilities,
+      );
+    } finally {
+      admission.release();
+    }
+
+    let instances: readonly ComputeInstance[] = [];
+    await this.stateStore.update((state) => {
+      const reconciled = reconcileProviderInventory(state, providerId, snapshots);
+      instances = reconciled.instances;
+      return reconciled.state;
+    });
     return instances;
   }
 
@@ -248,6 +265,40 @@ export class ComputeManager {
         : { ...state, instances };
     });
   }
+}
+
+function reconcileProviderInventory(
+  state: EasyComputeState,
+  providerId: string,
+  snapshots: readonly ProviderInstanceSnapshot[],
+): { readonly state: EasyComputeState; readonly instances: readonly ComputeInstance[] } {
+  const previousBindings = state.instances ?? [];
+  const existing = new Map(
+    previousBindings
+      .filter((binding) => binding.providerId === providerId)
+      .map((binding) => [binding.providerExternalId, binding]),
+  );
+  const currentBindings: InstanceBinding[] = [];
+  const instances: ComputeInstance[] = [];
+
+  for (const snapshot of snapshots) {
+    const binding =
+      existing.get(snapshot.providerExternalId) ??
+      newBinding(providerId, snapshot.providerExternalId);
+    currentBindings.push(binding);
+    instances.push(toComputeInstance(binding, snapshot));
+  }
+
+  const bindings = [
+    ...previousBindings.filter((binding) => binding.providerId !== providerId),
+    ...currentBindings,
+  ];
+  return {
+    state: sameBindings(previousBindings, bindings)
+      ? state
+      : { ...state, instances: bindings },
+    instances,
+  };
 }
 
 function assertRequestedIdentity(
