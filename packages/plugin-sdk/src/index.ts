@@ -218,13 +218,17 @@ export interface TcpForwardTarget {
   readonly port: number;
 }
 
+export interface AccessSetupContext extends OperationContext {
+  registerCleanup(cleanup: () => void | Promise<void>): void;
+}
+
 export interface AccessAdapter {
   readonly kind: string;
   openTcpForward(
     method: AccessMethod,
     providerExternalId: string,
     target: TcpForwardTarget,
-    context: OperationContext,
+    context: AccessSetupContext,
   ): Promise<AccessTransportSession>;
 }
 
