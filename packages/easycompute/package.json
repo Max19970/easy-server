@@ -11,5 +11,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test test/*.test.mjs",
     "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "@easycompute/plugin-sdk": "0.0.0"
   }
 }
