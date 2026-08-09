@@ -23,6 +23,7 @@ export type {
   IntelionServerConfiguration,
   IntelionServerConfigurationInput,
   IntelionServerConfiguratorFeature,
+  IntelionServerCreationResult,
 } from "./configurator.js";
 
 export interface IntelionPluginOptions {
@@ -57,7 +58,7 @@ export function createIntelionProviderPlugin(
       },
     },
     provider: new IntelionProviderAdapter(client),
-    features: [createIntelionServerConfiguratorFeature()],
+    features: [createIntelionServerConfiguratorFeature(client)],
   };
 }
 

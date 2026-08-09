@@ -1,8 +1,12 @@
-import type {
-  ProviderCliCommandContext,
-  ProviderCliContribution,
-  ProviderFeature,
+import {
+  normalizedError,
+  type ProviderCliCommandContext,
+  type ProviderCliCommandResult,
+  type ProviderCliContribution,
+  type ProviderFeature,
+  type ProviderOperationContext,
 } from "@easycompute/plugin-sdk";
+import { IntelionApiClient } from "./api-client.js";
 
 export interface IntelionServerConfigurationInput {
   readonly name: string;
@@ -26,15 +30,25 @@ export interface IntelionServerConfiguration {
   readonly addonIds: readonly number[];
 }
 
+export interface IntelionServerCreationResult {
+  readonly providerExternalId: string;
+}
+
 export interface IntelionServerConfiguratorFeature extends ProviderFeature {
   readonly id: "server-configurator";
   validateConfiguration(
     input: IntelionServerConfigurationInput,
   ): IntelionServerConfiguration;
+  createServer(
+    input: IntelionServerConfigurationInput,
+    context: ProviderOperationContext,
+  ): Promise<IntelionServerCreationResult>;
 }
 
-export function createIntelionServerConfiguratorFeature(): IntelionServerConfiguratorFeature {
-  return new ServerConfiguratorFeature();
+export function createIntelionServerConfiguratorFeature(
+  client: IntelionApiClient,
+): IntelionServerConfiguratorFeature {
+  return new ServerConfiguratorFeature(client);
 }
 
 class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
@@ -47,8 +61,15 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
         description: "Validate an Intelion cloud-server configuration",
         run: (args, context) => this.#runValidate(args, context),
       },
+      {
+        name: "create",
+        description: "Create an Intelion cloud-server configuration",
+        run: (args, context) => this.#runCreate(args, context),
+      },
     ],
   };
+
+  constructor(private readonly client: IntelionApiClient) {}
 
   validateConfiguration(
     input: IntelionServerConfigurationInput,
@@ -97,6 +118,19 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
     };
   }
 
+  async createServer(
+    input: IntelionServerConfigurationInput,
+    context: ProviderOperationContext,
+  ): Promise<IntelionServerCreationResult> {
+    const configuration = this.validateConfiguration(input);
+    const response = await this.client.postJsonMutation(
+      "/api/v2/cloud-servers/",
+      createPayload(configuration),
+      context,
+    );
+    return parseCreationResult(response);
+  }
+
   async #runValidate(
     args: readonly string[],
     context: ProviderCliCommandContext,
@@ -104,6 +138,51 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
     const configuration = this.validateConfiguration(parseValidateArgs(args));
     context.write(`${JSON.stringify(configuration)}\n`);
   }
+
+  async #runCreate(
+    args: readonly string[],
+    context: ProviderCliCommandContext,
+  ): Promise<ProviderCliCommandResult> {
+    const result = await this.createServer(parseValidateArgs(args), context);
+    context.write(`${JSON.stringify(result)}\n`);
+    return { refreshProviderInventory: true };
+  }
+}
+
+function createPayload(
+  configuration: IntelionServerConfiguration,
+): Record<string, unknown> {
+  return {
+    name: configuration.name,
+    flavor_id: configuration.flavorId,
+    ssd_count: configuration.networkDiskGb,
+    os_id: configuration.osImageId,
+    price_plan: configuration.pricePlan,
+    ...(configuration.promotionCodeId === undefined
+      ? {}
+      : { promocode_id: configuration.promotionCodeId }),
+    ...(configuration.queueWhenUnavailable ? { is_in_queue: true } : {}),
+    ...(configuration.addonIds.length === 0
+      ? {}
+      : { addon_ids: [...configuration.addonIds] }),
+  };
+}
+
+function parseCreationResult(value: unknown): IntelionServerCreationResult {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw normalizedError(
+      "outcome-unknown",
+      "Intelion create response did not identify the created cloud server",
+    );
+  }
+  const id = (value as Record<string, unknown>).id;
+  if (!Number.isInteger(id) || (id as number) < 0) {
+    throw normalizedError(
+      "outcome-unknown",
+      "Intelion create response did not identify the created cloud server",
+    );
+  }
+  return { providerExternalId: String(id) };
 }
 
 function parseValidateArgs(args: readonly string[]): IntelionServerConfigurationInput {

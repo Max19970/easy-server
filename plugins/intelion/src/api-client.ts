@@ -22,7 +22,31 @@ export class IntelionApiClient {
     context: ProviderOperationContext,
     allowNotFound = false,
   ): Promise<unknown | undefined> {
-    return this.#requestJson(this.url(path), context, allowNotFound);
+    return this.#requestJson(
+      this.url(path),
+      context,
+      { method: "GET" },
+      allowNotFound,
+      false,
+    );
+  }
+
+  postJsonMutation(
+    path: string | URL,
+    body: unknown,
+    context: ProviderOperationContext,
+  ): Promise<unknown> {
+    return this.#requestJson(
+      this.url(path),
+      context,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      false,
+      true,
+    );
   }
 
   url(path: string | URL): URL {
@@ -39,7 +63,9 @@ export class IntelionApiClient {
   async #requestJson(
     url: URL,
     context: ProviderOperationContext,
+    init: RequestInit,
     allowNotFound: boolean,
+    mutation: boolean,
   ): Promise<unknown | undefined> {
     if (context.signal.aborted) {
       throw normalizedError(
@@ -59,14 +85,22 @@ export class IntelionApiClient {
     let response: Response;
     try {
       response = await this.fetchImpl(url, {
-        method: "GET",
+        ...init,
         headers: {
           Authorization: `Token ${token}`,
           Accept: "application/json",
+          ...init.headers,
         },
         signal: context.signal,
       });
     } catch (error) {
+      if (mutation) {
+        throw normalizedError(
+          "outcome-unknown",
+          "Intelion mutation outcome is unknown after request dispatch",
+          error,
+        );
+      }
       if (context.signal.aborted) {
         throw normalizedError(
           "cancelled",
@@ -90,13 +124,18 @@ export class IntelionApiClient {
         "Intelion rejected the configured API token",
       );
     }
+    if (response.status === 409) {
+      throw normalizedError("conflict", "Intelion rejected the operation as conflicting");
+    }
     if (response.status === 429) {
       throw normalizedError("rate-limited", "Intelion rate limit exceeded");
     }
     if (response.status >= 500) {
       throw normalizedError(
-        "provider-unavailable",
-        `Intelion returned HTTP ${response.status}`,
+        mutation ? "outcome-unknown" : "provider-unavailable",
+        mutation
+          ? `Intelion mutation outcome is unknown after HTTP ${response.status}`
+          : `Intelion returned HTTP ${response.status}`,
       );
     }
     if (!response.ok) {
@@ -110,8 +149,10 @@ export class IntelionApiClient {
       return await response.json();
     } catch (error) {
       throw normalizedError(
-        "plugin-failure",
-        "Intelion returned an invalid JSON response",
+        mutation ? "outcome-unknown" : "plugin-failure",
+        mutation
+          ? "Intelion mutation succeeded but its response could not be reconciled"
+          : "Intelion returned an invalid JSON response",
         error,
       );
     }
