@@ -134,11 +134,8 @@ class IntelionProviderAdapter implements ProviderAdapter {
     }
 
     const address = connectionAddress(server);
-    const login = server.login;
-    if (address === undefined || login === null || login === undefined) {
-      return [];
-    }
-    if (typeof login !== "string" || login.trim().length === 0) {
+    const username = sshUsername(server);
+    if (address === undefined || username === undefined) {
       return [];
     }
 
@@ -153,7 +150,7 @@ class IntelionProviderAdapter implements ProviderAdapter {
         ssh: {
           host: address,
           port: 22,
-          username: login,
+          username,
           passwordCredentialId: SSH_PASSWORD_CREDENTIAL,
         },
       },
@@ -275,6 +272,25 @@ function parseServer(value: unknown): ProviderInstanceSnapshot {
       error,
     );
   }
+}
+
+function sshUsername(server: Record<string, unknown>): string | undefined {
+  const login = server.login;
+  if (typeof login === "string" && login.trim().length > 0) {
+    return login;
+  }
+  if (login !== null && login !== undefined && typeof login !== "string") {
+    return undefined;
+  }
+
+  const os = server.os;
+  if (typeof os !== "object" || os === null || Array.isArray(os)) {
+    return undefined;
+  }
+  const image = os as Record<string, unknown>;
+  return image.type === "linux" && image.ssh_enabled === true
+    ? "root"
+    : undefined;
 }
 
 function connectionAddress(server: Record<string, unknown>): string | undefined {
