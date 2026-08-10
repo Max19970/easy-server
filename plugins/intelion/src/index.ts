@@ -291,7 +291,7 @@ function sshUsername(server: Record<string, unknown>): string | undefined {
     return undefined;
   }
   const image = os as Record<string, unknown>;
-  return image.type === "linux" && image.ssh_enabled === true
+  return image.type === "lin" && image.ssh_enabled === true
     ? "root"
     : undefined;
 }

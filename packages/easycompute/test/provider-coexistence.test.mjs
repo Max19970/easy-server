@@ -129,7 +129,7 @@ function createIntelionFixture() {
           os: {
             id: 7,
             name: "Ubuntu 24.04 LTS",
-            type: "linux",
+            type: "lin",
             ssh_enabled: true,
             rdp_enabled: false,
           },

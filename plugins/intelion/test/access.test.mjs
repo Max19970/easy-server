@@ -43,7 +43,7 @@ test("Intelion access discovery is secret-free and password retrieval is deferre
         os: {
           id: 7,
           name: "Ubuntu 24.04 LTS",
-          type: "linux",
+          type: "lin",
           ssh_enabled: true,
           rdp_enabled: false,
         },
@@ -99,7 +99,7 @@ test("Intelion derives root SSH access for automatically provisioned SSH-enabled
         os: {
           id: 7,
           name: "Ubuntu 24.04 LTS",
-          type: "linux",
+          type: "lin",
           ssh_enabled: true,
           rdp_enabled: false,
         },
@@ -154,7 +154,7 @@ test("Intelion exposes no SSH method before an active server has connection meta
     os: {
       id: 8,
       name: "Windows Server 2022",
-      type: "windows",
+      type: "win",
       ssh_enabled: false,
       rdp_enabled: true,
     },
