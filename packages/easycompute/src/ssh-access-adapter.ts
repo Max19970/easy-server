@@ -29,6 +29,7 @@ export interface OpenSshAccessAdapterOptions {
   readonly knownHostsPath?: string;
   readonly sshCommand?: CommandSpec;
   readonly keyscanCommand?: CommandSpec;
+  readonly keyscanFallbackCommand?: CommandSpec;
   readonly icaclsCommand?: CommandSpec;
 }
 
@@ -63,15 +64,24 @@ export class OpenSshAccessAdapter implements AccessAdapter {
   readonly kind = "ssh";
   readonly #knownHostsPath: string;
   readonly #sshCommand: CommandSpec;
-  readonly #keyscanCommand: CommandSpec;
+  readonly #keyscanCommands: readonly CommandSpec[];
   readonly #icaclsCommand: CommandSpec;
 
   constructor(options: OpenSshAccessAdapterOptions = {}) {
     this.#knownHostsPath =
       options.knownHostsPath ?? join(homedir(), ".easycompute", "known_hosts");
     this.#sshCommand = options.sshCommand ?? defaultOpenSshCommand("ssh.exe", "ssh");
-    this.#keyscanCommand =
-      options.keyscanCommand ?? defaultOpenSshCommand("ssh-keyscan.exe", "ssh-keyscan");
+    this.#keyscanCommands =
+      options.keyscanCommand === undefined &&
+      options.keyscanFallbackCommand === undefined
+        ? defaultKeyscanCommands()
+        : [
+            options.keyscanCommand ??
+              defaultOpenSshCommand("ssh-keyscan.exe", "ssh-keyscan"),
+            ...(options.keyscanFallbackCommand === undefined
+              ? []
+              : [options.keyscanFallbackCommand]),
+          ];
     this.#icaclsCommand = options.icaclsCommand ?? { executable: "icacls.exe" };
   }
 
@@ -116,7 +126,7 @@ export class OpenSshAccessAdapter implements AccessAdapter {
     const scanned = await scanHostKeys(
       trust.host,
       trust.port,
-      this.#keyscanCommand,
+      this.#keyscanCommands,
       signal,
     );
     const selected = scanned.find(
@@ -161,7 +171,7 @@ export class OpenSshAccessAdapter implements AccessAdapter {
     const scanned = await scanHostKeys(
       method.ssh.host,
       method.ssh.port,
-      this.#keyscanCommand,
+      this.#keyscanCommands,
       signal,
     );
     const known = await readKnownHostKeys(
@@ -471,44 +481,51 @@ export function buildSshArgs(
 async function scanHostKeys(
   host: string,
   port: number,
-  command: CommandSpec,
+  commands: readonly CommandSpec[],
   signal?: AbortSignal,
 ): Promise<readonly HostKey[]> {
-  let result: CommandResult;
-  try {
-    result = await runCommand(
-      command,
-      ["-T", "5", "-p", String(port), "-t", "ed25519,ecdsa,rsa", host],
-      signal,
-      8_000,
-    );
-  } catch (error) {
-    if (signal?.aborted) {
-      throw normalizedError("cancelled", "SSH host-key scan was cancelled", error);
-    }
-    if (error instanceof CommandError && error.stdout.trim().length > 0) {
-      result = {
-        code: error.code,
-        stdout: error.stdout,
-        stderr: error.stderr,
-      };
-    } else {
-      throw normalizedError(
-        "provider-unavailable",
-        `Unable to read SSH host key from ${host}:${port}`,
-        error,
+  const failures: unknown[] = [];
+  for (const command of commands) {
+    try {
+      const result = await runCommand(
+        command,
+        ["-T", "5", "-p", String(port), "-t", "ed25519,ecdsa,rsa", host],
+        signal,
+        8_000,
       );
+      const keys = parseKeyscanOutput(result.stdout);
+      if (keys.length > 0) {
+        return keys;
+      }
+      failures.push(
+        new Error(`SSH key scanner ${command.executable} returned no host keys`),
+      );
+    } catch (error) {
+      if (signal?.aborted) {
+        throw normalizedError("cancelled", "SSH host-key scan was cancelled", error);
+      }
+      if (error instanceof CommandError) {
+        const keys = parseKeyscanOutput(error.stdout);
+        if (keys.length > 0) {
+          return keys;
+        }
+      }
+      failures.push(error);
     }
   }
 
-  const keys = parseKeyscanOutput(result.stdout);
-  if (keys.length === 0) {
-    throw normalizedError(
-      "provider-unavailable",
-      `SSH host ${host}:${port} did not present a host key`,
-    );
-  }
-  return keys;
+  const cause =
+    failures.length === 1
+      ? failures[0]
+      : new AggregateError(
+          failures,
+          "No configured SSH key scanner could read a host key",
+        );
+  throw normalizedError(
+    "provider-unavailable",
+    `Unable to read SSH host key from ${host}:${port} with available local OpenSSH scanners`,
+    cause,
+  );
 }
 
 function parseKeyscanOutput(output: string): readonly HostKey[] {
@@ -653,6 +670,14 @@ function formatHostPort(host: string, port: number): string {
 
 function nullDevice(): string {
   return process.platform === "win32" ? "NUL" : "/dev/null";
+}
+
+function defaultKeyscanCommands(): readonly CommandSpec[] {
+  const preferred = defaultOpenSshCommand("ssh-keyscan.exe", "ssh-keyscan");
+  if (process.platform !== "win32" || preferred.executable === "ssh-keyscan") {
+    return [preferred];
+  }
+  return [preferred, { executable: "ssh-keyscan" }];
 }
 
 function defaultOpenSshCommand(windowsName: string, fallback: string): CommandSpec {

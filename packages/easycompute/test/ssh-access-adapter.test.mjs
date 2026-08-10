@@ -140,6 +140,58 @@ async function captureTrustError(run) {
   assert.fail("expected host-trust-required");
 }
 
+test("SSH host trust falls back when the preferred key scanner is incompatible", async () => {
+  await withTempDirectory(async (directory) => {
+    const keySpecPath = join(directory, "host-key.json");
+    const recordPath = join(directory, "ssh-args.json");
+    await writeFile(keySpecPath, JSON.stringify(key("fallback-host-key")), "utf8");
+    const access = new OpenSshAccessAdapter({
+      knownHostsPath: join(directory, "known_hosts"),
+      keyscanCommand: {
+        executable: process.execPath,
+        prefixArgs: [
+          "-e",
+          "process.stderr.write('choose_kex: unsupported KEX method\\n'); process.exit(1);",
+        ],
+      },
+      keyscanFallbackCommand: {
+        executable: process.execPath,
+        prefixArgs: [fakeKeyscan, keySpecPath],
+      },
+      sshCommand: {
+        executable: process.execPath,
+        prefixArgs: [fakeSsh, recordPath],
+      },
+      icaclsCommand: {
+        executable: process.execPath,
+        prefixArgs: [noopCommand],
+      },
+    });
+    const method = sshMethod();
+    const setup = setupContext();
+
+    const trust = await captureTrustError(() =>
+      access.openTcpForward(
+        method,
+        "remote-1",
+        { host: "service.internal", port: 443 },
+        setup.context,
+      ),
+    );
+    assert.match(trust.fingerprint, /^SHA256:/);
+
+    await access.enrollHostKey(trust, context.signal);
+    const transport = await access.openTcpForward(
+      method,
+      "remote-1",
+      { host: "service.internal", port: 443 },
+      setup.context,
+    );
+    await transport.close();
+    await setup.cleanup();
+  });
+});
+
 test("unknown SSH host requires explicit fingerprint enrollment and changed keys fail closed", async () => {
   await withTempDirectory(async (directory) => {
     const keySpecPath = join(directory, "host-key.json");
