@@ -514,6 +514,7 @@ test("provider feature outcome-unknown reconciles inventory without retrying the
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /outcome-unknown: fixture mutation outcome is unknown/);
+  assert.doesNotMatch(result.stderr, /Usage:/);
   const reconciledState = JSON.parse(await readFile(stateFile, "utf8"));
   assert.equal(reconciledState.instances.length, 1);
   assert.equal(reconciledState.instances[0].providerId, "provider-cli");
@@ -641,10 +642,23 @@ test("rejects malformed plugin list arguments", () => {
   assert.match(result.stderr, /accepts only --plugin <module> pairs/);
 });
 
+test("operational runtime errors do not append global help", () => {
+  const result = runWithDaemon(
+    emptyStateFile,
+    join(testDirectory, "missing-daemon.json"),
+    "sessions",
+    "list",
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /EasyCompute daemon is not running/);
+  assert.doesNotMatch(result.stderr, /Usage:/);
+});
+
 test("connect validates its target before opening providers", () => {
   const missingPort = run("connect", "instance:test");
   assert.equal(missingPort.status, 1);
   assert.match(missingPort.stderr, /connect requires --port/);
+  assert.match(missingPort.stderr, /Usage:/);
 
   const invalidPort = run("connect", "instance:test", "--port", "70000");
   assert.equal(invalidPort.status, 1);
@@ -655,4 +669,5 @@ test("rejects unknown commands", () => {
   const result = run("nope");
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Unknown command: nope/);
+  assert.match(result.stderr, /Usage:/);
 });

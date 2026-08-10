@@ -38,6 +38,13 @@ import {
 } from "./local-daemon.js";
 
 
+class CliUsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CliUsageError";
+  }
+}
+
 const help = `EasyCompute
 
 Usage:
@@ -82,8 +89,7 @@ async function run(args: readonly string[]): Promise<void> {
     try {
       await runDaemon(args.slice(1));
     } catch (error) {
-      process.stderr.write(`${errorMessage(error)}\n\n${help}`);
-      process.exitCode = 1;
+      reportCliError(error);
     }
     return;
   }
@@ -92,8 +98,7 @@ async function run(args: readonly string[]): Promise<void> {
     try {
       await runSessions(args.slice(1));
     } catch (error) {
-      process.stderr.write(`${errorMessage(error)}\n\n${help}`);
-      process.exitCode = 1;
+      reportCliError(error);
     }
     return;
   }
@@ -102,8 +107,7 @@ async function run(args: readonly string[]): Promise<void> {
     try {
       await runConnect(args.slice(1));
     } catch (error) {
-      process.stderr.write(`${errorMessage(error)}\n\n${help}`);
-      process.exitCode = 1;
+      reportCliError(error);
     }
     return;
   }
@@ -112,8 +116,7 @@ async function run(args: readonly string[]): Promise<void> {
     try {
       await runProvider(args.slice(1));
     } catch (error) {
-      process.stderr.write(`${errorMessage(error)}\n\n${help}`);
-      process.exitCode = 1;
+      reportCliError(error);
     }
     return;
   }
@@ -122,8 +125,7 @@ async function run(args: readonly string[]): Promise<void> {
     try {
       await runInstances(args.slice(1));
     } catch (error) {
-      process.stderr.write(`${errorMessage(error)}\n\n${help}`);
-      process.exitCode = 1;
+      reportCliError(error);
     }
     return;
   }
@@ -132,8 +134,7 @@ async function run(args: readonly string[]): Promise<void> {
     try {
       await runPlugins(args.slice(1));
     } catch (error) {
-      process.stderr.write(`${errorMessage(error)}\n\n${help}`);
-      process.exitCode = 1;
+      reportCliError(error);
     }
     return;
   }
@@ -144,7 +145,7 @@ async function run(args: readonly string[]): Promise<void> {
 
 async function runDaemon(args: readonly string[]): Promise<void> {
   if (args.length !== 1 || args[0] !== "run") {
-    throw new Error("daemon expects run");
+    throw new CliUsageError("daemon expects run");
   }
 
   const descriptorPath = daemonFilePath();
@@ -244,7 +245,7 @@ async function runSessions(args: readonly string[]): Promise<void> {
     return;
   }
 
-  throw new Error(`Unknown sessions command: ${command ?? "(missing)"}`);
+  throw new CliUsageError(`Unknown sessions command: ${command ?? "(missing)"}`);
 }
 
 async function localDaemonClient(): Promise<LocalDaemonClient> {
@@ -348,7 +349,7 @@ function parseConnectArgs(
 } {
   const [instanceId, ...options] = args;
   if (instanceId === undefined || instanceId.trim().length === 0) {
-    throw new Error(`${commandName} requires <instance-id>`);
+    throw new CliUsageError(`${commandName} requires <instance-id>`);
   }
 
   let remotePort: number | undefined;
@@ -358,16 +359,16 @@ function parseConnectArgs(
     const option = options[index];
     const value = options[index + 1];
     if (value === undefined) {
-      throw new Error(`${commandName} option requires a value: ${option}`);
+      throw new CliUsageError(`${commandName} option requires a value: ${option}`);
     }
 
     if (option === "--port") {
       if (remotePort !== undefined) {
-        throw new Error(`${commandName} accepts --port only once`);
+        throw new CliUsageError(`${commandName} accepts --port only once`);
       }
       const parsed = Number(value);
       if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) {
-        throw new Error(`${commandName} --port must be an integer between 1 and 65535`);
+        throw new CliUsageError(`${commandName} --port must be an integer between 1 and 65535`);
       }
       remotePort = parsed;
       continue;
@@ -375,20 +376,20 @@ function parseConnectArgs(
 
     if (option === "--host") {
       if (remoteHost !== undefined) {
-        throw new Error(`${commandName} accepts --host only once`);
+        throw new CliUsageError(`${commandName} accepts --host only once`);
       }
       if (value.trim().length === 0) {
-        throw new Error(`${commandName} --host must be non-empty`);
+        throw new CliUsageError(`${commandName} --host must be non-empty`);
       }
       remoteHost = value;
       continue;
     }
 
-    throw new Error(`Unknown ${commandName} option: ${option}`);
+    throw new CliUsageError(`Unknown ${commandName} option: ${option}`);
   }
 
   if (remotePort === undefined) {
-    throw new Error(`${commandName} requires --port <remote-port>`);
+    throw new CliUsageError(`${commandName} requires --port <remote-port>`);
   }
 
   return remoteHost === undefined
@@ -436,7 +437,7 @@ async function runProvider(args: readonly string[]): Promise<void> {
 
     const command = commands.find((candidate) => candidate.name === commandName);
     if (command === undefined) {
-      throw new Error(
+      throw new CliUsageError(
         `Provider command not found: ${providerId}/${featureId}/${commandName}`,
       );
     }
@@ -531,7 +532,7 @@ async function runInstances(args: readonly string[]): Promise<void> {
       return;
     }
 
-    throw new Error(`Unknown instances command: ${command ?? "(missing)"}`);
+    throw new CliUsageError(`Unknown instances command: ${command ?? "(missing)"}`);
   } finally {
     process.removeListener("SIGINT", cancel);
     process.removeListener("SIGTERM", cancel);
@@ -562,7 +563,7 @@ async function runPlugins(args: readonly string[]): Promise<void> {
     return;
   }
 
-  throw new Error(`Unknown plugins command: ${command ?? "(missing)"}`);
+  throw new CliUsageError(`Unknown plugins command: ${command ?? "(missing)"}`);
 }
 
 async function runPluginCredential(
@@ -619,7 +620,7 @@ async function runPluginCredential(
     return;
   }
 
-  throw new Error(
+  throw new CliUsageError(
     "plugins credential expects set <module> <name> --env <variable> or remove <module> <name>",
   );
 }
@@ -788,7 +789,7 @@ function parsePluginSources(args: readonly string[]): readonly string[] {
 
   for (let index = 0; index < args.length; index += 2) {
     if (args[index] !== "--plugin" || args[index + 1] === undefined) {
-      throw new Error("plugins list accepts only --plugin <module> pairs");
+      throw new CliUsageError("plugins list accepts only --plugin <module> pairs");
     }
 
     sources.push(args[index + 1]);
@@ -843,6 +844,15 @@ function daemonFilePath(): string {
     process.env.EASYCOMPUTE_DAEMON_FILE ??
     join(homedir(), ".easycompute", "daemon.json")
   );
+}
+
+function reportCliError(error: unknown): void {
+  process.stderr.write(
+    error instanceof CliUsageError
+      ? `${errorMessage(error)}\n\n${help}`
+      : `${errorMessage(error)}\n`,
+  );
+  process.exitCode = 1;
 }
 
 function errorMessage(error: unknown): string {
