@@ -168,6 +168,154 @@ test("server configurator lists Intelion OS images through the provider-scoped C
   assert.equal(calls[1].url.searchParams.get("page"), "2");
 });
 
+test("server configurator lists Intelion flavors with availability and price", async () => {
+  const calls = [];
+  const plugin = createIntelionProviderPlugin({
+    baseUrl: "https://fixture.intelion.test",
+    async fetch(input) {
+      const url = new URL(input);
+      calls.push(url);
+      if (url.searchParams.get("page") === "2") {
+        return new Response(
+          JSON.stringify({
+            count: 2,
+            next: null,
+            previous: "https://fixture.intelion.test/api/v2/flavors/",
+            results: [
+              {
+                id: 13,
+                name: "2x RTX 4090 / 32 vCPU / 128 GB",
+                cpu_count: 2,
+                ram_count: 4,
+                gpu_count: 2,
+                flavor_monthly_price_rub_cents: 14500000,
+                flavor_hourly_price_rub_cents: 24500,
+                max_available: 0,
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          count: 2,
+          next: "https://fixture.intelion.test/api/v2/flavors/?page=2",
+          previous: null,
+          results: [
+            {
+              id: 12,
+              name: "1x RTX 4090 / 16 vCPU / 64 GB",
+              cpu_count: 1,
+              ram_count: 2,
+              gpu_count: 1,
+              flavor_monthly_price_rub_cents: 7600000,
+              flavor_hourly_price_rub_cents: 12900,
+              max_available: 3,
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+  const feature = plugin.features.find(
+    (candidate) => candidate.id === "server-configurator",
+  );
+  assert.ok(feature);
+  const command = feature.cli?.commands.find(
+    (candidate) => candidate.name === "flavors",
+  );
+  assert.ok(command);
+
+  let output = "";
+  await command.run([], {
+    signal: new AbortController().signal,
+    async resolveCredential(name) {
+      assert.equal(name, INTELION_API_TOKEN_CREDENTIAL);
+      return "fixture-token";
+    },
+    markMutationDispatched() {},
+    write(text) {
+      output += text;
+    },
+    writeError() {},
+  });
+
+  assert.deepEqual(JSON.parse(output), [
+    {
+      id: 12,
+      name: "1x RTX 4090 / 16 vCPU / 64 GB",
+      cpuCount: 1,
+      ramCount: 2,
+      gpuCount: 1,
+      monthlyPriceRubCents: 7600000,
+      hourlyPriceRubCents: 12900,
+      maxAvailable: 3,
+      available: true,
+    },
+    {
+      id: 13,
+      name: "2x RTX 4090 / 32 vCPU / 128 GB",
+      cpuCount: 2,
+      ramCount: 4,
+      gpuCount: 2,
+      monthlyPriceRubCents: 14500000,
+      hourlyPriceRubCents: 24500,
+      maxAvailable: 0,
+      available: false,
+    },
+  ]);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].pathname, "/api/v2/flavors/");
+  assert.equal(calls[1].searchParams.get("page"), "2");
+});
+
+test("server configurator rejects malformed Intelion flavor catalog payloads", async () => {
+  const plugin = createIntelionProviderPlugin({
+    baseUrl: "https://fixture.intelion.test",
+    async fetch() {
+      return new Response(
+        JSON.stringify({
+          count: 1,
+          next: null,
+          previous: null,
+          results: [
+            {
+              id: 12,
+              name: "1x RTX 4090",
+              flavor_hourly_price_rub_cents: "12900",
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+  const feature = plugin.features.find(
+    (candidate) => candidate.id === "server-configurator",
+  );
+  assert.ok(feature);
+  const command = feature.cli?.commands.find(
+    (candidate) => candidate.name === "flavors",
+  );
+  assert.ok(command);
+
+  await assert.rejects(
+    () =>
+      command.run([], {
+        signal: new AbortController().signal,
+        async resolveCredential() {
+          return "fixture-token";
+        },
+        markMutationDispatched() {},
+        write() {},
+        writeError() {},
+      }),
+    (error) => error?.code === "plugin-failure",
+  );
+});
+
 test("server configurator rejects malformed Intelion OS-image catalog payloads", async () => {
   const plugin = createIntelionProviderPlugin({
     baseUrl: "https://fixture.intelion.test",

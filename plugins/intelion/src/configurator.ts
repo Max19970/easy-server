@@ -49,12 +49,27 @@ export interface IntelionOsImage {
   readonly compatibleFlavorIds?: readonly number[];
 }
 
+export interface IntelionFlavor {
+  readonly id: number;
+  readonly name: string;
+  readonly cpuCount: number;
+  readonly ramCount: number;
+  readonly gpuCount?: number;
+  readonly monthlyPriceRubCents: number;
+  readonly hourlyPriceRubCents: number;
+  readonly maxAvailable: number;
+  readonly available: boolean;
+}
+
 export interface IntelionServerConfiguratorFeature extends ProviderFeature {
   readonly id: "server-configurator";
   listOsImages(
     query: IntelionOsImageQuery,
     context: ProviderOperationContext,
   ): Promise<readonly IntelionOsImage[]>;
+  listFlavors(
+    context: ProviderOperationContext,
+  ): Promise<readonly IntelionFlavor[]>;
   validateConfiguration(
     input: IntelionServerConfigurationInput,
   ): IntelionServerConfiguration;
@@ -80,6 +95,12 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
         description: "List Intelion operating-system images",
         operation: "read",
         run: (args, context) => this.#runOsImages(args, context),
+      },
+      {
+        name: "flavors",
+        description: "List Intelion server flavors",
+        operation: "read",
+        run: (args, context) => this.#runFlavors(args, context),
       },
       {
         name: "validate",
@@ -130,6 +151,35 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
       images.push(...parsed.results.map(parseOsImage));
       if (parsed.next === undefined) {
         return images;
+      }
+      page = this.client.url(parsed.next);
+    }
+  }
+
+  async listFlavors(
+    context: ProviderOperationContext,
+  ): Promise<readonly IntelionFlavor[]> {
+    const flavors: IntelionFlavor[] = [];
+    const seenPages = new Set<string>();
+    let page = this.client.url("/api/v2/flavors/");
+
+    for (;;) {
+      const pageKey = page.href;
+      if (seenPages.has(pageKey)) {
+        throw normalizedError(
+          "plugin-failure",
+          "Intelion returned a repeated flavor pagination URL",
+        );
+      }
+      seenPages.add(pageKey);
+
+      const parsed = parseCatalogPage(
+        await this.client.getJson(page, context),
+        "flavor",
+      );
+      flavors.push(...parsed.results.map(parseFlavor));
+      if (parsed.next === undefined) {
+        return flavors;
       }
       page = this.client.url(parsed.next);
     }
@@ -201,6 +251,17 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
   ): Promise<void> {
     const images = await this.listOsImages(parseOsImageArgs(args), context);
     context.write(`${JSON.stringify(images)}\n`);
+  }
+
+  async #runFlavors(
+    args: readonly string[],
+    context: ProviderCliCommandContext,
+  ): Promise<void> {
+    if (args.length !== 0) {
+      throw new Error("Intelion flavors does not accept arguments");
+    }
+    const flavors = await this.listFlavors(context);
+    context.write(`${JSON.stringify(flavors)}\n`);
   }
 
   async #runValidate(
@@ -307,6 +368,61 @@ function parseOsImage(value: unknown): IntelionOsImage {
     throw normalizedError(
       "plugin-failure",
       "Intelion returned an invalid OS-image payload",
+      error,
+    );
+  }
+}
+
+function parseFlavor(value: unknown): IntelionFlavor {
+  try {
+    const flavor = expectRecord(value, "Intelion flavor");
+    const id = positiveIntegerValue(flavor.id, "Intelion flavor.id");
+    if (typeof flavor.name !== "string" || flavor.name.trim().length === 0) {
+      throw new TypeError("Intelion flavor.name must be a non-empty string");
+    }
+    const cpuCount = optionalNonNegativeInteger(
+      flavor.cpu_count,
+      "Intelion flavor.cpu_count",
+    );
+    const ramCount = optionalNonNegativeInteger(
+      flavor.ram_count,
+      "Intelion flavor.ram_count",
+    );
+    const gpuCount = optionalNullableNonNegativeInteger(
+      flavor.gpu_count,
+      "Intelion flavor.gpu_count",
+    );
+    const monthlyPriceRubCents = optionalNonNegativeInteger(
+      flavor.flavor_monthly_price_rub_cents,
+      "Intelion flavor.flavor_monthly_price_rub_cents",
+    );
+    const hourlyPriceRubCents = optionalNonNegativeInteger(
+      flavor.flavor_hourly_price_rub_cents,
+      "Intelion flavor.flavor_hourly_price_rub_cents",
+    );
+    const maxAvailable = optionalNonNegativeInteger(
+      flavor.max_available,
+      "Intelion flavor.max_available",
+    );
+
+    return {
+      id,
+      name: flavor.name,
+      cpuCount,
+      ramCount,
+      ...(gpuCount === undefined ? {} : { gpuCount }),
+      monthlyPriceRubCents,
+      hourlyPriceRubCents,
+      maxAvailable,
+      available: maxAvailable > 0,
+    };
+  } catch (error) {
+    if (isNormalizedError(error)) {
+      throw error;
+    }
+    throw normalizedError(
+      "plugin-failure",
+      "Intelion returned an invalid flavor payload",
       error,
     );
   }
@@ -470,6 +586,26 @@ function parseOptionalPositiveIntegerList(
   return value.map((entry, index) =>
     positiveIntegerValue(entry, `${path}[${index}]`),
   );
+}
+
+function optionalNonNegativeInteger(value: unknown, path: string): number {
+  if (value === undefined || value === null) {
+    return 0;
+  }
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    throw new TypeError(`${path} must be a non-negative integer when present`);
+  }
+  return value as number;
+}
+
+function optionalNullableNonNegativeInteger(
+  value: unknown,
+  path: string,
+): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return optionalNonNegativeInteger(value, path);
 }
 
 function positiveInteger(value: number, field: string): number {
