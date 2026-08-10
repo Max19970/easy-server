@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -26,6 +26,7 @@ try {
   const vastTarball = pack("plugins/vastai");
   const intelionTarball = pack("plugins/intelion");
   const exampleTarball = packExamplePlugin();
+  const externalTsPluginTarball = await verifyExternalSdkConsumer(sdkTarball);
 
   await verifyCoreOnlyInstall(sdkTarball, cliTarball);
   await verifyPluginInstall({
@@ -49,6 +50,15 @@ try {
     pluginId: "example.provider-plugin",
     providerId: "example",
     pluginTarball: exampleTarball,
+    absentPackageName: "@easycompute/plugin-vastai",
+    sdkTarball,
+    cliTarball,
+  });
+  await verifyPluginInstall({
+    packageName: "@easycompute/external-ts-provider",
+    pluginId: "external.ts-provider",
+    providerId: "external-ts",
+    pluginTarball: externalTsPluginTarball,
     absentPackageName: "@easycompute/plugin-vastai",
     sdkTarball,
     cliTarball,
@@ -131,6 +141,198 @@ function assertTarballFiles(packResult, packageDirectory) {
       `${packageDirectory} tarball contains unexpected path: ${path}`,
     );
   }
+}
+
+async function verifyExternalSdkConsumer(sdkTarball) {
+  const consumer = join(temporaryRoot, "external-sdk-consumer");
+  await mkdir(join(consumer, "src"), { recursive: true });
+  await writeFile(
+    join(consumer, "package.json"),
+    `${JSON.stringify(
+      {
+        name: "@easycompute/external-ts-provider",
+        version: "0.1.0",
+        private: true,
+        type: "module",
+        main: "dist/index.js",
+        files: ["dist"],
+        engines: {
+          node: ">=24.18.1 <25",
+        },
+        dependencies: {
+          "@easycompute/plugin-sdk": "^0.1.0",
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  await writeFile(
+    join(consumer, "tsconfig.json"),
+    `${JSON.stringify(
+      {
+        compilerOptions: {
+          strict: true,
+          target: "ES2022",
+          module: "NodeNext",
+          moduleResolution: "NodeNext",
+          types: ["node"],
+          rootDir: "src",
+          outDir: "dist",
+          noEmitOnError: true,
+        },
+        include: ["src/**/*.ts"],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  await writeFile(
+    join(consumer, "src", "index.ts"),
+    `import { PassThrough } from "node:stream";
+import {
+  PLUGIN_SDK_VERSION,
+  parseProviderPlugin,
+  type AccessAdapter,
+  type AccessTransportSession,
+  type OperationContext,
+  type ProviderAdapter,
+  type ProviderOperationContext,
+  type ProviderPlugin,
+} from "@easycompute/plugin-sdk";
+
+class ExternalProvider implements ProviderAdapter {
+  readonly providerId = "external-ts";
+
+  async listInstances(_context: ProviderOperationContext) {
+    return [];
+  }
+
+  async getInstance(
+    _providerExternalId: string,
+    _context: ProviderOperationContext,
+  ) {
+    return undefined;
+  }
+}
+
+class ExternalAccessAdapter implements AccessAdapter {
+  readonly kind = "external-ts:tcp";
+
+  async openTcpForward(): Promise<AccessTransportSession> {
+    return {
+      async openChannel(_context: OperationContext) {
+        const stream = new PassThrough();
+        return {
+          stream,
+          async close() {
+            stream.destroy();
+          },
+        };
+      },
+      async close() {},
+    };
+  }
+}
+
+const plugin: ProviderPlugin = {
+  manifest: {
+    id: "external.ts-provider",
+    displayName: "External TypeScript Provider",
+    version: "0.1.0",
+    compatibility: {
+      easycompute: "^0.1.0",
+      pluginSdk: "^0.1.0",
+    },
+    provider: {
+      id: "external-ts",
+      displayName: "External TypeScript Provider",
+      capabilities: [],
+    },
+  },
+  provider: new ExternalProvider(),
+  accessAdapters: [new ExternalAccessAdapter()],
+};
+
+const parsed = parseProviderPlugin(plugin);
+const adapter = parsed.accessAdapters?.[0];
+if (
+  parsed.manifest.id !== "external.ts-provider" ||
+  PLUGIN_SDK_VERSION !== "0.1.0" ||
+  adapter === undefined
+) {
+  throw new Error("Unexpected public SDK runtime result");
+}
+const transport = await adapter.openTcpForward(
+  { id: "external-tcp", kind: "external-ts:tcp", mode: "tcp-forward" },
+  "remote-1",
+  { host: "127.0.0.1", port: 8188 },
+  {
+    signal: new AbortController().signal,
+    registerCleanup() {},
+    async resolveSecret() {
+      throw new Error("No secret expected");
+    },
+    async resolveCredential() {
+      throw new Error("No credential expected");
+    },
+  },
+);
+const channel = await transport.openChannel({ signal: new AbortController().signal });
+if (!(channel.stream instanceof PassThrough)) {
+  throw new Error("Public AccessChannel stream is not a Node Duplex");
+}
+await channel.close();
+await transport.close();
+
+export default plugin;
+`,
+    "utf8",
+  );
+
+  runNpm(
+    ["install", "--no-save", "--no-audit", "--no-fund", sdkTarball],
+    consumer,
+  );
+  const installed = JSON.parse(
+    runNpm(
+      ["ls", "@easycompute/plugin-sdk", "--depth=0", "--json"],
+      consumer,
+    ).stdout,
+  );
+  assert.equal(
+    installed.dependencies?.["@easycompute/plugin-sdk"]?.version,
+    "0.1.0",
+    "external consumer must resolve the packed SDK version",
+  );
+
+  const tsc = join(repositoryRoot, "node_modules", "typescript", "bin", "tsc");
+  run(process.execPath, [tsc, "--project", "tsconfig.json"], consumer);
+  const runtime = run(
+    process.execPath,
+    [join(consumer, "dist", "index.js")],
+    consumer,
+  );
+  assert.equal(runtime.stdout, "");
+
+  const packed = JSON.parse(
+    runNpm(
+      ["pack", consumer, "--json", "--pack-destination", artifactDirectory],
+      repositoryRoot,
+    ).stdout,
+  );
+  assert.equal(packed.length, 1, "expected one external TypeScript plugin tarball");
+  const paths = packed[0].files.map((file) => file.path);
+  for (const path of paths) {
+    assert.equal(
+      path === "package.json" || path.startsWith("dist/"),
+      true,
+      `external TypeScript plugin tarball contains unexpected path: ${path}`,
+    );
+  }
+  return join(artifactDirectory, packed[0].filename);
 }
 
 async function verifyCoreOnlyInstall(sdkTarball, cliTarball) {

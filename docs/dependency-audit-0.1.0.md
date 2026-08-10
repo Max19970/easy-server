@@ -6,7 +6,7 @@ This report records the production dependency surface reviewed for the first pub
 
 ## Production dependency surface
 
-`@easycompute/plugin-sdk` has no external runtime dependencies.
+`@easycompute/plugin-sdk` has no external executable runtime dependency. It installs `@types/node@24.13.3` (and its `undici-types` declaration dependency) because the public Access Channel contract intentionally exposes the exact Node `Duplex` type. These packages are declaration-only and are not executed by EasyCompute at runtime.
 
 `@easycompute/plugin-vastai` and `@easycompute/plugin-intelion` each depend only on `@easycompute/plugin-sdk`. They are separately installed Provider Plugins and are not dependencies of `@easycompute/cli`.
 
@@ -18,7 +18,7 @@ This report records the production dependency surface reviewed for the first pub
 | `@napi-rs/keyring` | `1.3.0` | OS-backed Secret Store used to keep credentials out of Local State | MIT |
 | `semver` | `7.7.2` | Runtime validation of Provider Plugin EasyCompute/Plugin SDK compatibility ranges | ISC |
 
-The ISC and MIT dependency licenses are permissive and compatible with distributing EasyCompute itself under MIT. No copyleft or source-availability dependency license appears in the production closure reviewed for `0.1.0`.
+The SDK's installed Node declaration packages (`@types/node@24.13.3` and `undici-types@7.18.0`) are also MIT-licensed. The ISC and MIT dependency licenses are permissive and compatible with distributing EasyCompute itself under MIT. No copyleft or source-availability dependency license appears in the production closure reviewed for `0.1.0`.
 
 ## Native dependency
 
@@ -45,8 +45,8 @@ npm audit --omit=dev --audit-level=low
 → found 0 vulnerabilities
 
 npm audit signatures --omit=dev
-→ 3 packages have verified registry signatures
-→ 3 packages have verified attestations
+→ 5 packages have verified registry signatures
+→ 4 packages have verified attestations
 ```
 
 Registry tarballs for the reviewed external runtime dependencies are pinned by `package-lock.json` integrity hashes. `npm ci` is used for deterministic repository/CI installation rather than updating the lockfile implicitly.
@@ -66,7 +66,7 @@ dist/**
 
 The external minimal Provider Plugin example has its own exact scaffold allowlist.
 
-The same packaged-install test creates isolated global npm prefixes outside the monorepo, installs the packed CLI/SDK, runs the actual npm-created `easycompute` executable, and validates explicit Provider Plugin registration.
+The same packaged-install test creates isolated global npm prefixes outside the monorepo, installs the packed CLI/SDK, runs the actual npm-created `easycompute` executable, and validates explicit Provider Plugin registration. It also creates a separate TypeScript consumer project in a temporary directory, installs only the packed SDK as its EasyCompute dependency, compiles a provider plus Node `Duplex`-backed Access Adapter through package-root declarations, and runs the emitted module.
 
 ## Minimal-install boundary
 
