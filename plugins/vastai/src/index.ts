@@ -7,7 +7,7 @@ import {
   type PowerAction,
   type ProviderOperationContext,
   type ProviderPlugin,
-} from "@easycompute/plugin-sdk";
+} from "@easyai101/easyserver-plugin-sdk";
 import {
   VastApiClient,
   VAST_API_KEY_CREDENTIAL,
@@ -54,7 +54,7 @@ export function createVastProviderPlugin(
       displayName: "Vast.ai",
       version: "0.1.0",
       compatibility: {
-        easycompute: "^0.1.0",
+        easyserver: "^0.1.0",
         pluginSdk: "^0.1.0",
       },
       provider: {

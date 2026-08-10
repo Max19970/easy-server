@@ -10,7 +10,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const npmCli = process.env.npm_execpath;
 assert.ok(npmCli, "verify-packaged-install must be run through npm");
 
-const temporaryRoot = await mkdtemp(join(tmpdir(), "easycompute-packaged-install-"));
+const temporaryRoot = await mkdtemp(join(tmpdir(), "easyserver-packaged-install-"));
 const artifactDirectory = join(temporaryRoot, "artifacts");
 await mkdir(artifactDirectory, { recursive: true });
 
@@ -22,7 +22,7 @@ assertRootPublishBlocked();
 
 try {
   const sdkTarball = pack("packages/plugin-sdk");
-  const cliTarball = pack("packages/easycompute");
+  const cliTarball = pack("packages/easyserver");
   const vastTarball = pack("plugins/vastai");
   const intelionTarball = pack("plugins/intelion");
   const exampleTarball = packExamplePlugin();
@@ -30,36 +30,36 @@ try {
 
   await verifyCoreOnlyInstall(sdkTarball, cliTarball);
   await verifyPluginInstall({
-    packageName: "@easycompute/plugin-vastai",
+    packageName: "@easyai101/easyserver-plugin-vastai",
     providerId: "vastai",
     pluginTarball: vastTarball,
-    absentPackageName: "@easycompute/plugin-intelion",
+    absentPackageName: "@easyai101/easyserver-plugin-intelion",
     sdkTarball,
     cliTarball,
   });
   await verifyPluginInstall({
-    packageName: "@easycompute/plugin-intelion",
+    packageName: "@easyai101/easyserver-plugin-intelion",
     providerId: "intelion",
     pluginTarball: intelionTarball,
-    absentPackageName: "@easycompute/plugin-vastai",
+    absentPackageName: "@easyai101/easyserver-plugin-vastai",
     sdkTarball,
     cliTarball,
   });
   await verifyPluginInstall({
-    packageName: "@easycompute/example-provider",
+    packageName: "@easyai101/easyserver-example-provider",
     pluginId: "example.provider-plugin",
     providerId: "example",
     pluginTarball: exampleTarball,
-    absentPackageName: "@easycompute/plugin-vastai",
+    absentPackageName: "@easyai101/easyserver-plugin-vastai",
     sdkTarball,
     cliTarball,
   });
   await verifyPluginInstall({
-    packageName: "@easycompute/external-ts-provider",
+    packageName: "@easyai101/easyserver-external-ts-provider",
     pluginId: "external.ts-provider",
     providerId: "external-ts",
     pluginTarball: externalTsPluginTarball,
-    absentPackageName: "@easycompute/plugin-vastai",
+    absentPackageName: "@easyai101/easyserver-plugin-vastai",
     sdkTarball,
     cliTarball,
   });
@@ -150,7 +150,7 @@ async function verifyExternalSdkConsumer(sdkTarball) {
     join(consumer, "package.json"),
     `${JSON.stringify(
       {
-        name: "@easycompute/external-ts-provider",
+        name: "@easyai101/easyserver-external-ts-provider",
         version: "0.1.0",
         private: true,
         type: "module",
@@ -160,7 +160,7 @@ async function verifyExternalSdkConsumer(sdkTarball) {
           node: ">=24.18.1 <25",
         },
         dependencies: {
-          "@easycompute/plugin-sdk": "^0.1.0",
+          "@easyai101/easyserver-plugin-sdk": "^0.1.0",
         },
       },
       null,
@@ -201,7 +201,7 @@ import {
   type ProviderAdapter,
   type ProviderOperationContext,
   type ProviderPlugin,
-} from "@easycompute/plugin-sdk";
+} from "@easyai101/easyserver-plugin-sdk";
 
 class ExternalProvider implements ProviderAdapter {
   readonly providerId = "external-ts";
@@ -243,7 +243,7 @@ const plugin: ProviderPlugin = {
     displayName: "External TypeScript Provider",
     version: "0.1.0",
     compatibility: {
-      easycompute: "^0.1.0",
+      easyserver: "^0.1.0",
       pluginSdk: "^0.1.0",
     },
     provider: {
@@ -298,12 +298,12 @@ export default plugin;
   );
   const installed = JSON.parse(
     runNpm(
-      ["ls", "@easycompute/plugin-sdk", "--depth=0", "--json"],
+      ["ls", "@easyai101/easyserver-plugin-sdk", "--depth=0", "--json"],
       consumer,
     ).stdout,
   );
   assert.equal(
-    installed.dependencies?.["@easycompute/plugin-sdk"]?.version,
+    installed.dependencies?.["@easyai101/easyserver-plugin-sdk"]?.version,
     "0.1.0",
     "external consumer must resolve the packed SDK version",
   );
@@ -339,8 +339,8 @@ async function verifyCoreOnlyInstall(sdkTarball, cliTarball) {
   const prefix = await createPrefix("core");
   installGlobally(prefix, sdkTarball, cliTarball);
 
-  assertPackageAbsent(prefix, "@easycompute/plugin-vastai");
-  assertPackageAbsent(prefix, "@easycompute/plugin-intelion");
+  assertPackageAbsent(prefix, "@easyai101/easyserver-plugin-vastai");
+  assertPackageAbsent(prefix, "@easyai101/easyserver-plugin-intelion");
 
   const result = runCli(prefix, "plugins", "list");
   assert.equal(result.stdout, "No provider plugins configured.\n");
@@ -391,8 +391,8 @@ function installGlobally(prefix, ...tarballs) {
 function runCli(prefix, ...args) {
   const cliPath = join(
     globalNodeModules(prefix),
-    "@easycompute",
-    "cli",
+    "@easyai101",
+    "easyserver",
     "dist",
     "cli.js",
   );
@@ -402,9 +402,9 @@ function runCli(prefix, ...args) {
 function runInstalledExecutable(prefix, ...args) {
   const executable =
     process.platform === "win32"
-      ? join(prefix, "easycompute.cmd")
-      : join(prefix, "bin", "easycompute");
-  assert.equal(existsSync(executable), true, "npm must expose the easycompute executable");
+      ? join(prefix, "easyserver.cmd")
+      : join(prefix, "bin", "easyserver");
+  assert.equal(existsSync(executable), true, "npm must expose the easyserver executable");
 
   if (process.platform === "win32") {
     const command = `"${executable}" ${args.join(" ")}`;
@@ -423,8 +423,8 @@ function runInstalledExecutable(prefix, ...args) {
 function cliEnvironment(prefix) {
   return {
     ...process.env,
-    EASYCOMPUTE_STATE_FILE: join(prefix, "easycompute-state.json"),
-    EASYCOMPUTE_DAEMON_FILE: join(prefix, "easycompute-daemon.json"),
+    EASYSERVER_STATE_FILE: join(prefix, "easyserver-state.json"),
+    EASYSERVER_DAEMON_FILE: join(prefix, "easyserver-daemon.json"),
   };
 }
 

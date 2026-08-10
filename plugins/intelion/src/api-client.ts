@@ -1,7 +1,7 @@
 import {
   normalizedError,
   type ProviderOperationContext,
-} from "@easycompute/plugin-sdk";
+} from "@easyai101/easyserver-plugin-sdk";
 
 export const INTELION_API_TOKEN_CREDENTIAL = "api-token";
 

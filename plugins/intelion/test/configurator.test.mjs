@@ -307,8 +307,8 @@ test("server configurator lists registered Intelion SSH keys through the provide
         JSON.stringify([
           {
             id: 246,
-            name: "easycompute@fixture",
-            public_key: "ssh-ed25519 AAAAC3fixture easycompute@fixture",
+            name: "easyserver@fixture",
+            public_key: "ssh-ed25519 AAAAC3fixture easyserver@fixture",
             key_type: "ssh-ed25519",
             fingerprint_sha256: "SHA256:fixture",
             created_at: "2026-08-10T08:00:00Z",
@@ -345,7 +345,7 @@ test("server configurator lists registered Intelion SSH keys through the provide
   assert.deepEqual(JSON.parse(output), [
     {
       id: 246,
-      name: "easycompute@fixture",
+      name: "easyserver@fixture",
       keyType: "ssh-ed25519",
       fingerprintSha256: "SHA256:fixture",
     },

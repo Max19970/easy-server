@@ -7,7 +7,7 @@ import {
   type ProviderInstanceSnapshot,
   type ProviderOperationContext,
   type ProviderPlugin,
-} from "@easycompute/plugin-sdk";
+} from "@easyai101/easyserver-plugin-sdk";
 import {
   IntelionApiClient,
   INTELION_API_TOKEN_CREDENTIAL,
@@ -55,7 +55,7 @@ export function createIntelionProviderPlugin(
       displayName: "Intelion.cloud",
       version: "0.1.0",
       compatibility: {
-        easycompute: "^0.1.0",
+        easyserver: "^0.1.0",
         pluginSdk: "^0.1.0",
       },
       provider: {

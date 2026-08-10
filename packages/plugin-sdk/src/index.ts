@@ -43,7 +43,7 @@ export interface ProviderIdentity {
 }
 
 export interface PluginCompatibility {
-  readonly easycompute: string;
+  readonly easyserver: string;
   readonly pluginSdk: string;
 }
 
@@ -305,7 +305,7 @@ export const NORMALIZED_ERROR_CODES = [
 export type NormalizedErrorCode = (typeof NORMALIZED_ERROR_CODES)[number];
 
 export interface NormalizedError {
-  readonly kind: "easycompute-error";
+  readonly kind: "easyserver-error";
   readonly code: NormalizedErrorCode;
   readonly message: string;
   readonly cause?: unknown;
@@ -326,7 +326,7 @@ export function hostTrustRequiredError(
   fingerprint: string,
 ): HostTrustRequiredError {
   return {
-    kind: "easycompute-error",
+    kind: "easyserver-error",
     code: "host-trust-required",
     message: `SSH host trust is required for ${host}:${port}`,
     host,
@@ -359,12 +359,12 @@ export function normalizedError(
   }
 
   return cause === undefined
-    ? { kind: "easycompute-error", code, message }
-    : { kind: "easycompute-error", code, message, cause };
+    ? { kind: "easyserver-error", code, message }
+    : { kind: "easyserver-error", code, message, cause };
 }
 
 export function isNormalizedError(value: unknown): value is NormalizedError {
-  if (!isRecord(value) || value.kind !== "easycompute-error") {
+  if (!isRecord(value) || value.kind !== "easyserver-error") {
     return false;
   }
 
@@ -399,9 +399,9 @@ export function parsePluginManifest(value: unknown): PluginManifest {
     ),
     version: expectVersion(manifest.version, "plugin manifest.version"),
     compatibility: {
-      easycompute: expectNonEmptyString(
-        compatibility.easycompute,
-        "plugin manifest.compatibility.easycompute",
+      easyserver: expectNonEmptyString(
+        compatibility.easyserver,
+        "plugin manifest.compatibility.easyserver",
       ),
       pluginSdk: expectNonEmptyString(
         compatibility.pluginSdk,

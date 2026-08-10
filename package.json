@@ -1,5 +1,5 @@
 {
-  "name": "@easycompute/workspace",
+  "name": "@easyai101/easyserver-workspace",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
@@ -18,11 +18,11 @@
     "test": "npm run build && npm run test --workspaces --if-present",
     "prepublishOnly": "node -e \"console.error('Workspace root is private and must not be published.'); process.exit(1)\"",
     "verify:packaged-install": "node scripts/verify-packaged-install.mjs",
-    "verify:os-keyring": "npm run build --workspace=@easycompute/cli && node scripts/verify-os-keyring.mjs",
-    "verify:security": "npm run build && node --test packages/easycompute/test/secret-store.test.mjs packages/easycompute/test/plugin-credentials.test.mjs packages/easycompute/test/state-store.test.mjs packages/easycompute/test/local-daemon.test.mjs packages/easycompute/test/ssh-access-adapter.test.mjs packages/easycompute/test/connection-gateway.test.mjs && node --test plugins/vastai/test/provider.test.mjs plugins/intelion/test/provider.test.mjs plugins/intelion/test/access.test.mjs",
+    "verify:os-keyring": "npm run build --workspace=@easyai101/easyserver && node scripts/verify-os-keyring.mjs",
+    "verify:security": "npm run build && node --test packages/easyserver/test/secret-store.test.mjs packages/easyserver/test/plugin-credentials.test.mjs packages/easyserver/test/state-store.test.mjs packages/easyserver/test/local-daemon.test.mjs packages/easyserver/test/ssh-access-adapter.test.mjs packages/easyserver/test/connection-gateway.test.mjs && node --test plugins/vastai/test/provider.test.mjs plugins/intelion/test/provider.test.mjs plugins/intelion/test/access.test.mjs",
     "release:artifacts": "node scripts/build-release-artifacts.mjs",
     "release:check": "npm run typecheck && npm test && npm pack --workspaces --dry-run && npm run verify:packaged-install && npm run release:artifacts",
-    "easycompute": "npm run start --workspace=@easycompute/cli --"
+    "easyserver": "npm run start --workspace=@easyai101/easyserver --"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
