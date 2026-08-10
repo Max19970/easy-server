@@ -25,6 +25,7 @@ try {
   const cliTarball = pack("packages/easycompute");
   const vastTarball = pack("plugins/vastai");
   const intelionTarball = pack("plugins/intelion");
+  const exampleTarball = packExamplePlugin();
 
   await verifyCoreOnlyInstall(sdkTarball, cliTarball);
   await verifyPluginInstall({
@@ -39,6 +40,15 @@ try {
     packageName: "@easycompute/plugin-intelion",
     providerId: "intelion",
     pluginTarball: intelionTarball,
+    absentPackageName: "@easycompute/plugin-vastai",
+    sdkTarball,
+    cliTarball,
+  });
+  await verifyPluginInstall({
+    packageName: "@easycompute/example-provider",
+    pluginId: "example.provider-plugin",
+    providerId: "example",
+    pluginTarball: exampleTarball,
     absentPackageName: "@easycompute/plugin-vastai",
     sdkTarball,
     cliTarball,
@@ -79,6 +89,29 @@ function pack(packageDirectory) {
   return join(artifactDirectory, packed[0].filename);
 }
 
+function packExamplePlugin() {
+  const packageDirectory = "examples/minimal-provider-plugin";
+  const result = runNpm(
+    [
+      "pack",
+      resolve(repositoryRoot, packageDirectory),
+      "--json",
+      "--pack-destination",
+      artifactDirectory,
+    ],
+    repositoryRoot,
+  );
+  const packed = JSON.parse(result.stdout);
+  assert.equal(packed.length, 1, "expected one minimal example tarball");
+  const paths = packed[0].files.map((file) => file.path);
+  assert.deepEqual(
+    [...paths].sort(),
+    ["LICENSE", "README.md", "index.mjs", "package.json"],
+    "minimal example tarball must contain only the documented scaffold",
+  );
+  return join(artifactDirectory, packed[0].filename);
+}
+
 function assertTarballFiles(packResult, packageDirectory) {
   const paths = packResult.files.map((file) => file.path);
   for (const required of ["LICENSE", "README.md", "package.json"]) {
@@ -115,6 +148,7 @@ async function verifyCoreOnlyInstall(sdkTarball, cliTarball) {
 async function verifyPluginInstall({
   packageName,
   providerId,
+  pluginId = providerId,
   pluginTarball,
   absentPackageName,
   sdkTarball,
@@ -130,10 +164,10 @@ async function verifyPluginInstall({
   assertPackageAbsent(prefix, absentPackageName);
 
   const add = runCli(prefix, "plugins", "add", packageName);
-  assert.equal(add.stdout, `Added ${providerId}\n`);
+  assert.equal(add.stdout, `Added ${pluginId}\n`);
 
   const list = runCli(prefix, "plugins", "list");
-  assert.match(list.stdout, new RegExp(`^loaded\\s+${providerId} provider=${providerId}$`, "m"));
+  assert.match(list.stdout, new RegExp(`^loaded\\s+${pluginId} provider=${providerId}$`, "m"));
 
   runCli(prefix, "plugins", "disable", packageName);
   assert.equal(runCli(prefix, "--version").stdout, "0.1.0\n");

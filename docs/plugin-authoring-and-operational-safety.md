@@ -16,7 +16,21 @@ features[]        Provider-specific product functionality
 accessAdapters[]  Provider-specific transport implementations
 ```
 
-The plugin should depend on `@easycompute/plugin-sdk`, not on EasyCompute core internals.
+The plugin should depend on `@easycompute/plugin-sdk`, not on EasyCompute core internals. A minimal npm package starts with the SDK as a normal runtime dependency:
+
+```json
+{
+  "name": "@example/easycompute-provider",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "dependencies": {
+    "@easycompute/plugin-sdk": "^0.1.0"
+  }
+}
+```
+
+The repository includes a tested third-party-style scaffold at [`examples/minimal-provider-plugin`](../examples/minimal-provider-plugin). Its package is deliberately marked `private` only to prevent accidental publication of the example name; choose your own package name and remove that flag when publishing a real plugin.
 
 A minimal plugin looks like this:
 
@@ -71,10 +85,14 @@ The manifest Provider ID and `provider.providerId` must agree. IDs are stable AP
 
 ## 2. Installing, enabling and disabling
 
-EasyCompute does not scan arbitrary installed packages. A plugin is configured explicitly by module/package specifier or local module path.
+EasyCompute does not scan arbitrary installed packages. Installing a package and registering it with EasyCompute are intentionally separate actions: installation puts the module in the CLI's module-resolution environment; `plugins add` validates and persists the plugin registration.
+
+For a global CLI installation, install the plugin globally as well:
 
 ```powershell
-# Add a package-based plugin.
+npm install --global @example/easycompute-provider
+
+# Register the installed package with EasyCompute.
 easycompute plugins add @example/easycompute-provider
 
 # Or add a built local module.
@@ -136,6 +154,8 @@ Example:
 Do not derive per-instance actions in EasyCompute core from the normalized state. The Provider Plugin owns that decision because Providers differ in transitional states, policy and allowed operations.
 
 Always preserve the Provider's raw state next to the normalized state. If the Provider introduces a state the current plugin does not understand, report normalized `state: "unknown"` and preserve the raw value rather than inventing a mapping.
+
+`providerExternalId` must be the Provider's stable identity for the same remote resource across repeated inventory reads. Do not derive it from display names, list positions or mutable metadata. EasyCompute reconciles refreshed Provider inventory against that identity so local instance identity can survive state changes and process restarts. A complete successful provider refresh may remove a binding that is genuinely absent; an uncertain mutation should instead be followed by reconciliation rather than inventing a new identity or assuming deletion.
 
 ## 4. Provider-specific functionality belongs in Provider Features
 
@@ -416,7 +436,22 @@ For the `0.x` line, remember that caret ranges are intentionally narrow: `^0.1.0
 
 Do not depend on undocumented core internals even when the plugin currently runs in-process.
 
-## 13. Author checklist
+## 13. Validate the packaged plugin
+
+Validate the same artifact users will install, not only a source-tree import. At minimum:
+
+```powershell
+npm pack
+npm install --global .\your-plugin-0.1.0.tgz
+easycompute plugins add @example/easycompute-provider
+easycompute plugins list
+```
+
+The EasyCompute release gate performs this style of external-layout verification for the repository's minimal example: it packs the SDK, CLI and [`examples/minimal-provider-plugin`](../examples/minimal-provider-plugin), installs them into an isolated global npm prefix outside the monorepo, then proves the example loads through `plugins add` without any core/internal import. Use that example as an executable reference for the package/manifest shape described above.
+
+For richer Provider behavior, adapt the same public seams and use the SDK's runtime validators/contract tests rather than importing host internals. A plugin should remain loadable when developed in a repository that contains no EasyCompute source tree at all.
+
+## 14. Author checklist
 
 Before considering a Provider Plugin usable:
 
