@@ -282,6 +282,30 @@ test("Vast lifecycle actions follow provider raw-state semantics", async () => {
   }
 });
 
+test("Vast treats provider-confirmed stopped allocation as restartable after container exit", async () => {
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch() {
+      return json({
+        instances: {
+          id: 42,
+          actual_status: "exited",
+          intended_status: "stopped",
+          cur_state: "stopped",
+          label: null,
+        },
+      });
+    },
+  });
+
+  assert.deepEqual(await plugin.provider.getInstance("42", context()), {
+    providerExternalId: "42",
+    state: "stopped",
+    rawState: "exited",
+    availableActions: ["instance.start", "instance.destroy"],
+  });
+});
+
 test("Vast exposes a generic SSH access method only when the instance is ready", async () => {
   let status = "running";
   const plugin = createVastProviderPlugin({
@@ -313,6 +337,27 @@ test("Vast exposes a generic SSH access method only when the instance is ready",
   ]);
 
   status = "loading";
+  assert.deepEqual(await plugin.provider.getAccessMethods("42", context()), []);
+});
+
+test("Vast does not expose SSH after provider lifecycle is already stopped", async () => {
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch() {
+      return json({
+        instances: {
+          id: 42,
+          actual_status: "running",
+          intended_status: "stopped",
+          cur_state: "stopped",
+          label: null,
+          ssh_host: "ssh42.vast.test",
+          ssh_port: 10422,
+        },
+      });
+    },
+  });
+
   assert.deepEqual(await plugin.provider.getAccessMethods("42", context()), []);
 });
 

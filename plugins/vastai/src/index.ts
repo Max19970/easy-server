@@ -149,7 +149,7 @@ class VastProviderAdapter implements ProviderAdapter {
         `Vast.ai returned instance ${snapshot.providerExternalId} for requested ${providerExternalId}`,
       );
     }
-    if (snapshot.rawState !== "running") {
+    if (snapshot.state !== "running") {
       return [];
     }
 
@@ -250,6 +250,22 @@ function parseInstance(value: unknown): ProviderInstanceSnapshot {
       throw new TypeError("Vast.ai instance.actual_status must be a string or null");
     }
     if (
+      instance.intended_status !== undefined &&
+      instance.intended_status !== null &&
+      typeof instance.intended_status !== "string"
+    ) {
+      throw new TypeError(
+        "Vast.ai instance.intended_status must be a string or null",
+      );
+    }
+    if (
+      instance.cur_state !== undefined &&
+      instance.cur_state !== null &&
+      typeof instance.cur_state !== "string"
+    ) {
+      throw new TypeError("Vast.ai instance.cur_state must be a string or null");
+    }
+    if (
       instance.label !== undefined &&
       instance.label !== null &&
       typeof instance.label !== "string"
@@ -258,15 +274,19 @@ function parseInstance(value: unknown): ProviderInstanceSnapshot {
     }
 
     const rawState = instance.actual_status as string | null;
+    const lifecycleState =
+      instance.intended_status === "stopped" && instance.cur_state === "stopped"
+        ? "stopped"
+        : rawState;
     const name =
       typeof instance.label === "string" && instance.label.trim().length > 0
         ? instance.label
         : undefined;
     return {
       providerExternalId: String(instance.id),
-      state: normalizeInstanceState(rawState),
+      state: normalizeInstanceState(lifecycleState),
       rawState,
-      availableActions: availableActions(rawState),
+      availableActions: availableActions(lifecycleState),
       ...(name === undefined ? {} : { name }),
     };
   } catch (error) {
