@@ -245,6 +245,18 @@ unknown-provider-error
 
 Use a definite code only when the Provider response makes that conclusion definite. A 5xx or post-dispatch transport failure for a mutation is commonly `outcome-unknown`, while the same transport failure for a read is normally `provider-unavailable`.
 
+The normalized `message` may retain a concise provider-originated reason when the plugin can recognize and sanitize it safely. First-party HTTP plugins establish the intended boundary:
+
+- inspect only bounded error payloads, not arbitrary unbounded bodies;
+- accept only explicitly recognized JSON reason fields/shapes;
+- bound the final user-facing detail independently of the input-body bound;
+- reject HTML, malformed payloads and credential-like material rather than trying to render it;
+- compare against the credential resolved for the request so echoed API keys/tokens cannot enter the message;
+- keep the normalized EasyCompute error code primary and retain the stable generic message when safe detail is unavailable;
+- never attach raw response bodies, HTTP headers or resolved secret-bearing causes for normal CLI rendering.
+
+Provider-specific payload parsing remains inside the provider plugin. Do not add provider branches to the CLI simply to interpret a provider's error schema.
+
 A failure from one plugin must remain local to that operation. Do not mutate process-global registries, other Providers or another plugin's state as error recovery.
 
 ## 7. Credentials and Secret References
