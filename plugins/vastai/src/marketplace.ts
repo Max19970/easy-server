@@ -99,7 +99,12 @@ class MarketplaceFeature implements VastMarketplaceFeature {
       buildOfferSearchRequest(search),
       context,
     );
-    return parseOffers(body);
+    const offers = parseOffers(body);
+    return search.maxHourlyPrice === undefined
+      ? offers
+      : offers.filter(
+          (offer) => offer.hourlyPriceUsd <= search.maxHourlyPrice!,
+        );
   }
 
   async rentOffer(

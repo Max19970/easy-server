@@ -375,6 +375,17 @@ test("marketplace feature searches Vast offers with plugin-owned filters", async
             geolocation: "FI",
             rentable: false,
           },
+          {
+            id: 903,
+            machine_id: 79,
+            gpu_name: "RTX 4090",
+            num_gpus: 2,
+            gpu_ram: 24576,
+            dph_total: 0.51,
+            reliability: 0.998,
+            geolocation: "US",
+            rentable: true,
+          },
         ],
       });
     },
