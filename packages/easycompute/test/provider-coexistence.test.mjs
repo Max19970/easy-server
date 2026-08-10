@@ -76,6 +76,7 @@ function createVastFixture() {
               dph_total: 0.42,
               reliability: 0.997,
               geolocation: "DE",
+              rentable: true,
             },
           ],
         });
