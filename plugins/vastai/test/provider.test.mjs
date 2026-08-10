@@ -362,6 +362,18 @@ test("marketplace feature searches Vast offers with plugin-owned filters", async
             dph_total: 0.42,
             reliability: 0.997,
             geolocation: "DE",
+            rentable: true,
+          },
+          {
+            id: 902,
+            machine_id: 78,
+            gpu_name: "RTX 4090",
+            num_gpus: 2,
+            gpu_ram: 24576,
+            dph_total: 0.39,
+            reliability: 0.999,
+            geolocation: "FI",
+            rentable: false,
           },
         ],
       });
@@ -394,6 +406,7 @@ test("marketplace feature searches Vast offers with plugin-owned filters", async
     dph_total: { lte: 0.5 },
     reliability: { gte: 0.99 },
     verified: { eq: true },
+    rentable: { eq: true },
     limit: 7,
   });
   assert.deepEqual(offers, [
@@ -567,6 +580,7 @@ test("marketplace feature exposes search through the provider-scoped CLI seam", 
   );
 
   assert.deepEqual(requestBody, {
+    rentable: { eq: true },
     gpu_name: { eq: "RTX 5090" },
     dph_total: { lte: 1.25 },
     verified: { eq: true },

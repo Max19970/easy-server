@@ -310,7 +310,9 @@ function parseSearchArgs(args: readonly string[]): VastOfferSearch {
 }
 
 function buildOfferSearchRequest(search: VastOfferSearch): Record<string, unknown> {
-  const request: Record<string, unknown> = {};
+  const request: Record<string, unknown> = {
+    rentable: { eq: true },
+  };
 
   if (search.gpuName !== undefined) {
     const gpuName = search.gpuName.trim();
@@ -360,7 +362,14 @@ function parseOffers(value: unknown): readonly VastOffer[] {
     if (!Array.isArray(response.offers)) {
       throw new TypeError("Vast.ai offer search response.offers must be an array");
     }
-    return response.offers.map(parseOffer);
+    const offers: VastOffer[] = [];
+    for (const value of response.offers) {
+      const offer = expectRecord(value, "Vast.ai offer");
+      if (expectBoolean(offer.rentable, "Vast.ai offer.rentable")) {
+        offers.push(parseOffer(offer));
+      }
+    }
+    return offers;
   } catch (error) {
     if (isNormalizedError(error)) {
       throw error;
@@ -408,6 +417,13 @@ function expectRecord(value: unknown, path: string): Record<string, unknown> {
 function expectString(value: unknown, path: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError(`${path} must be a non-empty string`);
+  }
+  return value;
+}
+
+function expectBoolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${path} must be a boolean`);
   }
   return value;
 }
