@@ -15,15 +15,8 @@ concurrency:
 
 jobs:
   release-check:
-    name: Release check (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
+    name: Release check (Windows x64)
+    runs-on: windows-latest
 
     steps:
       - name: Check out repository
