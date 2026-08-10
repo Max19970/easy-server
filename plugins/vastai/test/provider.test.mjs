@@ -568,6 +568,48 @@ test("marketplace feature searches Vast offers with plugin-owned filters", async
   ]);
 });
 
+test("marketplace accepts rentable offers without geolocation", async () => {
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch() {
+      return json({
+        offers: [
+          {
+            id: 901,
+            machine_id: 77,
+            gpu_name: "RTX 4090",
+            num_gpus: 1,
+            gpu_ram: 24576,
+            dph_total: 0.21,
+            reliability: 0.997,
+            geolocation: "DE",
+            rentable: true,
+          },
+          {
+            id: 902,
+            machine_id: 78,
+            gpu_name: "RTX 4090",
+            num_gpus: 1,
+            gpu_ram: 24576,
+            dph_total: 0.22,
+            reliability: 0.996,
+            geolocation: null,
+            rentable: true,
+          },
+        ],
+      });
+    },
+  });
+
+  const marketplace = plugin.features.find((feature) => feature.id === "marketplace");
+  assert.ok(marketplace);
+
+  const offers = await marketplace.searchOffers({ limit: 2 }, context());
+  assert.equal(offers.length, 2);
+  assert.equal(offers[0].location, "DE");
+  assert.equal("location" in offers[1], false);
+});
+
 test("marketplace rental can select an offer returned by the rentable search contract", async () => {
   const calls = [];
   const plugin = createVastProviderPlugin({
