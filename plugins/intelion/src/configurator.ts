@@ -659,8 +659,10 @@ function expectRecord(value: unknown, path: string): Record<string, unknown> {
 }
 
 function positiveIntegerValue(value: unknown, path: string): number {
-  if (!Number.isInteger(value) || (value as number) < 1) {
-    throw new TypeError(`${path} must be a positive integer`);
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new TypeError(
+      `${path} must be a positive integer within JavaScript's safe range`,
+    );
   }
   return value as number;
 }
@@ -721,8 +723,10 @@ function optionalNullableNonNegativeInteger(
 }
 
 function positiveInteger(value: number, field: string): number {
-  if (!Number.isInteger(value) || value < 1) {
-    throw new TypeError(`Intelion ${field} must be a positive integer`);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new TypeError(
+      `Intelion ${field} must be a positive integer within JavaScript's safe range`,
+    );
   }
   return value;
 }

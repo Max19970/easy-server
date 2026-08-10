@@ -102,6 +102,47 @@ test("server creation reports outcome-unknown after dispatch transport failure",
   );
 });
 
+test("server creation CLI rejects lossy SSH-key IDs before mutation dispatch", async () => {
+  let dispatched = 0;
+  const plugin = createIntelionProviderPlugin({
+    baseUrl: "https://fixture.intelion.test",
+    async fetch() {
+      throw new Error("unsafe SSH-key input must not reach Intelion");
+    },
+  });
+  const create = plugin.features[0].cli?.commands.find(
+    (command) => command.name === "create",
+  );
+  assert.ok(create);
+
+  await assert.rejects(
+    create.run(
+      [
+        "--name",
+        "cli-box",
+        "--flavor",
+        "12",
+        "--disk",
+        "64",
+        "--os",
+        "7",
+        "--ssh-key",
+        "9007199254740993",
+      ],
+      {
+        ...context(),
+        markMutationDispatched() {
+          dispatched += 1;
+        },
+        write() {},
+        writeError() {},
+      },
+    ),
+    /sshKeyIds entry must be a positive integer/,
+  );
+  assert.equal(dispatched, 0);
+});
+
 test("server creation CLI requests provider inventory reconciliation", async () => {
   const plugin = createIntelionProviderPlugin({
     baseUrl: "https://fixture.intelion.test",

@@ -77,6 +77,22 @@ test("server configurator rejects invalid provider-specific creation values", ()
     () => feature.validateConfiguration({ ...valid, sshKeyIds: [0] }),
     /sshKeyIds entry must be a positive integer/,
   );
+  assert.throws(
+    () =>
+      feature.validateConfiguration({
+        ...valid,
+        sshKeyIds: [Number.MAX_SAFE_INTEGER + 1],
+      }),
+    /sshKeyIds entry must be a positive integer/,
+  );
+  assert.throws(
+    () =>
+      feature.validateConfiguration({
+        ...valid,
+        flavorId: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    /flavorId must be a positive integer/,
+  );
 });
 
 test("server configurator lists Intelion OS images through the provider-scoped CLI seam", async () => {
@@ -336,6 +352,40 @@ test("server configurator lists registered Intelion SSH keys through the provide
   ]);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].pathname, "/api/v2/ssh-keys/");
+});
+
+test("server configurator rejects lossy SSH-key IDs returned by Intelion", async () => {
+  const plugin = createIntelionProviderPlugin({
+    baseUrl: "https://fixture.intelion.test",
+    async fetch() {
+      return new Response(
+        '[{"id":9007199254740993,"name":"unsafe","public_key":"ssh-ed25519 AAAAC3fixture","key_type":"ssh-ed25519","fingerprint_sha256":"SHA256:fixture"}]',
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+  const feature = plugin.features.find(
+    (candidate) => candidate.id === "server-configurator",
+  );
+  assert.ok(feature);
+  const command = feature.cli?.commands.find(
+    (candidate) => candidate.name === "ssh-keys",
+  );
+  assert.ok(command);
+
+  await assert.rejects(
+    () =>
+      command.run([], {
+        signal: new AbortController().signal,
+        async resolveCredential() {
+          return "fixture-token";
+        },
+        markMutationDispatched() {},
+        write() {},
+        writeError() {},
+      }),
+    (error) => error?.code === "plugin-failure",
+  );
 });
 
 test("server configurator rejects malformed Intelion flavor catalog payloads", async () => {
