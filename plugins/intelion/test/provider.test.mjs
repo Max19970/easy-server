@@ -253,6 +253,35 @@ test("Intelion lifecycle mutations use the documented actions endpoint", async (
   );
 });
 
+test("Intelion preserves safe provider rejection reasons without exposing credentials", async () => {
+  let body = { detail: "Server cannot start while migration is active" };
+  const plugin = createIntelionProviderPlugin({
+    baseUrl: "https://fixture.intelion.test",
+    async fetch() {
+      return json(body, 409);
+    },
+  });
+
+  await assert.rejects(
+    plugin.provider.performPowerAction("42", "instance.start", context()),
+    (error) =>
+      isNormalizedError(error) &&
+      error.code === "conflict" &&
+      error.message ===
+        "Intelion rejected the operation as conflicting: Server cannot start while migration is active",
+  );
+
+  body = { detail: "Authorization: Token fixture-token" };
+  await assert.rejects(
+    plugin.provider.performPowerAction("42", "instance.start", context()),
+    (error) =>
+      isNormalizedError(error) &&
+      error.code === "conflict" &&
+      error.message === "Intelion rejected the operation as conflicting" &&
+      !error.message.includes("fixture-token"),
+  );
+});
+
 test("Intelion lifecycle keeps definite conflicts separate from unknown outcomes", async () => {
   let status = 404;
   const plugin = createIntelionProviderPlugin({

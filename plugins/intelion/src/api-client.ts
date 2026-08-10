@@ -131,7 +131,13 @@ export class IntelionApiClient {
       );
     }
     if (response.status === 409) {
-      throw normalizedError("conflict", "Intelion rejected the operation as conflicting");
+      throw normalizedError(
+        "conflict",
+        appendProviderDetail(
+          "Intelion rejected the operation as conflicting",
+          await readSafeIntelionErrorDetail(response, token),
+        ),
+      );
     }
     if (response.status === 429) {
       throw normalizedError("rate-limited", "Intelion rate limit exceeded");
@@ -147,7 +153,10 @@ export class IntelionApiClient {
     if (!response.ok) {
       throw normalizedError(
         "unknown-provider-error",
-        `Intelion returned HTTP ${response.status}`,
+        appendProviderDetail(
+          `Intelion returned HTTP ${response.status}`,
+          await readSafeIntelionErrorDetail(response, token),
+        ),
       );
     }
 
@@ -163,6 +172,129 @@ export class IntelionApiClient {
       );
     }
   }
+}
+
+const MAX_PROVIDER_ERROR_BODY_BYTES = 4_096;
+const MAX_PROVIDER_ERROR_DETAIL_LENGTH = 240;
+
+async function readSafeIntelionErrorDetail(
+  response: Response,
+  token: string,
+): Promise<string | undefined> {
+  const payload = await readBoundedJsonObject(response);
+  if (payload === undefined) {
+    return undefined;
+  }
+
+  for (const value of [payload.detail, payload.message, payload.error]) {
+    const detail = safeDiagnosticText(value, token);
+    if (detail !== undefined) {
+      return detail;
+    }
+  }
+
+  const nonFieldErrors = payload.non_field_errors;
+  if (Array.isArray(nonFieldErrors)) {
+    for (const value of nonFieldErrors) {
+      const detail = safeDiagnosticText(value, token);
+      if (detail !== undefined) {
+        return detail;
+      }
+    }
+  }
+
+  for (const [field, value] of Object.entries(payload)) {
+    if (!/^[a-zA-Z0-9_.-]{1,64}$/u.test(field) || !Array.isArray(value)) {
+      continue;
+    }
+    for (const item of value) {
+      const detail = safeDiagnosticText(item, token);
+      if (detail !== undefined) {
+        return `${field}: ${detail}`;
+      }
+    }
+  }
+  return undefined;
+}
+
+async function readBoundedJsonObject(
+  response: Response,
+): Promise<Record<string, unknown> | undefined> {
+  const contentType = response.headers.get("content-type")?.toLowerCase();
+  if (contentType === undefined || !contentType.includes("application/json")) {
+    return undefined;
+  }
+
+  const reader = response.body?.getReader();
+  if (reader === undefined) {
+    return undefined;
+  }
+
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      size += value.byteLength;
+      if (size > MAX_PROVIDER_ERROR_BODY_BYTES) {
+        await reader.cancel();
+        return undefined;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return undefined;
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  try {
+    const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return undefined;
+    }
+    return value as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeDiagnosticText(
+  value: unknown,
+  credential: string,
+): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const text = value.replace(/\s+/gu, " ").trim();
+  if (
+    text.length === 0 ||
+    text.includes(credential) ||
+    /<\/?[a-z][^>]*>/iu.test(text) ||
+    /-----BEGIN [^-]*PRIVATE KEY-----/iu.test(text) ||
+    /\b(?:authorization|bearer|api[_ -]?key|token|password|secret|private[_ -]?key)\b\s*[:=]\s*\S+/iu.test(
+      text,
+    )
+  ) {
+    return undefined;
+  }
+  return text.length <= MAX_PROVIDER_ERROR_DETAIL_LENGTH
+    ? text
+    : `${text.slice(0, MAX_PROVIDER_ERROR_DETAIL_LENGTH - 3)}...`;
+}
+
+function appendProviderDetail(base: string, detail: string | undefined): string {
+  return detail === undefined ? base : `${base}: ${detail}`;
 }
 
 async function requireApiToken(
