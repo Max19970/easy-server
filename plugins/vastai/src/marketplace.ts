@@ -26,7 +26,7 @@ export interface VastOffer {
   readonly gpuRamMb: number;
   readonly hourlyPriceUsd: number;
   readonly reliability: number;
-  readonly location: string;
+  readonly location?: string;
 }
 
 export type VastRuntype =
@@ -389,6 +389,7 @@ function parseOffers(value: unknown): readonly VastOffer[] {
 
 function parseOffer(value: unknown): VastOffer {
   const offer = expectRecord(value, "Vast.ai offer");
+  const location = optionalString(offer.geolocation, "Vast.ai offer.geolocation");
   return {
     id: String(expectInteger(offer.id, "Vast.ai offer.id", 0)),
     machineId: String(
@@ -408,7 +409,7 @@ function parseOffer(value: unknown): VastOffer {
       0,
       1,
     ),
-    location: expectString(offer.geolocation, "Vast.ai offer.geolocation"),
+    ...(location === undefined ? {} : { location }),
   };
 }
 
@@ -424,6 +425,10 @@ function expectString(value: unknown, path: string): string {
     throw new TypeError(`${path} must be a non-empty string`);
   }
   return value;
+}
+
+function optionalString(value: unknown, path: string): string | undefined {
+  return value === undefined || value === null ? undefined : expectString(value, path);
 }
 
 function expectBoolean(value: unknown, path: string): boolean {
