@@ -7,5 +7,6 @@ Documentation kept here must be useful to at least one external audience: EasyCo
 Current public guides:
 
 - [Provider Plugin authoring and operational safety](plugin-authoring-and-operational-safety.md)
+- [Versioning and compatibility](versioning-and-compatibility.md)
 
 Additional user, provider, release and compatibility documentation is added here as the public `0.1.0` release surface is finalized.

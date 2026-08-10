@@ -24,7 +24,7 @@ Ordinary development and pull-request validation must not require real provider 
 - Never commit API keys, passwords, private SSH keys, secret-store contents, real-account acceptance state or local machine-specific developer files.
 - Run `npm run release:check` before submitting a pull request.
 
-Provider Plugin authors should also read [`docs/plugin-authoring-and-operational-safety.md`](docs/plugin-authoring-and-operational-safety.md).
+Provider Plugin authors should also read [`docs/plugin-authoring-and-operational-safety.md`](docs/plugin-authoring-and-operational-safety.md). Compatibility-sensitive changes must follow [`docs/versioning-and-compatibility.md`](docs/versioning-and-compatibility.md).
 
 ## Security issues
 

@@ -1,6 +1,6 @@
 # Provider Plugin authoring and operational safety
 
-This document is the practical v1 guide for writing, installing and operating an EasyCompute Provider Plugin.
+This document is the practical guide for writing, installing and operating an EasyCompute Provider Plugin. Version and compatibility promises are defined in [`versioning-and-compatibility.md`](versioning-and-compatibility.md).
 
 EasyCompute deliberately normalizes only the parts that are genuinely shared across Providers: inventory identity, a small lifecycle vocabulary and caller-facing connectivity. Provider-specific acquisition, configuration and product concepts stay in Provider Features owned by the plugin.
 
