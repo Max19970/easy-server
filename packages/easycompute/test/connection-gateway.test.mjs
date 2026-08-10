@@ -632,6 +632,84 @@ test("close does not wait forever for a pending channel open", async () => {
   });
 });
 
+test("client disconnect aborts its pending channel open without closing the session", async () => {
+  await withState(async (store) => {
+    const echo = await startEchoServer();
+    const providers = new ProviderRegistry();
+    const access = new AccessAdapterRegistry();
+    registerProvider(providers);
+
+    let openCalls = 0;
+    let pendingOpens = 0;
+    let abortedOpens = 0;
+    let enteredResolve;
+    let abortedResolve;
+    const entered = new Promise((resolve) => (enteredResolve = resolve));
+    const aborted = new Promise((resolve) => (abortedResolve = resolve));
+    access.registerBuiltIn({
+      kind: "loopback",
+      async openTcpForward(_method, _providerExternalId, target) {
+        return {
+          async openChannel({ signal }) {
+            openCalls += 1;
+            if (openCalls === 1) {
+              pendingOpens += 1;
+              enteredResolve();
+              return new Promise((resolve, reject) => {
+                const onAbort = () => {
+                  pendingOpens -= 1;
+                  abortedOpens += 1;
+                  abortedResolve();
+                  reject(new Error("fixture client-local channel open aborted"));
+                };
+                if (signal.aborted) {
+                  onAbort();
+                } else {
+                  signal.addEventListener("abort", onAbort, { once: true });
+                }
+              });
+            }
+
+            const stream = connect({ host: target.host, port: target.port });
+            await once(stream, "connect");
+            return {
+              stream,
+              async close() {
+                stream.destroy();
+              },
+            };
+          },
+          async close() {},
+        };
+      },
+    });
+
+    const result = await new ConnectionGateway(providers, access, store).openEndpoint(
+      INSTANCE_ID,
+      echo.port,
+      operationContext(),
+    );
+    const first = connect(result.endpoint);
+    first.on("error", () => undefined);
+
+    try {
+      await once(first, "connect");
+      await entered;
+      first.destroy();
+      await once(first, "close");
+
+      assert.equal(await settlesWithin(aborted), true);
+      assert.equal(pendingOpens, 0);
+      assert.equal(abortedOpens, 1);
+      assert.equal(await roundTrip(result.endpoint, "second"), "second");
+    } finally {
+      first.destroy();
+      await result.session.close().catch(() => undefined);
+      await echo.close();
+    }
+  });
+});
+
 test("client disconnect during pending channel open closes the late channel", async () => {
   await withState(async (store) => {
     const providers = new ProviderRegistry();

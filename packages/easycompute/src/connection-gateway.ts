@@ -305,9 +305,11 @@ class LiveConnectionSession implements ConnectionSession {
       return;
     }
 
+    const clientController = new AbortController();
     socket.on("error", () => undefined);
     this.#connections.set(socket, undefined);
     socket.once("close", () => {
+      clientController.abort();
       const channel = this.#connections.get(socket);
       if (!this.#connections.delete(socket) || channel === undefined) {
         return;
@@ -315,7 +317,7 @@ class LiveConnectionSession implements ConnectionSession {
 
       this.#trackChannelCleanup(channel);
     });
-    void this.#openConnection(socket);
+    void this.#openConnection(socket, clientController.signal);
   }
 
   close(): Promise<void> {
@@ -326,10 +328,10 @@ class LiveConnectionSession implements ConnectionSession {
     return this.#closePromise;
   }
 
-  async #openConnection(socket: Socket): Promise<void> {
+  async #openConnection(socket: Socket, clientSignal: AbortSignal): Promise<void> {
     try {
       const channel = await this.transport.openChannel({
-        signal: this.#controller.signal,
+        signal: AbortSignal.any([this.#controller.signal, clientSignal]),
       });
 
       if (
@@ -348,9 +350,10 @@ class LiveConnectionSession implements ConnectionSession {
       socket.pipe(channel.stream);
       channel.stream.pipe(socket);
     } catch {
-      this.#connections.delete(socket);
+      const tracked = this.#connections.delete(socket);
+      const clientGone = clientSignal.aborted || socket.destroyed || !tracked;
       socket.destroy();
-      if (!this.#controller.signal.aborted) {
+      if (!this.#controller.signal.aborted && !clientGone) {
         void this.close().catch(() => undefined);
       }
     }
