@@ -1,8 +1,8 @@
 # Install from GitHub Releases
 
-EasyCompute `0.1.0` provides a portable **Windows 11 x64** ZIP on the GitHub Releases page. This is a supported way to obtain and run the CLI without installing `@easycompute/cli` from npm.
+EasyServer `0.1.0` provides a portable **Windows 11 x64** ZIP on the GitHub Releases page. This is a supported way to obtain and run the CLI without installing `@easyai101/easyserver` from npm.
 
-The ZIP is not a self-contained native executable. It contains EasyCompute core and its runtime dependencies, but **does not bundle Node.js or any Provider Plugin**.
+The ZIP is not a self-contained native executable. It contains EasyServer core and its runtime dependencies, but **does not bundle Node.js or any Provider Plugin**.
 
 ## Requirements
 
@@ -19,15 +19,15 @@ npm is not required just to run the downloaded core CLI. npm `11.16.0` is needed
 Download these two assets from the `v0.1.0` GitHub Release:
 
 ```text
-easycompute-0.1.0-windows-x64.zip
-easycompute-0.1.0-SHA256SUMS.txt
+easyserver-0.1.0-windows-x64.zip
+easyserver-0.1.0-SHA256SUMS.txt
 ```
 
 Verify the ZIP before extracting it. This uses the .NET SHA-256 implementation available to Windows PowerShell and does not depend on an optional hashing cmdlet:
 
 ```powershell
-$expected = ((Get-Content .\easycompute-0.1.0-SHA256SUMS.txt) -split '\s+')[0]
-$stream = [IO.File]::OpenRead((Resolve-Path .\easycompute-0.1.0-windows-x64.zip))
+$expected = ((Get-Content .\easyserver-0.1.0-SHA256SUMS.txt) -split '\s+')[0]
+$stream = [IO.File]::OpenRead((Resolve-Path .\easyserver-0.1.0-windows-x64.zip))
 $sha256 = [Security.Cryptography.SHA256]::Create()
 try {
   $actual = ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
@@ -35,7 +35,7 @@ try {
   $sha256.Dispose()
   $stream.Dispose()
 }
-if ($actual -ne $expected) { throw 'EasyCompute release checksum mismatch' }
+if ($actual -ne $expected) { throw 'EasyServer release checksum mismatch' }
 ```
 
 ## Extract and run
@@ -43,11 +43,11 @@ if ($actual -ne $expected) { throw 'EasyCompute release checksum mismatch' }
 Choose a directory for this version and extract the ZIP into it:
 
 ```powershell
-$easycompute = Join-Path $PWD 'easycompute-0.1.0-windows-x64'
-New-Item -ItemType Directory -Force $easycompute | Out-Null
-Expand-Archive .\easycompute-0.1.0-windows-x64.zip -DestinationPath $easycompute -Force
-& "$easycompute\easycompute.cmd" --version
-& "$easycompute\easycompute.cmd" plugins list
+$easyserver = Join-Path $PWD 'easyserver-0.1.0-windows-x64'
+New-Item -ItemType Directory -Force $easyserver | Out-Null
+Expand-Archive .\easyserver-0.1.0-windows-x64.zip -DestinationPath $easyserver -Force
+& "$easyserver\easyserver.cmd" --version
+& "$easyserver\easyserver.cmd" plugins list
 ```
 
 The expected version is `0.1.0`, and a fresh bundle reports:
@@ -56,22 +56,22 @@ The expected version is `0.1.0`, and a fresh bundle reports:
 No provider plugins configured.
 ```
 
-You can keep the bundle anywhere convenient and invoke `easycompute.cmd` by path, or add that directory to your own `PATH` if desired.
+You can keep the bundle anywhere convenient and invoke `easyserver.cmd` by path, or add that directory to your own `PATH` if desired.
 
 ## Add a Provider Plugin later
 
-Provider Plugins remain explicit opt-in components. Install a selected plugin into the **same extracted prefix**, then register it with that bundle's CLI:
+Provider Plugins remain explicit opt-in components. Install a selected plugin into the **same extracted prefix**, then register it with that bundle's CLI. Release-specific instructions pin the compatible `0.1.0` plugin version so a future npm `latest` cannot silently select an incompatible line:
 
 ```powershell
-npm install --global --prefix $easycompute @easycompute/plugin-vastai@0.1.0
-& "$easycompute\easycompute.cmd" plugins add @easycompute/plugin-vastai
+npm install --global --prefix $easyserver @easyai101/easyserver-plugin-vastai@0.1.0
+& "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-vastai
 ```
 
 Intelion.cloud is equivalent:
 
 ```powershell
-npm install --global --prefix $easycompute @easycompute/plugin-intelion@0.1.0
-& "$easycompute\easycompute.cmd" plugins add @easycompute/plugin-intelion
+npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion@0.1.0
+& "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-intelion
 ```
 
 Installing a Provider Plugin this way does not turn it into part of the default GitHub Release artifact; it modifies only your extracted local bundle.
@@ -80,14 +80,14 @@ Installing a Provider Plugin this way does not turn it into part of the default 
 
 For a future release, download and verify the new versioned ZIP, extract it into a new versioned directory, and reinstall only the Provider Plugins you want into that new prefix. Do not copy `node_modules` from an older bundle over the new one.
 
-By default, EasyCompute Local State lives under your user profile and credentials live in the OS-backed Secret Store, so they are not stored inside the portable bundle. Custom `EASYCOMPUTE_STATE_FILE` or daemon paths remain the caller's responsibility.
+By default, EasyServer Local State lives under your user profile and credentials live in the OS-backed Secret Store, so they are not stored inside the portable bundle. Custom `EASYSERVER_STATE_FILE` or daemon paths remain the caller's responsibility.
 
 ## What is inside the ZIP
 
 The portable artifact contains:
 
-- the `easycompute.cmd` and PowerShell launch shims;
-- packed `@easycompute/cli` and `@easycompute/plugin-sdk` packages;
+- the `easyserver.cmd` and PowerShell launch shims;
+- packed `@easyai101/easyserver` and `@easyai101/easyserver-plugin-sdk` packages;
 - the CLI's production runtime dependencies, including the qualified Windows keyring binary;
 - a short bundle README and the MIT license.
 
@@ -98,4 +98,4 @@ It intentionally does **not** contain:
 - repository source files, workspace symlinks or development dependencies;
 - maintainer/private release state.
 
-Release preparation builds the ZIP from npm-packed release packages, computes SHA-256, extracts the resulting ZIP into a clean directory outside the repository and runs `easycompute.cmd --version`, `--help` and `plugins list` from that extracted copy before the artifact is eligible for attachment to a GitHub Release.
+Release preparation builds the ZIP from npm-packed release packages, computes SHA-256, extracts the resulting ZIP into a clean directory outside the repository and runs `easyserver.cmd --version`, `--help` and `plugins list` from that extracted copy before the artifact is eligible for attachment to a GitHub Release.

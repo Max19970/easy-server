@@ -5,7 +5,7 @@ import {
   createVastProviderPlugin,
   VAST_API_KEY_CREDENTIAL,
 } from "../dist/index.js";
-import { isNormalizedError } from "@easycompute/plugin-sdk";
+import { isNormalizedError } from "@easyai101/easyserver-plugin-sdk";
 
 const DEFAULT_API_KEY = Symbol("default-api-key");
 

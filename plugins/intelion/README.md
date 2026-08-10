@@ -1,18 +1,18 @@
-# @easycompute/plugin-intelion
+# @easyai101/easyserver-plugin-intelion
 
-Opt-in EasyCompute Provider Plugin for Intelion.cloud compute.
+Opt-in EasyServer Provider Plugin for Intelion.cloud compute.
 
 ## Install and register
 
-Install EasyCompute separately, then install only the provider you want:
+Install EasyServer separately, then install only the provider you want:
 
 ```sh
-npm install --global @easycompute/plugin-intelion
-easycompute plugins add @easycompute/plugin-intelion
+npm install --global @easyai101/easyserver-plugin-intelion
+easyserver plugins add @easyai101/easyserver-plugin-intelion
 ```
 
 This package does not install Vast.ai or any other Provider Plugin.
 
-After registration, configure the plugin credential through EasyCompute rather than placing provider API tokens in repository files or command arguments.
+After registration, configure the plugin credential through EasyServer rather than placing provider API tokens in repository files or command arguments.
 
-Documentation and source: https://github.com/Max19970/easy-compute
+Documentation and source: https://github.com/Max19970/easy-server

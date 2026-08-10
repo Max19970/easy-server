@@ -1,11 +1,11 @@
 {
-  "name": "@easycompute/plugin-sdk",
+  "name": "@easyai101/easyserver-plugin-sdk",
   "version": "0.1.0",
-  "description": "Public SDK for building EasyCompute Provider Plugins.",
+  "description": "Public SDK for building EasyServer Provider Plugins.",
   "license": "MIT",
   "type": "module",
   "keywords": [
-    "easycompute",
+    "easyserver",
     "cloud",
     "compute",
     "plugin",
@@ -14,12 +14,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Max19970/easy-compute.git",
+    "url": "git+https://github.com/Max19970/easy-server.git",
     "directory": "packages/plugin-sdk"
   },
-  "homepage": "https://github.com/Max19970/easy-compute#readme",
+  "homepage": "https://github.com/Max19970/easy-server#readme",
   "bugs": {
-    "url": "https://github.com/Max19970/easy-compute/issues"
+    "url": "https://github.com/Max19970/easy-server/issues"
   },
   "files": [
     "dist"

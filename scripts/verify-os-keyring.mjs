@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { OsKeyringSecretStore } from "../packages/easycompute/dist/secret-store.js";
+import { OsKeyringSecretStore } from "../packages/easyserver/dist/secret-store.js";
 
-const service = `EasyCompute platform smoke ${randomUUID()}`;
-const secret = `easycompute-platform-smoke-${randomUUID()}`;
+const service = `EasyServer platform smoke ${randomUUID()}`;
+const secret = `easyserver-platform-smoke-${randomUUID()}`;
 const store = new OsKeyringSecretStore(service);
 let reference;
 

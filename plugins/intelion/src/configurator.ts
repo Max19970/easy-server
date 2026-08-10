@@ -6,7 +6,7 @@ import {
   type ProviderCliContribution,
   type ProviderFeature,
   type ProviderOperationContext,
-} from "@easycompute/plugin-sdk";
+} from "@easyai101/easyserver-plugin-sdk";
 import { IntelionApiClient } from "./api-client.js";
 
 export interface IntelionServerConfigurationInput {

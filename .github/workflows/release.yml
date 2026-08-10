@@ -44,10 +44,10 @@ jobs:
 
           $version = node -p "require('./package.json').version"
           $packages = @(
-            "@easycompute/plugin-sdk",
-            "@easycompute/cli",
-            "@easycompute/plugin-vastai",
-            "@easycompute/plugin-intelion"
+            "@easyai101/easyserver-plugin-sdk",
+            "@easyai101/easyserver",
+            "@easyai101/easyserver-plugin-vastai",
+            "@easyai101/easyserver-plugin-intelion"
           )
           foreach ($package in $packages) {
             $published = npm view "$package@$version" version --json | ConvertFrom-Json
@@ -81,11 +81,11 @@ jobs:
           }
 
           $version = node -p "require('./package.json').version"
-          $zip = "dist/release/easycompute-$version-windows-x64.zip"
-          $checksums = "dist/release/easycompute-$version-SHA256SUMS.txt"
+          $zip = "dist/release/easyserver-$version-windows-x64.zip"
+          $checksums = "dist/release/easyserver-$version-SHA256SUMS.txt"
           $notes = "docs/releases/$tag.md"
           if (-not (Test-Path -LiteralPath $notes)) {
             throw "Release notes must exist at $notes before the release tag is created"
           }
 
-          gh release create $tag $zip $checksums --verify-tag --title "EasyCompute $tag" --notes-file $notes
+          gh release create $tag $zip $checksums --verify-tag --title "EasyServer $tag" --notes-file $notes

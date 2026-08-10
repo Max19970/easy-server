@@ -1,4 +1,4 @@
-import { PLUGIN_SDK_VERSION } from "@easycompute/plugin-sdk";
+import { PLUGIN_SDK_VERSION } from "@easyai101/easyserver-plugin-sdk";
 
 class ExampleProvider {
   providerId = "example";
@@ -22,7 +22,7 @@ export default {
     displayName: "Example Provider",
     version: "0.1.0",
     compatibility: {
-      easycompute: "^0.1.0",
+      easyserver: "^0.1.0",
       pluginSdk: `^${PLUGIN_SDK_VERSION}`,
     },
     provider: {

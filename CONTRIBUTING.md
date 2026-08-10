@@ -1,10 +1,10 @@
-# Contributing to EasyCompute
+# Contributing to EasyServer
 
-Thanks for helping improve EasyCompute.
+Thanks for helping improve EasyServer.
 
 ## Development setup
 
-EasyCompute 0.1.x is developed and verified with Node.js 24.18.1 and npm 11.16.0. The exact Node version is recorded in `.nvmrc`.
+EasyServer 0.1.x is developed and verified with Node.js 24.18.1 and npm 11.16.0. The exact Node version is recorded in `.nvmrc`.
 
 ```sh
 npm ci

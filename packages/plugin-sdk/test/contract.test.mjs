@@ -21,7 +21,7 @@ const validManifest = {
   displayName: "Vast.ai",
   version: "0.1.0",
   compatibility: {
-    easycompute: ">=0.1.0 <1.0.0",
+    easyserver: ">=0.1.0 <1.0.0",
     pluginSdk: ">=0.1.0 <1.0.0",
   },
   provider: {

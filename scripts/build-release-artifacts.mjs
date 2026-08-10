@@ -26,11 +26,11 @@ const rootManifest = JSON.parse(
 const version = rootManifest.version;
 assert.match(version, /^\d+\.\d+\.\d+$/u, "workspace version must be a release version");
 
-const bundleName = `easycompute-${version}-windows-x64`;
+const bundleName = `easyserver-${version}-windows-x64`;
 const zipName = `${bundleName}.zip`;
-const checksumName = `easycompute-${version}-SHA256SUMS.txt`;
+const checksumName = `easyserver-${version}-SHA256SUMS.txt`;
 const releaseDirectory = join(repositoryRoot, "dist", "release");
-const temporaryRoot = await mkdtemp(join(tmpdir(), "easycompute-release-artifacts-"));
+const temporaryRoot = await mkdtemp(join(tmpdir(), "easyserver-release-artifacts-"));
 
 await rm(releaseDirectory, { recursive: true, force: true });
 await mkdir(releaseDirectory, { recursive: true });
@@ -42,24 +42,24 @@ try {
   await mkdir(bundleDirectory, { recursive: true });
 
   const sdkTarball = pack("packages/plugin-sdk", packDirectory);
-  const cliTarball = pack("packages/easycompute", packDirectory);
+  const cliTarball = pack("packages/easyserver", packDirectory);
   installPortablePrefix(bundleDirectory, sdkTarball, cliTarball);
 
   await rm(join(bundleDirectory, "node_modules", ".package-lock.json"), {
     force: true,
   });
-  await rm(join(bundleDirectory, "easycompute"), { force: true });
+  await rm(join(bundleDirectory, "easyserver"), { force: true });
   await copyFile(join(repositoryRoot, "LICENSE"), join(bundleDirectory, "LICENSE"));
   await writeFile(
     join(bundleDirectory, "README.txt"),
     [
-      `EasyCompute ${version} portable Windows x64 bundle`,
+      `EasyServer ${version} portable Windows x64 bundle`,
       "",
       "Requires Node.js 24.18.1 on PATH. Node.js is not bundled.",
-      "Run easycompute.cmd --help to get started.",
+      "Run easyserver.cmd --help to get started.",
       "Provider Plugins are not bundled and remain opt-in.",
       "",
-      "Documentation: https://github.com/Max19970/easy-compute",
+      "Documentation: https://github.com/Max19970/easy-server",
       "",
     ].join("\r\n"),
     "utf8",
@@ -124,26 +124,26 @@ function installPortablePrefix(prefix, sdkTarball, cliTarball) {
 
 function verifyPortablePrefix(prefix) {
   assert.equal(
-    existsSync(join(prefix, "easycompute.cmd")),
+    existsSync(join(prefix, "easyserver.cmd")),
     true,
-    "portable bundle must expose easycompute.cmd",
+    "portable bundle must expose easyserver.cmd",
   );
   assert.equal(
     existsSync(join(prefix, "node.exe")),
     false,
     "portable bundle must not imply that Node.js is bundled",
   );
-  assertPackagePresent(prefix, "@easycompute/cli");
-  assertPackagePresent(prefix, "@easycompute/plugin-sdk");
-  assertPackageAbsent(prefix, "@easycompute/plugin-vastai");
-  assertPackageAbsent(prefix, "@easycompute/plugin-intelion");
+  assertPackagePresent(prefix, "@easyai101/easyserver");
+  assertPackagePresent(prefix, "@easyai101/easyserver-plugin-sdk");
+  assertPackageAbsent(prefix, "@easyai101/easyserver-plugin-vastai");
+  assertPackageAbsent(prefix, "@easyai101/easyserver-plugin-intelion");
   assert.equal(
-    lstatSync(packagePath(prefix, "@easycompute/cli")).isSymbolicLink(),
+    lstatSync(packagePath(prefix, "@easyai101/easyserver")).isSymbolicLink(),
     false,
     "portable CLI must not be a workspace symlink",
   );
   assert.equal(
-    lstatSync(packagePath(prefix, "@easycompute/plugin-sdk")).isSymbolicLink(),
+    lstatSync(packagePath(prefix, "@easyai101/easyserver-plugin-sdk")).isSymbolicLink(),
     false,
     "portable SDK must not be a workspace symlink",
   );
@@ -168,8 +168,8 @@ async function verifyReleaseArchive(zipPath, checksumPath) {
   verifyPortablePrefix(extractionDirectory);
   const environment = {
     ...process.env,
-    EASYCOMPUTE_STATE_FILE: join(outsideDirectory, "state.json"),
-    EASYCOMPUTE_DAEMON_FILE: join(outsideDirectory, "daemon.json"),
+    EASYSERVER_STATE_FILE: join(outsideDirectory, "state.json"),
+    EASYSERVER_DAEMON_FILE: join(outsideDirectory, "daemon.json"),
   };
   assert.equal(
     runPortableExecutable(extractionDirectory, ["--version"], outsideDirectory, environment)
@@ -179,7 +179,7 @@ async function verifyReleaseArchive(zipPath, checksumPath) {
   assert.match(
     runPortableExecutable(extractionDirectory, ["--help"], outsideDirectory, environment)
       .stdout,
-    /EasyCompute/u,
+    /EasyServer/u,
   );
   assert.equal(
     runPortableExecutable(
@@ -222,7 +222,7 @@ function runNpm(args, cwd) {
 }
 
 function runPortableExecutable(prefix, args, cwd, env) {
-  const executable = join(prefix, "easycompute.cmd");
+  const executable = join(prefix, "easyserver.cmd");
   const command = `"${executable}" ${args.map(quoteCmdArgument).join(" ")}`;
   const result = spawnSync(command, {
     cwd,

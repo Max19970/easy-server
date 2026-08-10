@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isNormalizedError } from "@easycompute/plugin-sdk";
+import { isNormalizedError } from "@easyai101/easyserver-plugin-sdk";
 import {
   createIntelionProviderPlugin,
   INTELION_API_TOKEN_CREDENTIAL,

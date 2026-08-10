@@ -2,7 +2,7 @@ import {
   normalizedError,
   type NormalizedErrorCode,
   type ProviderOperationContext,
-} from "@easycompute/plugin-sdk";
+} from "@easyai101/easyserver-plugin-sdk";
 
 export const VAST_API_KEY_CREDENTIAL = "api-key";
 

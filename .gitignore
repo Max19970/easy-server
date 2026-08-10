@@ -6,5 +6,5 @@ dist/
 CONTEXT.md
 docs/internal/
 docs/issues/
-.easycompute-e2e-state.json
-.easycompute-e2e-secrets.ps1
+.easyserver-e2e-state.json
+.easyserver-e2e-secrets.ps1

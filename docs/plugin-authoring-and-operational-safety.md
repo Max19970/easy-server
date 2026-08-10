@@ -1,12 +1,12 @@
 # Provider Plugin authoring and operational safety
 
-This document is the practical guide for writing, installing and operating an EasyCompute Provider Plugin. Version and compatibility promises are defined in [`versioning-and-compatibility.md`](versioning-and-compatibility.md).
+This document is the practical guide for writing, installing and operating an EasyServer Provider Plugin. Version and compatibility promises are defined in [`versioning-and-compatibility.md`](versioning-and-compatibility.md).
 
-EasyCompute deliberately normalizes only the parts that are genuinely shared across Providers: inventory identity, a small lifecycle vocabulary and caller-facing connectivity. Provider-specific acquisition, configuration and product concepts stay in Provider Features owned by the plugin.
+EasyServer deliberately normalizes only the parts that are genuinely shared across Providers: inventory identity, a small lifecycle vocabulary and caller-facing connectivity. Provider-specific acquisition, configuration and product concepts stay in Provider Features owned by the plugin.
 
 ## 1. Package shape
 
-A Provider Plugin is an installable JavaScript/TypeScript module whose default export satisfies the public `@easycompute/plugin-sdk` `ProviderPlugin` contract.
+A Provider Plugin is an installable JavaScript/TypeScript module whose default export satisfies the public `@easyai101/easyserver-plugin-sdk` `ProviderPlugin` contract.
 
 A plugin contributes up to three independent things:
 
@@ -16,16 +16,16 @@ features[]        Provider-specific product functionality
 accessAdapters[]  Provider-specific transport implementations
 ```
 
-The plugin should depend on `@easycompute/plugin-sdk`, not on EasyCompute core internals. A minimal npm package starts with the SDK as a normal runtime dependency:
+The plugin should depend on `@easyai101/easyserver-plugin-sdk`, not on EasyServer core internals. A minimal npm package starts with the SDK as a normal runtime dependency:
 
 ```json
 {
-  "name": "@example/easycompute-provider",
+  "name": "@example/easyserver-provider",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
   "dependencies": {
-    "@easycompute/plugin-sdk": "^0.1.0"
+    "@easyai101/easyserver-plugin-sdk": "^0.1.0"
   }
 }
 ```
@@ -39,7 +39,7 @@ import type {
   ProviderAdapter,
   ProviderOperationContext,
   ProviderPlugin,
-} from "@easycompute/plugin-sdk";
+} from "@easyai101/easyserver-plugin-sdk";
 
 class ExampleProvider implements ProviderAdapter {
   readonly providerId = "example";
@@ -66,7 +66,7 @@ const plugin: ProviderPlugin = {
     displayName: "Example Provider",
     version: "0.1.0",
     compatibility: {
-      easycompute: "^0.1.0",
+      easyserver: "^0.1.0",
       pluginSdk: "^0.1.0",
     },
     provider: {
@@ -85,26 +85,26 @@ The manifest Provider ID and `provider.providerId` must agree. IDs are stable AP
 
 ## 2. Installing, enabling and disabling
 
-EasyCompute does not scan arbitrary installed packages. Installing a package and registering it with EasyCompute are intentionally separate actions: installation puts the module in the CLI's module-resolution environment; `plugins add` validates and persists the plugin registration.
+EasyServer does not scan arbitrary installed packages. Installing a package and registering it with EasyServer are intentionally separate actions: installation puts the module in the CLI's module-resolution environment; `plugins add` validates and persists the plugin registration.
 
 For a global CLI installation, install the plugin globally as well:
 
 ```powershell
-npm install --global @example/easycompute-provider
+npm install --global @example/easyserver-provider
 
-# Register the installed package with EasyCompute.
-easycompute plugins add @example/easycompute-provider
+# Register the installed package with EasyServer.
+easyserver plugins add @example/easyserver-provider
 
 # Or add a built local module.
-easycompute plugins add .\dist\index.js
+easyserver plugins add .\dist\index.js
 
 # Inspect configured and explicitly requested plugins.
-easycompute plugins list
-easycompute plugins list --plugin @example/easycompute-provider
+easyserver plugins list
+easyserver plugins list --plugin @example/easyserver-provider
 
 # Stop/start new work for the configured module.
-easycompute plugins disable @example/easycompute-provider
-easycompute plugins enable @example/easycompute-provider
+easyserver plugins disable @example/easyserver-provider
+easyserver plugins enable @example/easyserver-provider
 ```
 
 Disabling is an admission boundary, not physical module unloading. Once disable linearizes:
@@ -151,11 +151,11 @@ Example:
 }
 ```
 
-Do not derive per-instance actions in EasyCompute core from the normalized state. The Provider Plugin owns that decision because Providers differ in transitional states, policy and allowed operations.
+Do not derive per-instance actions in EasyServer core from the normalized state. The Provider Plugin owns that decision because Providers differ in transitional states, policy and allowed operations.
 
 Always preserve the Provider's raw state next to the normalized state. If the Provider introduces a state the current plugin does not understand, report normalized `state: "unknown"` and preserve the raw value rather than inventing a mapping.
 
-`providerExternalId` must be the Provider's stable identity for the same remote resource across repeated inventory reads. Do not derive it from display names, list positions or mutable metadata. EasyCompute reconciles refreshed Provider inventory against that identity so local instance identity can survive state changes and process restarts. A complete successful provider refresh may remove a binding that is genuinely absent; an uncertain mutation should instead be followed by reconciliation rather than inventing a new identity or assuming deletion.
+`providerExternalId` must be the Provider's stable identity for the same remote resource across repeated inventory reads. Do not derive it from display names, list positions or mutable metadata. EasyServer reconciles refreshed Provider inventory against that identity so local instance identity can survive state changes and process restarts. A complete successful provider refresh may remove a binding that is genuinely absent; an uncertain mutation should instead be followed by reconciliation rather than inventing a new identity or assuming deletion.
 
 ## 4. Provider-specific functionality belongs in Provider Features
 
@@ -181,7 +181,7 @@ const feature = {
         description: "Search provider offers",
         operation: "read",
         async run(args, context) {
-          // Parse Provider-specific args here, not in EasyCompute core.
+          // Parse Provider-specific args here, not in EasyServer core.
           context.write("[]\n");
         },
       },
@@ -202,7 +202,7 @@ const feature = {
 The shell mounts it as:
 
 ```text
-easycompute provider <provider-id> <feature-id> <command> [args...]
+easyserver provider <provider-id> <feature-id> <command> [args...]
 ```
 
 The CLI command must declare `operation: "read" | "mutation"` so the host can apply correct cancellation and uncertainty semantics.
@@ -213,7 +213,7 @@ Every potentially blocking host-invoked Provider, Provider Feature and connectio
 
 Plugins must propagate that signal into network/process work and stop cooperatively when possible. Provider operation contexts also expose `markMutationDispatched()`. A mutation transport **must** call this idempotent marker synchronously immediately before the first remote side-effecting request may be sent, after credential resolution and other preflight work. Read operations must not call it.
 
-EasyCompute applies a host deadline to blocking operations. A timeout means only that the host stopped waiting; it does **not** prove that a remote mutation rolled back. The dispatch marker is how the host distinguishes a cancellation/deadline that happened during local preflight from one that happened after a remote mutation may have escaped.
+EasyServer applies a host deadline to blocking operations. A timeout means only that the host stopped waiting; it does **not** prove that a remote mutation rolled back. The dispatch marker is how the host distinguishes a cancellation/deadline that happened during local preflight from one that happened after a remote mutation may have escaped.
 
 Use the normalized distinction:
 
@@ -244,7 +244,7 @@ The same rule applies to Provider Feature acquisition mutations.
 
 ## 6. Normalized errors
 
-Provider-facing failures should cross the SDK boundary as normalized EasyCompute errors where a stable category exists.
+Provider-facing failures should cross the SDK boundary as normalized EasyServer errors where a stable category exists.
 
 Current categories include:
 
@@ -272,7 +272,7 @@ The normalized `message` may retain a concise provider-originated reason when th
 - bound the final user-facing detail independently of the input-body bound;
 - reject HTML, malformed payloads and credential-like material rather than trying to render it;
 - compare against the credential resolved for the request so echoed API keys/tokens cannot enter the message;
-- keep the normalized EasyCompute error code primary and retain the stable generic message when safe detail is unavailable;
+- keep the normalized EasyServer error code primary and retain the stable generic message when safe detail is unavailable;
 - never attach raw response bodies, HTTP headers or resolved secret-bearing causes for normal CLI rendering.
 
 Provider-specific payload parsing remains inside the provider plugin. Do not add provider branches to the CLI simply to interpret a provider's error schema.
@@ -281,17 +281,17 @@ A failure from one plugin must remain local to that operation. Do not mutate pro
 
 ## 7. Credentials and Secret References
 
-Ordinary EasyCompute state must never contain API keys, passwords, private keys or bearer tokens.
+Ordinary EasyServer state must never contain API keys, passwords, private keys or bearer tokens.
 
 Configure a named provider credential by importing it from an environment variable into the OS-backed Secret Store:
 
 ```powershell
 $env:EXAMPLE_API_KEY = "..."
-easycompute plugins credential set @example/easycompute-provider api-key --env EXAMPLE_API_KEY
+easyserver plugins credential set @example/easyserver-provider api-key --env EXAMPLE_API_KEY
 Remove-Item Env:EXAMPLE_API_KEY
 ```
 
-EasyCompute persists only an opaque `secret:<uuid>` reference. The plugin resolves the configured credential by its plugin-owned stable name:
+EasyServer persists only an opaque `secret:<uuid>` reference. The plugin resolves the configured credential by its plugin-owned stable name:
 
 ```ts
 const apiKey = await context.resolveCredential("api-key");
@@ -300,7 +300,7 @@ const apiKey = await context.resolveCredential("api-key");
 To remove it:
 
 ```powershell
-easycompute plugins credential remove @example/easycompute-provider api-key
+easyserver plugins credential remove @example/easyserver-provider api-key
 ```
 
 Do not place secret material in:
@@ -314,7 +314,7 @@ Do not place secret material in:
 
 ## 8. Access Method is not Endpoint
 
-`getAccessMethods()` describes how EasyCompute *could* reach one Provider resource. It is discovery metadata and must be secret-free.
+`getAccessMethods()` describes how EasyServer *could* reach one Provider resource. It is discovery metadata and must be secret-free.
 
 An Access Method can contain:
 
@@ -343,11 +343,11 @@ Example SSH descriptor:
 }
 ```
 
-If a Provider must retrieve a short-lived password only after an Access Method has been selected, implement `resolveAccessCredential()`. EasyCompute calls it inside the connection setup scope, after access discovery.
+If a Provider must retrieve a short-lived password only after an Access Method has been selected, implement `resolveAccessCredential()`. EasyServer calls it inside the connection setup scope, after access discovery.
 
-An Access Adapter turns one supported Access Method kind into transport. Generic transports such as SSH are EasyCompute-owned; a Provider-specific tunnel kind should be contributed by that Provider Plugin in `accessAdapters[]`.
+An Access Adapter turns one supported Access Method kind into transport. Generic transports such as SSH are EasyServer-owned; a Provider-specific tunnel kind should be contributed by that Provider Plugin in `accessAdapters[]`.
 
-The caller does not consume the Access Method directly. The Connection Gateway publishes an EasyCompute-owned loopback Endpoint:
+The caller does not consume the Access Method directly. The Connection Gateway publishes an EasyServer-owned loopback Endpoint:
 
 ```text
 openEndpoint(instanceId, remotePort, remoteHost = "127.0.0.1")
@@ -359,16 +359,16 @@ The Endpoint is the caller-facing local address. The Connection Session owns the
 Foreground use:
 
 ```powershell
-easycompute connect <instance-id> --port 8188
+easyserver connect <instance-id> --port 8188
 ```
 
 Persistent local-daemon use:
 
 ```powershell
-easycompute daemon run
-easycompute sessions create <instance-id> --port 8188
-easycompute sessions list
-easycompute sessions close <session-id>
+easyserver daemon run
+easyserver sessions create <instance-id> --port 8188
+easyserver sessions list
+easyserver sessions close <session-id>
 ```
 
 The daemon control channel binds to loopback and uses a separate local authentication token. Live Connection Sessions are daemon-owned in memory; a daemon restart does not pretend dead sessions are still live.
@@ -392,7 +392,7 @@ After Endpoint publication, the live Connection Session owns transport/channel l
 
 ## 10. SSH trust is explicit and fails closed
 
-EasyCompute uses the production OpenSSH client rather than implementing SSH itself.
+EasyServer uses the production OpenSSH client rather than implementing SSH itself.
 
 For a previously unknown host key:
 
@@ -421,16 +421,16 @@ Keep billing/storage/pricing concepts Provider-owned unless a real cross-provide
 
 ## 12. Compatibility policy
 
-A plugin manifest declares compatibility independently for EasyCompute and the plugin SDK:
+A plugin manifest declares compatibility independently for EasyServer and the plugin SDK:
 
 ```ts
 compatibility: {
-  easycompute: "^0.1.0",
+  easyserver: "^0.1.0",
   pluginSdk: "^0.1.0",
 }
 ```
 
-From the first `0.1.0` release onward, compatibility strings are standard SemVer ranges. The host checks the running EasyCompute and plugin-SDK versions with SemVer range semantics before registering the plugin. Invalid ranges and ranges that exclude the running version fail plugin loading without replacing healthy registrations.
+From the first `0.1.0` release onward, compatibility strings are standard SemVer ranges. The host checks the running EasyServer and plugin-SDK versions with SemVer range semantics before registering the plugin. Invalid ranges and ranges that exclude the running version fail plugin loading without replacing healthy registrations.
 
 For the `0.x` line, remember that caret ranges are intentionally narrow: `^0.1.0` accepts compatible `0.1.x` releases but not `0.2.0`. Widen a range only after testing the plugin against that SDK/host line. `"*"` remains syntactically valid but should be reserved for development fixtures rather than published plugins.
 
@@ -443,13 +443,13 @@ Validate the same artifact users will install, not only a source-tree import. At
 ```powershell
 npm pack
 npm install --global .\your-plugin-0.1.0.tgz
-easycompute plugins add @example/easycompute-provider
-easycompute plugins list
+easyserver plugins add @example/easyserver-provider
+easyserver plugins list
 ```
 
-The EasyCompute release gate performs this style of external-layout verification for the repository's minimal example: it packs the SDK, CLI and [`examples/minimal-provider-plugin`](../examples/minimal-provider-plugin), installs them into an isolated global npm prefix outside the monorepo, then proves the example loads through `plugins add` without any core/internal import. Use that example as an executable reference for the package/manifest shape described above.
+The EasyServer release gate performs this style of external-layout verification for the repository's minimal example: it packs the SDK, CLI and [`examples/minimal-provider-plugin`](../examples/minimal-provider-plugin), installs them into an isolated global npm prefix outside the monorepo, then proves the example loads through `plugins add` without any core/internal import. Use that example as an executable reference for the package/manifest shape described above.
 
-For richer Provider behavior, adapt the same public seams and use the SDK's runtime validators/contract tests rather than importing host internals. A plugin should remain loadable when developed in a repository that contains no EasyCompute source tree at all.
+For richer Provider behavior, adapt the same public seams and use the SDK's runtime validators/contract tests rather than importing host internals. A plugin should remain loadable when developed in a repository that contains no EasyServer source tree at all.
 
 ## 14. Author checklist
 
@@ -468,4 +468,4 @@ Before considering a Provider Plugin usable:
 11. Access Adapter temporary resources register cleanup immediately.
 12. Plugin disable stops new admission without requiring physical module unloading.
 13. Failures remain isolated to the owning operation/plugin.
-14. The plugin does not require provider-specific branches or fields in EasyCompute core.
+14. The plugin does not require provider-specific branches or fields in EasyServer core.
