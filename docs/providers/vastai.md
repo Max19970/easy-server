@@ -1,0 +1,157 @@
+# Vast.ai quick start
+
+The Vast.ai Provider Plugin keeps marketplace-specific search/rental behavior outside EasyCompute core, then exposes rented instances through the shared EasyCompute inventory, lifecycle and Endpoint surfaces.
+
+## 1. Prepare the Vast.ai account
+
+You need:
+
+- a Vast.ai account able to rent instances;
+- a Vast.ai API key with the permissions required for the operations you plan to use;
+- an SSH public key registered at the **account** level before renting SSH-backed instances you want EasyCompute to access.
+
+Vast.ai account SSH keys are the normal one-time account preparation path for new instances. EasyCompute does not require you to manually attach a key to every newly rented instance after that account-level key is prepared. Keep the corresponding private key only on the client machine; never paste it into repository files.
+
+If you add/change an account SSH key after an instance already exists, Vast.ai may require provider-side handling for that existing instance. The EasyCompute workflow below assumes account preparation happens before rental.
+
+## 2. Install and register the plugin
+
+```sh
+npm install --global @easycompute/plugin-vastai
+easycompute plugins add @easycompute/plugin-vastai
+```
+
+Configure the Provider API key through the OS-backed Secret Store:
+
+```sh
+export VAST_API_KEY='<your-api-key>'
+easycompute plugins credential set @easycompute/plugin-vastai api-key --env VAST_API_KEY
+unset VAST_API_KEY
+```
+
+PowerShell:
+
+```powershell
+$env:VAST_API_KEY = '<your-api-key>'
+easycompute plugins credential set @easycompute/plugin-vastai api-key --env VAST_API_KEY
+Remove-Item Env:VAST_API_KEY
+```
+
+Confirm the plugin is loaded:
+
+```sh
+easycompute plugins list
+```
+
+## 3. Search the marketplace
+
+Vast.ai acquisition is a Provider Feature named `marketplace`:
+
+```sh
+easycompute provider vastai marketplace search \
+  --gpu 'RTX 4090' \
+  --min-gpus 1 \
+  --max-hourly 0.50 \
+  --min-reliability 0.95 \
+  --verified \
+  --limit 10
+```
+
+All filters are Vast-specific. Omit the ones you do not need. `--min-reliability` is a value from `0` to `1`; `--max-hourly` is the maximum total hourly price accepted by the plugin.
+
+The command prints JSON offers. Select a returned offer ID; do not invent an ID from a different marketplace view because the rental mutation is intentionally tied to Vast.ai's own offer model.
+
+## 4. Rent an offer
+
+At minimum rental requires an offer ID and provider-compatible image:
+
+```sh
+easycompute provider vastai marketplace rent <offer-id> --image <image>
+```
+
+Optional rental arguments are:
+
+```text
+--disk <gb>
+--runtype <ssh|jupyter|args|ssh_proxy|ssh_direct|jupyter_proxy|jupyter_direct>
+--label <label>
+```
+
+Example SSH-oriented rental:
+
+```sh
+easycompute provider vastai marketplace rent <offer-id> \
+  --image <image> \
+  --disk 40 \
+  --runtype ssh \
+  --label easycompute-demo
+```
+
+The rental command is a mutation. If transport/cancellation happens after the request may have been dispatched, EasyCompute can report `outcome-unknown` rather than pretending the rental definitely failed. In that case **do not blindly retry**; refresh inventory first:
+
+```sh
+easycompute instances list
+```
+
+A successful rental is reconciled into the shared EasyCompute inventory.
+
+## 5. Inspect and manage the instance
+
+```sh
+easycompute instances list
+easycompute instances inspect <instance-id>
+```
+
+Use only lifecycle actions shown as available for the current instance. Depending on the Vast.ai state, these may include:
+
+```sh
+easycompute instances start <instance-id>
+easycompute instances stop <instance-id>
+easycompute instances restart <instance-id>
+easycompute instances destroy <instance-id>
+```
+
+A stopped allocation can still have provider billing/resource implications. Treat `destroy` as the cleanup operation when you intend to release the rented resource, and verify the resource disappears or reaches the provider's terminal state before assuming billing has ended.
+
+## 6. Connect to a workload
+
+For a workload listening on remote loopback port `8188`:
+
+```sh
+easycompute connect <instance-id> --port 8188
+```
+
+EasyCompute prints a dynamically allocated local loopback Endpoint such as `127.0.0.1:54321`. Use that local address while the foreground command stays open.
+
+On first SSH-backed access, review the exact host fingerprint EasyCompute shows. Explicit confirmation enrolls it; decline leaves it untrusted; a later changed key fails closed.
+
+For daemon-owned persistent forwarding, first establish host trust interactively if needed, then:
+
+```sh
+easycompute daemon run
+# in another terminal:
+easycompute sessions create <instance-id> --port 8188
+easycompute sessions list
+```
+
+Close the session when finished:
+
+```sh
+easycompute sessions close <session-id>
+```
+
+## 7. Clean up paid resources
+
+When the rental is no longer needed:
+
+1. close EasyCompute Connection Sessions using it;
+2. destroy the Compute Instance if you intend to release the Vast.ai rental;
+3. refresh `easycompute instances list` and verify the resource no longer appears as a live allocation;
+4. only then remove/disable local plugin configuration if desired.
+
+```sh
+easycompute instances destroy <instance-id>
+easycompute instances list
+```
+
+Removing the local API-key reference or disabling the plugin is **not** a substitute for provider-side resource destruction.
