@@ -18,6 +18,7 @@
     "test": "npm run build && npm run test --workspaces --if-present",
     "prepublishOnly": "node -e \"console.error('Workspace root is private and must not be published.'); process.exit(1)\"",
     "verify:packaged-install": "node scripts/verify-packaged-install.mjs",
+    "verify:os-keyring": "npm run build --workspace=@easycompute/cli && node scripts/verify-os-keyring.mjs",
     "release:check": "npm run typecheck && npm test && npm pack --workspaces --dry-run && npm run verify:packaged-install",
     "easycompute": "npm run start --workspace=@easycompute/cli --"
   },
