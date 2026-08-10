@@ -710,6 +710,94 @@ test("client disconnect aborts its pending channel open without closing the sess
   });
 });
 
+test("repeated client disconnects do not accumulate pending channel opens", async () => {
+  await withState(async (store) => {
+    const echo = await startEchoServer();
+    const providers = new ProviderRegistry();
+    const access = new AccessAdapterRegistry();
+    registerProvider(providers);
+
+    let openCalls = 0;
+    let pendingOpens = 0;
+    let abortedOpens = 0;
+    let enteredResolve;
+    let abortedResolve;
+    let entered;
+    let aborted;
+    const resetCycle = () => {
+      entered = new Promise((resolve) => (enteredResolve = resolve));
+      aborted = new Promise((resolve) => (abortedResolve = resolve));
+    };
+    resetCycle();
+
+    access.registerBuiltIn({
+      kind: "loopback",
+      async openTcpForward(_method, _providerExternalId, target) {
+        return {
+          async openChannel({ signal }) {
+            openCalls += 1;
+            if (openCalls <= 3) {
+              pendingOpens += 1;
+              enteredResolve();
+              return new Promise((resolve, reject) => {
+                const onAbort = () => {
+                  pendingOpens -= 1;
+                  abortedOpens += 1;
+                  abortedResolve();
+                  reject(new Error("fixture client-local channel open aborted"));
+                };
+                if (signal.aborted) {
+                  onAbort();
+                } else {
+                  signal.addEventListener("abort", onAbort, { once: true });
+                }
+              });
+            }
+
+            const stream = connect({ host: target.host, port: target.port });
+            await once(stream, "connect");
+            return {
+              stream,
+              async close() {
+                stream.destroy();
+              },
+            };
+          },
+          async close() {},
+        };
+      },
+    });
+
+    const result = await new ConnectionGateway(providers, access, store).openEndpoint(
+      INSTANCE_ID,
+      echo.port,
+      operationContext(),
+    );
+
+    try {
+      for (let index = 0; index < 3; index += 1) {
+        const socket = connect(result.endpoint);
+        socket.on("error", () => undefined);
+        await once(socket, "connect");
+        await entered;
+        socket.destroy();
+        await once(socket, "close");
+        assert.equal(await settlesWithin(aborted), true);
+        assert.equal(pendingOpens, 0);
+        if (index < 2) {
+          resetCycle();
+        }
+      }
+
+      assert.equal(abortedOpens, 3);
+      assert.equal(await roundTrip(result.endpoint, "after-churn"), "after-churn");
+    } finally {
+      await result.session.close().catch(() => undefined);
+      await echo.close();
+    }
+  });
+});
+
 test("client disconnect during pending channel open closes the late channel", async () => {
   await withState(async (store) => {
     const providers = new ProviderRegistry();
