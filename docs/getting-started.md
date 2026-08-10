@@ -10,17 +10,23 @@ EasyCompute's built-in SSH access uses the system OpenSSH client. If you plan to
 
 ## Install the CLI
 
+The primary package-based installation is:
+
 ```sh
 npm install --global @easycompute/cli
 ```
 
-A default CLI installation contains **no Provider Plugins**:
+Windows 11 x64 users can instead download the versioned portable ZIP from GitHub Releases. That path requires Node.js `24.18.1` on `PATH` but does not require installing the core CLI package from npm. Verify the published SHA-256 checksum and follow [Install from GitHub Releases](github-release-install.md).
+
+A default CLI installation from either path contains **no Provider Plugins**:
 
 ```sh
 easycompute plugins list
 ```
 
-The expected initial result is `No provider plugins configured.` Install only the providers you want to use. For example:
+The expected initial result is `No provider plugins configured.`
+
+For an npm-installed CLI, install selected providers into the same global npm environment. For example:
 
 ```sh
 npm install --global @easycompute/plugin-vastai
@@ -33,6 +39,8 @@ or:
 npm install --global @easycompute/plugin-intelion
 easycompute plugins add @easycompute/plugin-intelion
 ```
+
+For the portable GitHub Release ZIP, install Provider Plugins into the extracted EasyCompute prefix using the prefix-aware commands in [Install from GitHub Releases](github-release-install.md#add-a-provider-plugin-later). Do not install them into an unrelated global npm prefix and expect the portable CLI to discover them.
 
 Inspect plugin state at any time:
 

@@ -18,10 +18,14 @@ If you add/change an account SSH key after an instance already exists, Vast.ai m
 
 ## 2. Install and register the plugin
 
+If EasyCompute itself was installed globally from npm, install the Vast.ai plugin into that same global npm environment:
+
 ```sh
 npm install --global @easycompute/plugin-vastai
 easycompute plugins add @easycompute/plugin-vastai
 ```
+
+If you use the portable GitHub Release ZIP, install the plugin into the extracted EasyCompute prefix instead. Follow the prefix-aware commands in [Install from GitHub Releases](../github-release-install.md#add-a-provider-plugin-later).
 
 Configure the Provider API key through the OS-backed Secret Store:
 

@@ -46,5 +46,8 @@ jobs:
       - name: Verify packaged install
         run: npm run verify:packaged-install
 
+      - name: Verify GitHub Release artifact
+        run: npm run release:artifacts
+
       - name: Verify OS keyring integration
         run: npm run verify:os-keyring

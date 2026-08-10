@@ -11,7 +11,7 @@ npm ci
 npm run release:check
 ```
 
-`release:check` typechecks, builds, runs the deterministic test suites and dry-runs every publishable workspace package.
+`release:check` typechecks, builds, runs the deterministic test suites, dry-runs every publishable workspace package, verifies clean packaged installs and builds/checks the supported GitHub Release artifact from a clean extracted copy.
 
 Ordinary development and pull-request validation must not require real provider credentials or paid compute resources. Live Vast.ai/Intelion.cloud acceptance is a maintainer release activity, not a normal contributor prerequisite.
 
