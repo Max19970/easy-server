@@ -13,7 +13,9 @@ The codebase and native dependencies may run on additional operating systems, bu
 Runtime line:
 
 - Node.js `24.18.1`;
-- npm `11.16.0`.
+- npm `11.16.0` for npm-based installation and Provider Plugin package installation.
+
+The supported GitHub Release download for this platform is `easycompute-<version>-windows-x64.zip`. It is a portable core-CLI bundle rather than a native executable: Node.js is required on `PATH`, while npm is not required merely to run the extracted core bundle. Every release ZIP is paired with `easycompute-<version>-SHA256SUMS.txt` and verified after clean extraction outside the repository before release.
 
 The npm package `engines` ranges accept the Node 24 line from `24.18.1` up to, but not including, Node 25. The release itself is built and continuously verified with the exact runtime versions above; use those versions when diagnosing release-specific behavior.
 
@@ -24,6 +26,7 @@ The release verification covers:
 - clean `npm ci`, typechecking, build and deterministic test suites;
 - packed CLI/Plugin SDK/first-party Provider Plugin artifacts;
 - a global npm installation with a working `easycompute` executable;
+- a portable GitHub Release ZIP built from packed core packages, checksum verification and a clean extracted-bundle smoke test;
 - the default zero-Provider-Plugin installation and explicit plugin installation/loading;
 - Local State persistence and atomic updates;
 - a real create/read/delete round trip through the OS keyring adapter;

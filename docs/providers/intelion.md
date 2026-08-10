@@ -14,10 +14,14 @@ EasyCompute imports the API token into its OS-backed Secret Store. It does not r
 
 ## 2. Install and register the plugin
 
+If EasyCompute itself was installed globally from npm, install the Intelion.cloud plugin into that same global npm environment:
+
 ```sh
 npm install --global @easycompute/plugin-intelion
 easycompute plugins add @easycompute/plugin-intelion
 ```
+
+If you use the portable GitHub Release ZIP, install the plugin into the extracted EasyCompute prefix instead. Follow the prefix-aware commands in [Install from GitHub Releases](../github-release-install.md#add-a-provider-plugin-later).
 
 Configure the API token:
 

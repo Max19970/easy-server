@@ -7,6 +7,7 @@ Documentation kept here must be useful to at least one external audience: EasyCo
 Current public guides:
 
 - [Getting started](getting-started.md)
+- [Install from GitHub Releases](github-release-install.md)
 - [Vast.ai quick start](providers/vastai.md)
 - [Intelion.cloud quick start](providers/intelion.md)
 - [Provider Plugin authoring and operational safety](plugin-authoring-and-operational-safety.md)
@@ -14,5 +15,6 @@ Current public guides:
 - [Supported platforms](supported-platforms.md)
 - [Security model](security-model.md)
 - [0.1.0 dependency and supply-chain audit](dependency-audit-0.1.0.md)
+- [EasyCompute 0.1.0 release notes](releases/v0.1.0.md)
 
 Additional user, provider, release and compatibility documentation is added here as the public `0.1.0` release surface is finalized.

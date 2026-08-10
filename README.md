@@ -37,13 +37,19 @@ Linux and macOS are not part of the `0.1.0` support contract yet; that means unq
 
 ## Install
 
-Install the CLI first:
+EasyCompute `0.1.0` supports two CLI distribution paths on Windows 11 x64.
+
+**npm** is the primary package/ecosystem path:
 
 ```powershell
 npm install --global @easycompute/cli
 ```
 
-The default installation contains **zero Provider Plugins**. Install only the providers you want:
+**GitHub Releases** also provide a versioned portable ZIP, so obtaining the core CLI does not require installing `@easycompute/cli` from npm. The ZIP requires Node.js `24.18.1` on `PATH`, includes no Provider Plugins and is verified with a published SHA-256 checksum. See [Install from GitHub Releases](docs/github-release-install.md).
+
+Both default installations contain **zero Provider Plugins**.
+
+If you installed the CLI globally from npm, install only the providers you want into that same global npm environment:
 
 ```powershell
 npm install --global @easycompute/plugin-vastai
@@ -56,6 +62,8 @@ or:
 npm install --global @easycompute/plugin-intelion
 easycompute plugins add @easycompute/plugin-intelion
 ```
+
+If you use the portable GitHub Release ZIP, install Provider Plugins into the extracted EasyCompute prefix instead of npm's ordinary global prefix. The exact `--prefix` commands are in [Install from GitHub Releases](docs/github-release-install.md#add-a-provider-plugin-later).
 
 Check the active plugin set:
 

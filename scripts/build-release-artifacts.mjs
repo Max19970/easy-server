@@ -1,0 +1,285 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync } from "node:fs";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const npmCli = process.env.npm_execpath;
+assert.ok(npmCli, "release artifacts must be built through npm");
+assert.equal(process.platform, "win32", "0.1.0 release artifacts are qualified on Windows only");
+assert.equal(process.arch, "x64", "0.1.0 release artifacts are qualified for x64 only");
+
+const rootManifest = JSON.parse(
+  await readFile(join(repositoryRoot, "package.json"), "utf8"),
+);
+const version = rootManifest.version;
+assert.match(version, /^\d+\.\d+\.\d+$/u, "workspace version must be a release version");
+
+const bundleName = `easycompute-${version}-windows-x64`;
+const zipName = `${bundleName}.zip`;
+const checksumName = `easycompute-${version}-SHA256SUMS.txt`;
+const releaseDirectory = join(repositoryRoot, "dist", "release");
+const temporaryRoot = await mkdtemp(join(tmpdir(), "easycompute-release-artifacts-"));
+
+await rm(releaseDirectory, { recursive: true, force: true });
+await mkdir(releaseDirectory, { recursive: true });
+
+try {
+  const packDirectory = join(temporaryRoot, "packs");
+  const bundleDirectory = join(temporaryRoot, bundleName);
+  await mkdir(packDirectory, { recursive: true });
+  await mkdir(bundleDirectory, { recursive: true });
+
+  const sdkTarball = pack("packages/plugin-sdk", packDirectory);
+  const cliTarball = pack("packages/easycompute", packDirectory);
+  installPortablePrefix(bundleDirectory, sdkTarball, cliTarball);
+
+  await rm(join(bundleDirectory, "node_modules", ".package-lock.json"), {
+    force: true,
+  });
+  await rm(join(bundleDirectory, "easycompute"), { force: true });
+  await copyFile(join(repositoryRoot, "LICENSE"), join(bundleDirectory, "LICENSE"));
+  await writeFile(
+    join(bundleDirectory, "README.txt"),
+    [
+      `EasyCompute ${version} portable Windows x64 bundle`,
+      "",
+      "Requires Node.js 24.18.1 on PATH. Node.js is not bundled.",
+      "Run easycompute.cmd --help to get started.",
+      "Provider Plugins are not bundled and remain opt-in.",
+      "",
+      "Documentation: https://github.com/Max19970/easy-compute",
+      "",
+    ].join("\r\n"),
+    "utf8",
+  );
+
+  verifyPortablePrefix(bundleDirectory);
+
+  const zipPath = join(releaseDirectory, zipName);
+  compressDirectory(bundleDirectory, zipPath);
+  assert.equal(existsSync(zipPath), true, "portable release ZIP must be created");
+
+  const checksum = sha256(await readFile(zipPath));
+  const checksumPath = join(releaseDirectory, checksumName);
+  await writeFile(checksumPath, `${checksum}  ${zipName}\n`, "utf8");
+
+  await verifyReleaseArchive(zipPath, checksumPath);
+
+  process.stdout.write(
+    [
+      "GitHub Release artifact verification passed.",
+      `ZIP: dist/release/${zipName}`,
+      `SHA-256: dist/release/${checksumName}`,
+      "",
+    ].join("\n"),
+  );
+} finally {
+  await rm(temporaryRoot, { recursive: true, force: true });
+}
+
+function pack(packageDirectory, destination) {
+  const result = runNpm(
+    [
+      "pack",
+      resolve(repositoryRoot, packageDirectory),
+      "--json",
+      "--pack-destination",
+      destination,
+    ],
+    repositoryRoot,
+  );
+  const packed = JSON.parse(result.stdout);
+  assert.equal(packed.length, 1, `expected one tarball for ${packageDirectory}`);
+  return join(destination, packed[0].filename);
+}
+
+function installPortablePrefix(prefix, sdkTarball, cliTarball) {
+  runNpm(
+    [
+      "install",
+      "--global",
+      "--prefix",
+      prefix,
+      "--omit=dev",
+      "--no-audit",
+      "--no-fund",
+      sdkTarball,
+      cliTarball,
+    ],
+    repositoryRoot,
+  );
+}
+
+function verifyPortablePrefix(prefix) {
+  assert.equal(
+    existsSync(join(prefix, "easycompute.cmd")),
+    true,
+    "portable bundle must expose easycompute.cmd",
+  );
+  assert.equal(
+    existsSync(join(prefix, "node.exe")),
+    false,
+    "portable bundle must not imply that Node.js is bundled",
+  );
+  assertPackagePresent(prefix, "@easycompute/cli");
+  assertPackagePresent(prefix, "@easycompute/plugin-sdk");
+  assertPackageAbsent(prefix, "@easycompute/plugin-vastai");
+  assertPackageAbsent(prefix, "@easycompute/plugin-intelion");
+  assert.equal(
+    lstatSync(packagePath(prefix, "@easycompute/cli")).isSymbolicLink(),
+    false,
+    "portable CLI must not be a workspace symlink",
+  );
+  assert.equal(
+    lstatSync(packagePath(prefix, "@easycompute/plugin-sdk")).isSymbolicLink(),
+    false,
+    "portable SDK must not be a workspace symlink",
+  );
+}
+
+async function verifyReleaseArchive(zipPath, checksumPath) {
+  const checksumLine = (await readFile(checksumPath, "utf8")).trim();
+  const [expectedHash, expectedFilename] = checksumLine.split(/\s+/u);
+  assert.equal(expectedFilename, basename(zipPath), "checksum must name the release ZIP");
+  assert.equal(
+    expectedHash,
+    sha256(await readFile(zipPath)),
+    "release ZIP checksum must verify",
+  );
+
+  const extractionDirectory = join(temporaryRoot, "extracted");
+  const outsideDirectory = join(temporaryRoot, "outside-cwd");
+  await mkdir(extractionDirectory, { recursive: true });
+  await mkdir(outsideDirectory, { recursive: true });
+  expandArchive(zipPath, extractionDirectory);
+
+  verifyPortablePrefix(extractionDirectory);
+  const environment = {
+    ...process.env,
+    EASYCOMPUTE_STATE_FILE: join(outsideDirectory, "state.json"),
+    EASYCOMPUTE_DAEMON_FILE: join(outsideDirectory, "daemon.json"),
+  };
+  assert.equal(
+    runPortableExecutable(extractionDirectory, ["--version"], outsideDirectory, environment)
+      .stdout,
+    `${version}\n`,
+  );
+  assert.match(
+    runPortableExecutable(extractionDirectory, ["--help"], outsideDirectory, environment)
+      .stdout,
+    /EasyCompute/u,
+  );
+  assert.equal(
+    runPortableExecutable(
+      extractionDirectory,
+      ["plugins", "list"],
+      outsideDirectory,
+      environment,
+    ).stdout,
+    "No provider plugins configured.\n",
+  );
+}
+
+function compressDirectory(source, destination) {
+  runPowerShell(
+    `Compress-Archive -Path '${powerShellLiteral(join(source, "*"))}' -DestinationPath '${powerShellLiteral(destination)}' -CompressionLevel Optimal -Force`,
+  );
+}
+
+function expandArchive(archive, destination) {
+  runPowerShell(
+    `Expand-Archive -LiteralPath '${powerShellLiteral(archive)}' -DestinationPath '${powerShellLiteral(destination)}' -Force`,
+  );
+}
+
+function runPowerShell(command) {
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", command],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  );
+  return assertSuccessful(result, `powershell.exe ${command}`);
+}
+
+function powerShellLiteral(value) {
+  return value.replaceAll("'", "''");
+}
+
+function runNpm(args, cwd) {
+  return run(process.execPath, [npmCli, ...args], cwd);
+}
+
+function runPortableExecutable(prefix, args, cwd, env) {
+  const executable = join(prefix, "easycompute.cmd");
+  const command = `"${executable}" ${args.map(quoteCmdArgument).join(" ")}`;
+  const result = spawnSync(command, {
+    cwd,
+    env,
+    encoding: "utf8",
+    shell: true,
+  });
+  return assertSuccessful(result, command);
+}
+
+function quoteCmdArgument(value) {
+  return /[\s"&|<>^]/u.test(value)
+    ? `"${value.replaceAll('"', '\\"')}"`
+    : value;
+}
+
+function packagePath(prefix, packageName) {
+  const [scope, name] = packageName.split("/");
+  return join(prefix, "node_modules", scope, name);
+}
+
+function assertPackagePresent(prefix, packageName) {
+  assert.equal(
+    existsSync(packagePath(prefix, packageName)),
+    true,
+    `${packageName} should be present in the portable bundle`,
+  );
+}
+
+function assertPackageAbsent(prefix, packageName) {
+  assert.equal(
+    existsSync(packagePath(prefix, packageName)),
+    false,
+    `${packageName} must not be bundled by default`,
+  );
+}
+
+function sha256(buffer) {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+function run(command, args, cwd, env = process.env) {
+  const result = spawnSync(command, args, { cwd, env, encoding: "utf8" });
+  return assertSuccessful(result, `${command} ${args.join(" ")}`);
+}
+
+function assertSuccessful(result, displayCommand) {
+  if (result.status !== 0) {
+    throw new Error(
+      [
+        `${displayCommand} failed with status ${result.status}`,
+        result.stdout,
+        result.stderr,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+  return result;
+}
