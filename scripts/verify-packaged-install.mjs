@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -13,6 +13,12 @@ assert.ok(npmCli, "verify-packaged-install must be run through npm");
 const temporaryRoot = await mkdtemp(join(tmpdir(), "easycompute-packaged-install-"));
 const artifactDirectory = join(temporaryRoot, "artifacts");
 await mkdir(artifactDirectory, { recursive: true });
+
+const rootManifest = JSON.parse(
+  await readFile(join(repositoryRoot, "package.json"), "utf8"),
+);
+assert.equal(rootManifest.private, true, "workspace root must remain non-publishable");
+assertRootPublishBlocked();
 
 try {
   const sdkTarball = pack("packages/plugin-sdk");
@@ -43,6 +49,19 @@ try {
   await rm(temporaryRoot, { recursive: true, force: true });
 }
 
+function assertRootPublishBlocked() {
+  const result = spawnSync(
+    process.execPath,
+    [npmCli, "publish", "--dry-run", "--json"],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  );
+  assert.notEqual(result.status, 0, "workspace root publish must fail");
+  assert.match(
+    `${result.stdout}\n${result.stderr}`,
+    /Workspace root is private and must not be published\./,
+  );
+}
+
 function pack(packageDirectory) {
   const result = runNpm(
     [
@@ -56,7 +75,29 @@ function pack(packageDirectory) {
   );
   const packed = JSON.parse(result.stdout);
   assert.equal(packed.length, 1, `expected one tarball for ${packageDirectory}`);
+  assertTarballFiles(packed[0], packageDirectory);
   return join(artifactDirectory, packed[0].filename);
+}
+
+function assertTarballFiles(packResult, packageDirectory) {
+  const paths = packResult.files.map((file) => file.path);
+  for (const required of ["LICENSE", "README.md", "package.json"]) {
+    assert.equal(
+      paths.includes(required),
+      true,
+      `${packageDirectory} tarball must contain ${required}`,
+    );
+  }
+  for (const path of paths) {
+    assert.equal(
+      path === "LICENSE" ||
+        path === "README.md" ||
+        path === "package.json" ||
+        path.startsWith("dist/"),
+      true,
+      `${packageDirectory} tarball contains unexpected path: ${path}`,
+    );
+  }
 }
 
 async function verifyCoreOnlyInstall(sdkTarball, cliTarball) {
@@ -68,6 +109,7 @@ async function verifyCoreOnlyInstall(sdkTarball, cliTarball) {
 
   const result = runCli(prefix, "plugins", "list");
   assert.equal(result.stdout, "No provider plugins configured.\n");
+  assert.equal(runInstalledExecutable(prefix, "--version").stdout, "0.1.0\n");
 }
 
 async function verifyPluginInstall({
@@ -118,11 +160,36 @@ function runCli(prefix, ...args) {
     "dist",
     "cli.js",
   );
-  return run(process.execPath, [cliPath, ...args], repositoryRoot, {
+  return run(process.execPath, [cliPath, ...args], repositoryRoot, cliEnvironment(prefix));
+}
+
+function runInstalledExecutable(prefix, ...args) {
+  const executable =
+    process.platform === "win32"
+      ? join(prefix, "easycompute.cmd")
+      : join(prefix, "bin", "easycompute");
+  assert.equal(existsSync(executable), true, "npm must expose the easycompute executable");
+
+  if (process.platform === "win32") {
+    const command = `"${executable}" ${args.join(" ")}`;
+    const result = spawnSync(command, {
+      cwd: repositoryRoot,
+      env: cliEnvironment(prefix),
+      encoding: "utf8",
+      shell: true,
+    });
+    return assertSuccessful(result, command);
+  }
+
+  return run(executable, args, repositoryRoot, cliEnvironment(prefix));
+}
+
+function cliEnvironment(prefix) {
+  return {
     ...process.env,
     EASYCOMPUTE_STATE_FILE: join(prefix, "easycompute-state.json"),
     EASYCOMPUTE_DAEMON_FILE: join(prefix, "easycompute-daemon.json"),
-  });
+  };
 }
 
 function globalNodeModules(prefix) {
@@ -148,10 +215,14 @@ function runNpm(args, cwd) {
 
 function run(command, args, cwd, env = process.env) {
   const result = spawnSync(command, args, { cwd, env, encoding: "utf8" });
+  return assertSuccessful(result, `${command} ${args.join(" ")}`);
+}
+
+function assertSuccessful(result, displayCommand) {
   if (result.status !== 0) {
     throw new Error(
       [
-        `${command} ${args.join(" ")} failed with status ${result.status}`,
+        `${displayCommand} failed with status ${result.status}`,
         result.stdout,
         result.stderr,
       ]

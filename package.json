@@ -16,6 +16,7 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run build && npm run test --workspaces --if-present",
+    "prepublishOnly": "node -e \"console.error('Workspace root is private and must not be published.'); process.exit(1)\"",
     "verify:packaged-install": "node scripts/verify-packaged-install.mjs",
     "release:check": "npm run typecheck && npm test && npm pack --workspaces --dry-run && npm run verify:packaged-install",
     "easycompute": "npm run start --workspace=@easycompute/cli --"

@@ -1,8 +1,26 @@
 {
   "name": "@easycompute/plugin-sdk",
   "version": "0.1.0",
+  "description": "Public SDK for building EasyCompute Provider Plugins.",
   "license": "MIT",
   "type": "module",
+  "keywords": [
+    "easycompute",
+    "cloud",
+    "compute",
+    "plugin",
+    "sdk",
+    "provider-plugins"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Max19970/easy-compute.git",
+    "directory": "packages/plugin-sdk"
+  },
+  "homepage": "https://github.com/Max19970/easy-compute#readme",
+  "bugs": {
+    "url": "https://github.com/Max19970/easy-compute/issues"
+  },
   "files": [
     "dist"
   ],

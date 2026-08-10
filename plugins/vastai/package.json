@@ -1,8 +1,26 @@
 {
   "name": "@easycompute/plugin-vastai",
   "version": "0.1.0",
+  "description": "EasyCompute Provider Plugin for Vast.ai.",
   "license": "MIT",
   "type": "module",
+  "keywords": [
+    "easycompute",
+    "vastai",
+    "cloud",
+    "gpu",
+    "compute",
+    "provider-plugin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Max19970/easy-compute.git",
+    "directory": "plugins/vastai"
+  },
+  "homepage": "https://github.com/Max19970/easy-compute#readme",
+  "bugs": {
+    "url": "https://github.com/Max19970/easy-compute/issues"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
