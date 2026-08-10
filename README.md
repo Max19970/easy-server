@@ -156,6 +156,7 @@ Provider Plugins run in-process and are trusted extensions in `0.1.0`; the plugi
 - [Vast.ai quick start](docs/providers/vastai.md)
 - [Intelion.cloud quick start](docs/providers/intelion.md)
 - [Supported platforms](docs/supported-platforms.md)
+- [Security model](docs/security-model.md)
 - [Provider Plugin authoring and operational safety](docs/plugin-authoring-and-operational-safety.md)
 - [Versioning and compatibility](docs/versioning-and-compatibility.md)
 

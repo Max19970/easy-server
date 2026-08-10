@@ -1,5 +1,7 @@
 # Security policy
 
+EasyCompute's trust boundaries and `0.1.0` security assumptions are documented in [`docs/security-model.md`](docs/security-model.md).
+
 ## Supported versions
 
 After the first public release, security fixes are provided for the latest released EasyCompute `0.1.x` version. Unreleased development snapshots are not a supported release line.
