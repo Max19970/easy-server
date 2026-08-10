@@ -759,6 +759,63 @@ test("client disconnect during pending channel open closes the late channel", as
   });
 });
 
+test("late channel cleanup failure remains observable after bounded close settles", async () => {
+  await withState(async (store) => {
+    const providers = new ProviderRegistry();
+    const access = new AccessAdapterRegistry();
+    registerProvider(providers);
+
+    let enteredResolve;
+    let releaseChannel;
+    let channelCloses = 0;
+    const entered = new Promise((resolve) => (enteredResolve = resolve));
+    const channel = new Promise((resolve) => (releaseChannel = resolve));
+    access.registerBuiltIn({
+      kind: "loopback",
+      async openTcpForward() {
+        return {
+          async openChannel() {
+            enteredResolve();
+            return channel;
+          },
+          async close() {},
+        };
+      },
+    });
+
+    const result = await new ConnectionGateway(providers, access, store).openEndpoint(
+      INSTANCE_ID,
+      12345,
+      operationContext(),
+    );
+    const socket = connect(result.endpoint);
+    socket.on("error", () => undefined);
+    await once(socket, "connect");
+    await entered;
+
+    const closing = result.session.close();
+    assert.equal(await settlesWithin(closing), true);
+    await closing;
+
+    releaseChannel({
+      stream: new PassThrough(),
+      close() {
+        channelCloses += 1;
+        throw new Error("fixture late channel cleanup failure");
+      },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(channelCloses, 1);
+    await assert.rejects(
+      result.session.close(),
+      /fixture late channel cleanup failure/,
+    );
+    socket.destroy();
+  });
+});
+
 test("public openEndpoint contract accepts default and third-argument remoteHost", async () => {
   await withState(async (store) => {
     const echo = await startEchoServer();

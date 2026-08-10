@@ -282,6 +282,8 @@ class LiveConnectionSession implements ConnectionSession {
   readonly #resolveClosed: () => void;
   readonly #rejectClosed: (reason: unknown) => void;
   #closePromise: Promise<void> | undefined;
+  #closeSettledSuccessfully = false;
+  #lateCleanupFailure: Promise<void> | undefined;
 
   constructor(
     private readonly server: Server,
@@ -323,9 +325,15 @@ class LiveConnectionSession implements ConnectionSession {
   close(): Promise<void> {
     if (this.#closePromise === undefined) {
       this.#closePromise = this.#close();
-      void this.#closePromise.then(this.#resolveClosed, this.#rejectClosed);
+      void this.#closePromise.then(
+        () => {
+          this.#closeSettledSuccessfully = true;
+          this.#resolveClosed();
+        },
+        this.#rejectClosed,
+      );
     }
-    return this.#closePromise;
+    return this.#lateCleanupFailure ?? this.#closePromise;
   }
 
   async #openConnection(socket: Socket, clientSignal: AbortSignal): Promise<void> {
@@ -366,6 +374,15 @@ class LiveConnectionSession implements ConnectionSession {
       .then(() => channel.close())
       .catch((error) => {
         this.#lifecycleErrors.push(error);
+        if (this.#closeSettledSuccessfully) {
+          const errors = [...this.#lifecycleErrors];
+          const failure =
+            errors.length === 1
+              ? errors[0]
+              : new AggregateError(errors, "Connection session cleanup failed");
+          this.#lateCleanupFailure = Promise.reject(failure);
+          void this.#lateCleanupFailure.catch(() => undefined);
+        }
         void this.close().catch(() => undefined);
       })
       .finally(() => {
