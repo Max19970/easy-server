@@ -1,3 +1,10 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Maintainer-only local state belongs outside the public repository.
+CONTEXT.md
+docs/internal/
+docs/issues/
+.easycompute-e2e-state.json
+.easycompute-e2e-secrets.ps1
