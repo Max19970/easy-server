@@ -343,9 +343,7 @@ class LiveConnectionSession implements ConnectionSession {
       }
 
       this.#connections.set(socket, channel);
-      channel.stream.on("error", () => {
-        void this.close().catch(() => undefined);
-      });
+      channel.stream.on("error", () => socket.destroy());
       channel.stream.once("close", () => socket.destroy());
       socket.pipe(channel.stream);
       channel.stream.pipe(socket);

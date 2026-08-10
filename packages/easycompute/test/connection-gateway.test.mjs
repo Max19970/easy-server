@@ -78,10 +78,12 @@ function registerProvider(
 function loopbackAdapter({
   failSetup = false,
   failChannel = false,
+  failFirstChannelStream = false,
   failChannelClose = false,
   onSetupCleanup,
   onTransportClose = () => {},
 } = {}) {
+  let channelCount = 0;
   return {
     kind: "loopback",
     async openTcpForward(_method, _providerExternalId, target, setupContext) {
@@ -98,8 +100,16 @@ function loopbackAdapter({
             throw new Error("fixture upstream failure");
           }
 
+          channelCount += 1;
           const stream = connect({ host: target.host, port: target.port });
           await once(stream, "connect");
+          if (failFirstChannelStream && channelCount === 1) {
+            stream.once("data", () => {
+              setImmediate(() =>
+                stream.destroy(new Error("fixture channel stream failure")),
+              );
+            });
+          }
           return {
             stream,
             async close() {
@@ -536,6 +546,32 @@ test("upstream channel failure tears down the published Endpoint", async () => {
     await once(socket, "connect");
     await once(socket, "close");
     await result.session.closed;
+    await expectConnectionRefused(result.endpoint);
+  });
+});
+
+test("client channel stream failure does not tear down the persistent Endpoint", async () => {
+  await withState(async (store) => {
+    const echo = await startEchoServer();
+    const providers = new ProviderRegistry();
+    const access = new AccessAdapterRegistry();
+    registerProvider(providers);
+    access.registerBuiltIn(loopbackAdapter({ failFirstChannelStream: true }));
+    const result = await new ConnectionGateway(providers, access, store).openEndpoint(
+      INSTANCE_ID,
+      echo.port,
+      operationContext(),
+    );
+
+    try {
+      assert.equal(await roundTrip(result.endpoint, "first"), "first");
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(await roundTrip(result.endpoint, "second"), "second");
+    } finally {
+      await result.session.close().catch(() => undefined);
+      await echo.close();
+    }
+
     await expectConnectionRefused(result.endpoint);
   });
 });
