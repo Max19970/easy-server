@@ -271,6 +271,64 @@ test("server configurator lists Intelion flavors with availability and price", a
   assert.equal(calls[1].searchParams.get("page"), "2");
 });
 
+test("server configurator lists registered Intelion SSH keys through the provider-scoped CLI seam", async () => {
+  const calls = [];
+  const plugin = createIntelionProviderPlugin({
+    baseUrl: "https://fixture.intelion.test",
+    async fetch(input) {
+      const url = new URL(input);
+      calls.push(url);
+      return new Response(
+        JSON.stringify([
+          {
+            id: 246,
+            name: "easycompute@fixture",
+            public_key: "ssh-ed25519 AAAAC3fixture easycompute@fixture",
+            key_type: "ssh-ed25519",
+            fingerprint_sha256: "SHA256:fixture",
+            created_at: "2026-08-10T08:00:00Z",
+            last_used_at: null,
+          },
+        ]),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+  const feature = plugin.features.find(
+    (candidate) => candidate.id === "server-configurator",
+  );
+  assert.ok(feature);
+  const command = feature.cli?.commands.find(
+    (candidate) => candidate.name === "ssh-keys",
+  );
+  assert.ok(command);
+
+  let output = "";
+  await command.run([], {
+    signal: new AbortController().signal,
+    async resolveCredential(name) {
+      assert.equal(name, INTELION_API_TOKEN_CREDENTIAL);
+      return "fixture-token";
+    },
+    markMutationDispatched() {},
+    write(text) {
+      output += text;
+    },
+    writeError() {},
+  });
+
+  assert.deepEqual(JSON.parse(output), [
+    {
+      id: 246,
+      name: "easycompute@fixture",
+      keyType: "ssh-ed25519",
+      fingerprintSha256: "SHA256:fixture",
+    },
+  ]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].pathname, "/api/v2/ssh-keys/");
+});
+
 test("server configurator rejects malformed Intelion flavor catalog payloads", async () => {
   const plugin = createIntelionProviderPlugin({
     baseUrl: "https://fixture.intelion.test",

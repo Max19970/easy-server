@@ -26,6 +26,7 @@ export type {
   IntelionFlavor,
   IntelionOsImage,
   IntelionOsImageQuery,
+  IntelionSshKey,
   IntelionServerConfiguration,
   IntelionServerConfigurationInput,
   IntelionServerConfiguratorFeature,

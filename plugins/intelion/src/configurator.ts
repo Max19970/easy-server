@@ -61,6 +61,13 @@ export interface IntelionFlavor {
   readonly available: boolean;
 }
 
+export interface IntelionSshKey {
+  readonly id: number;
+  readonly name: string;
+  readonly keyType: string;
+  readonly fingerprintSha256: string;
+}
+
 export interface IntelionServerConfiguratorFeature extends ProviderFeature {
   readonly id: "server-configurator";
   listOsImages(
@@ -70,6 +77,9 @@ export interface IntelionServerConfiguratorFeature extends ProviderFeature {
   listFlavors(
     context: ProviderOperationContext,
   ): Promise<readonly IntelionFlavor[]>;
+  listSshKeys(
+    context: ProviderOperationContext,
+  ): Promise<readonly IntelionSshKey[]>;
   validateConfiguration(
     input: IntelionServerConfigurationInput,
   ): IntelionServerConfiguration;
@@ -101,6 +111,12 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
         description: "List Intelion server flavors",
         operation: "read",
         run: (args, context) => this.#runFlavors(args, context),
+      },
+      {
+        name: "ssh-keys",
+        description: "List registered Intelion SSH keys",
+        operation: "read",
+        run: (args, context) => this.#runSshKeys(args, context),
       },
       {
         name: "validate",
@@ -185,6 +201,35 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
     }
   }
 
+  async listSshKeys(
+    context: ProviderOperationContext,
+  ): Promise<readonly IntelionSshKey[]> {
+    const keys: IntelionSshKey[] = [];
+    const seenPages = new Set<string>();
+    let page = this.client.url("/api/v2/ssh-keys/");
+
+    for (;;) {
+      const pageKey = page.href;
+      if (seenPages.has(pageKey)) {
+        throw normalizedError(
+          "plugin-failure",
+          "Intelion returned a repeated SSH-key pagination URL",
+        );
+      }
+      seenPages.add(pageKey);
+
+      const parsed = parseCatalogPage(
+        await this.client.getJson(page, context),
+        "SSH-key",
+      );
+      keys.push(...parsed.results.map(parseSshKey));
+      if (parsed.next === undefined) {
+        return keys;
+      }
+      page = this.client.url(parsed.next);
+    }
+  }
+
   validateConfiguration(
     input: IntelionServerConfigurationInput,
   ): IntelionServerConfiguration {
@@ -262,6 +307,17 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
     }
     const flavors = await this.listFlavors(context);
     context.write(`${JSON.stringify(flavors)}\n`);
+  }
+
+  async #runSshKeys(
+    args: readonly string[],
+    context: ProviderCliCommandContext,
+  ): Promise<void> {
+    if (args.length !== 0) {
+      throw new Error("Intelion ssh-keys does not accept arguments");
+    }
+    const keys = await this.listSshKeys(context);
+    context.write(`${JSON.stringify(keys)}\n`);
   }
 
   async #runValidate(
@@ -423,6 +479,45 @@ function parseFlavor(value: unknown): IntelionFlavor {
     throw normalizedError(
       "plugin-failure",
       "Intelion returned an invalid flavor payload",
+      error,
+    );
+  }
+}
+
+function parseSshKey(value: unknown): IntelionSshKey {
+  try {
+    const key = expectRecord(value, "Intelion SSH key");
+    const id = positiveIntegerValue(key.id, "Intelion SSH key.id");
+    if (typeof key.name !== "string" || key.name.trim().length === 0) {
+      throw new TypeError("Intelion SSH key.name must be a non-empty string");
+    }
+    if (
+      typeof key.key_type !== "string" ||
+      key.key_type.trim().length === 0
+    ) {
+      throw new TypeError("Intelion SSH key.key_type must be a non-empty string");
+    }
+    if (
+      typeof key.fingerprint_sha256 !== "string" ||
+      key.fingerprint_sha256.trim().length === 0
+    ) {
+      throw new TypeError(
+        "Intelion SSH key.fingerprint_sha256 must be a non-empty string",
+      );
+    }
+    return {
+      id,
+      name: key.name,
+      keyType: key.key_type,
+      fingerprintSha256: key.fingerprint_sha256,
+    };
+  } catch (error) {
+    if (isNormalizedError(error)) {
+      throw error;
+    }
+    throw normalizedError(
+      "plugin-failure",
+      "Intelion returned an invalid SSH-key payload",
       error,
     );
   }
