@@ -6,7 +6,11 @@ Documentation kept here must be useful to at least one external audience: EasyCo
 
 Current public guides:
 
+- [Getting started](getting-started.md)
+- [Vast.ai quick start](providers/vastai.md)
+- [Intelion.cloud quick start](providers/intelion.md)
 - [Provider Plugin authoring and operational safety](plugin-authoring-and-operational-safety.md)
 - [Versioning and compatibility](versioning-and-compatibility.md)
+- [Supported platforms](supported-platforms.md)
 
 Additional user, provider, release and compatibility documentation is added here as the public `0.1.0` release surface is finalized.
