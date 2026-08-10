@@ -23,6 +23,8 @@ const SSH_PASSWORD_CREDENTIAL = "ssh-password";
 
 export { INTELION_API_TOKEN_CREDENTIAL } from "./api-client.js";
 export type {
+  IntelionOsImage,
+  IntelionOsImageQuery,
   IntelionServerConfiguration,
   IntelionServerConfigurationInput,
   IntelionServerConfiguratorFeature,

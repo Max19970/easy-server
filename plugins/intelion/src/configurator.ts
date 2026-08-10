@@ -1,4 +1,5 @@
 import {
+  isNormalizedError,
   normalizedError,
   type ProviderCliCommandContext,
   type ProviderCliCommandResult,
@@ -34,8 +35,26 @@ export interface IntelionServerCreationResult {
   readonly providerExternalId: string;
 }
 
+export interface IntelionOsImageQuery {
+  readonly flavorId?: number;
+}
+
+export interface IntelionOsImage {
+  readonly id: number;
+  readonly name: string;
+  readonly type: string;
+  readonly description: string;
+  readonly sshEnabled: boolean;
+  readonly rdpEnabled: boolean;
+  readonly compatibleFlavorIds?: readonly number[];
+}
+
 export interface IntelionServerConfiguratorFeature extends ProviderFeature {
   readonly id: "server-configurator";
+  listOsImages(
+    query: IntelionOsImageQuery,
+    context: ProviderOperationContext,
+  ): Promise<readonly IntelionOsImage[]>;
   validateConfiguration(
     input: IntelionServerConfigurationInput,
   ): IntelionServerConfiguration;
@@ -57,6 +76,12 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
   readonly cli: ProviderCliContribution = {
     commands: [
       {
+        name: "os-images",
+        description: "List Intelion operating-system images",
+        operation: "read",
+        run: (args, context) => this.#runOsImages(args, context),
+      },
+      {
         name: "validate",
         description: "Validate an Intelion cloud-server configuration",
         operation: "read",
@@ -72,6 +97,43 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
   };
 
   constructor(private readonly client: IntelionApiClient) {}
+
+  async listOsImages(
+    query: IntelionOsImageQuery,
+    context: ProviderOperationContext,
+  ): Promise<readonly IntelionOsImage[]> {
+    const flavorId =
+      query.flavorId === undefined
+        ? undefined
+        : positiveInteger(query.flavorId, "flavorId");
+    const images: IntelionOsImage[] = [];
+    const seenPages = new Set<string>();
+    let page = this.client.url("/api/v2/os-images/");
+    if (flavorId !== undefined) {
+      page.searchParams.set("flavor_id", String(flavorId));
+    }
+
+    for (;;) {
+      const pageKey = page.href;
+      if (seenPages.has(pageKey)) {
+        throw normalizedError(
+          "plugin-failure",
+          "Intelion returned a repeated OS-image pagination URL",
+        );
+      }
+      seenPages.add(pageKey);
+
+      const parsed = parseCatalogPage(
+        await this.client.getJson(page, context),
+        "OS-image",
+      );
+      images.push(...parsed.results.map(parseOsImage));
+      if (parsed.next === undefined) {
+        return images;
+      }
+      page = this.client.url(parsed.next);
+    }
+  }
 
   validateConfiguration(
     input: IntelionServerConfigurationInput,
@@ -133,6 +195,14 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
     return parseCreationResult(response);
   }
 
+  async #runOsImages(
+    args: readonly string[],
+    context: ProviderCliCommandContext,
+  ): Promise<void> {
+    const images = await this.listOsImages(parseOsImageArgs(args), context);
+    context.write(`${JSON.stringify(images)}\n`);
+  }
+
   async #runValidate(
     args: readonly string[],
     context: ProviderCliCommandContext,
@@ -148,6 +218,97 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
     const result = await this.createServer(parseValidateArgs(args), context);
     context.write(`${JSON.stringify(result)}\n`);
     return { refreshProviderInventory: true };
+  }
+}
+
+function parseOsImageArgs(args: readonly string[]): IntelionOsImageQuery {
+  if (args.length === 0) {
+    return {};
+  }
+  if (args.length === 2 && args[0] === "--flavor") {
+    return { flavorId: Number(args[1]) };
+  }
+  throw new Error("Intelion os-images accepts only optional --flavor <id>");
+}
+
+function parseCatalogPage(
+  value: unknown,
+  catalogName: string,
+): { readonly results: readonly unknown[]; readonly next?: string } {
+  try {
+    if (Array.isArray(value)) {
+      return { results: value };
+    }
+    const page = expectRecord(value, `Intelion ${catalogName} list response`);
+    if (!Array.isArray(page.results)) {
+      throw new TypeError(
+        `Intelion ${catalogName} list response.results must be an array`,
+      );
+    }
+    if (page.next === null || page.next === undefined) {
+      return { results: page.results };
+    }
+    if (typeof page.next !== "string" || page.next.length === 0) {
+      throw new TypeError(
+        `Intelion ${catalogName} list response.next must be a non-empty string or null`,
+      );
+    }
+    return { results: page.results, next: page.next };
+  } catch (error) {
+    if (isNormalizedError(error)) {
+      throw error;
+    }
+    throw normalizedError(
+      "plugin-failure",
+      `Intelion returned an invalid ${catalogName} list payload`,
+      error,
+    );
+  }
+}
+
+function parseOsImage(value: unknown): IntelionOsImage {
+  try {
+    const image = expectRecord(value, "Intelion OS image");
+    const id = positiveIntegerValue(image.id, "Intelion OS image.id");
+    if (typeof image.name !== "string" || image.name.trim().length === 0) {
+      throw new TypeError("Intelion OS image.name must be a non-empty string");
+    }
+    const type = optionalString(image.type, "Intelion OS image.type");
+    const description = optionalString(
+      image.description,
+      "Intelion OS image.description",
+    );
+    const sshEnabled = optionalBoolean(
+      image.ssh_enabled,
+      "Intelion OS image.ssh_enabled",
+    );
+    const rdpEnabled = optionalBoolean(
+      image.rdp_enabled,
+      "Intelion OS image.rdp_enabled",
+    );
+    const compatibleFlavorIds = parseOptionalPositiveIntegerList(
+      image.compatible_flavor_ids,
+      "Intelion OS image.compatible_flavor_ids",
+    );
+
+    return {
+      id,
+      name: image.name,
+      type,
+      description,
+      sshEnabled,
+      rdpEnabled,
+      ...(compatibleFlavorIds === undefined ? {} : { compatibleFlavorIds }),
+    };
+  } catch (error) {
+    if (isNormalizedError(error)) {
+      throw error;
+    }
+    throw normalizedError(
+      "plugin-failure",
+      "Intelion returned an invalid OS-image payload",
+      error,
+    );
   }
 }
 
@@ -260,6 +421,55 @@ function parseValidateArgs(args: readonly string[]): IntelionServerConfiguration
     queueWhenUnavailable,
     addonIds,
   };
+}
+
+function expectRecord(value: unknown, path: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`${path} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function positiveIntegerValue(value: unknown, path: string): number {
+  if (!Number.isInteger(value) || (value as number) < 1) {
+    throw new TypeError(`${path} must be a positive integer`);
+  }
+  return value as number;
+}
+
+function optionalString(value: unknown, path: string): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value !== "string") {
+    throw new TypeError(`${path} must be a string when present`);
+  }
+  return value;
+}
+
+function optionalBoolean(value: unknown, path: string): boolean {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${path} must be a boolean when present`);
+  }
+  return value;
+}
+
+function parseOptionalPositiveIntegerList(
+  value: unknown,
+  path: string,
+): readonly number[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${path} must be an array when present`);
+  }
+  return value.map((entry, index) =>
+    positiveIntegerValue(entry, `${path}[${index}]`),
+  );
 }
 
 function positiveInteger(value: number, field: string): number {
