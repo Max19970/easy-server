@@ -125,7 +125,14 @@ function createIntelionFixture() {
           status: 2,
           ip_to_connect: "203.0.113.51",
           domain_to_connect: "server-501.intelion.test",
-          login: "root",
+          login: null,
+          os: {
+            id: 7,
+            name: "Ubuntu 24.04 LTS",
+            type: "linux",
+            ssh_enabled: true,
+            rdp_enabled: false,
+          },
         };
         return json(server);
       }
@@ -289,6 +296,7 @@ test("Vast and Intelion coexist through shared lifecycle and connection paths", 
         connectionSetups.push({
           providerExternalId,
           host: method.ssh.host,
+          username: method.ssh.username,
           target,
           password,
         });
@@ -343,6 +351,7 @@ test("Vast and Intelion coexist through shared lifecycle and connection paths", 
       ],
     );
     assert.equal(connectionSetups[0].password, undefined);
+    assert.equal(connectionSetups[1].username, "root");
     assert.equal(connectionSetups[1].password, "intelion-session-password");
     assert.equal(intelion.passwordReadCount(), 1);
 
