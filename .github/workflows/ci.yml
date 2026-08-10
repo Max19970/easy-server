@@ -43,3 +43,6 @@ jobs:
 
       - name: Run deterministic release gate
         run: npm run release:check
+
+      - name: Verify OS keyring integration
+        run: npm run verify:os-keyring
