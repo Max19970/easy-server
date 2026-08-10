@@ -144,6 +144,95 @@ test("missing and rejected API keys become normalized authentication errors", as
   );
 });
 
+test("Vast preserves documented safe provider rejection reasons", async () => {
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch() {
+      return json(
+        {
+          success: false,
+          error: "invalid_args",
+          msg: "Requested image is unavailable on this offer",
+        },
+        400,
+      );
+    },
+  });
+  const marketplace = plugin.features.find((feature) => feature.id === "marketplace");
+  assert.ok(marketplace);
+
+  await assert.rejects(
+    marketplace.rentOffer(
+      { offerId: "901", image: "missing:image" },
+      context(),
+    ),
+    (error) =>
+      isNormalizedError(error) &&
+      error.code === "unknown-provider-error" &&
+      error.message ===
+        "Vast.ai returned HTTP 400: Requested image is unavailable on this offer",
+  );
+});
+
+test("Vast provider diagnostics never render configured credentials or unsafe bodies", async () => {
+  const unsafeBodies = [
+    {
+      body: {
+        msg: "Authorization: Bearer fixture-key",
+      },
+      contentType: "application/json",
+    },
+    {
+      body: {
+        message: "<html><body>proxy error</body></html>",
+      },
+      contentType: "application/json",
+    },
+    {
+      body: "<html><body>gateway error</body></html>",
+      contentType: "text/html",
+    },
+    {
+      body: { msg: "x".repeat(5000) },
+      contentType: "application/json",
+    },
+    {
+      body: "not-json",
+      contentType: "application/json",
+    },
+  ];
+
+  for (const fixture of unsafeBodies) {
+    const plugin = createVastProviderPlugin({
+      baseUrl: "https://fixture.vast.test",
+      async fetch() {
+        return new Response(
+          typeof fixture.body === "string"
+            ? fixture.body
+            : JSON.stringify(fixture.body),
+          {
+            status: 400,
+            headers: { "Content-Type": fixture.contentType },
+          },
+        );
+      },
+    });
+    const marketplace = plugin.features.find(
+      (feature) => feature.id === "marketplace",
+    );
+    assert.ok(marketplace);
+
+    await assert.rejects(
+      marketplace.searchOffers({}, context()),
+      (error) =>
+        isNormalizedError(error) &&
+        error.code === "unknown-provider-error" &&
+        error.message === "Vast.ai returned HTTP 400" &&
+        !error.message.includes("fixture-key"),
+    );
+  }
+});
+
 test("404 instance lookup returns undefined without weakening other HTTP errors", async () => {
   const plugin = createVastProviderPlugin({
     baseUrl: "https://fixture.vast.test",
