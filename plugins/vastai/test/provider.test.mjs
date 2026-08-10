@@ -423,6 +423,55 @@ test("marketplace feature searches Vast offers with plugin-owned filters", async
   ]);
 });
 
+test("marketplace rental can select an offer returned by the rentable search contract", async () => {
+  const calls = [];
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch(input, init) {
+      const url = new URL(input);
+      calls.push({ url, init });
+      if (init.method === "POST") {
+        return json({
+          offers: [
+            {
+              id: 901,
+              machine_id: 77,
+              gpu_name: "RTX 4090",
+              num_gpus: 1,
+              gpu_ram: 24576,
+              dph_total: 0.21,
+              reliability: 0.997,
+              geolocation: "DE",
+              rentable: true,
+            },
+          ],
+        });
+      }
+      return json({ success: true, new_contract: 777 });
+    },
+  });
+  const marketplace = plugin.features.find((feature) => feature.id === "marketplace");
+  assert.ok(marketplace);
+
+  const [offer] = await marketplace.searchOffers({ limit: 1 }, context());
+  assert.ok(offer);
+  const rental = await marketplace.rentOffer(
+    {
+      offerId: offer.id,
+      image: "ubuntu:22.04",
+      runtype: "ssh_direct",
+    },
+    context(),
+  );
+
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    rentable: { eq: true },
+    limit: 1,
+  });
+  assert.equal(calls[1].url.pathname, "/api/v0/asks/901/");
+  assert.deepEqual(rental, { providerExternalId: "777" });
+});
+
 test("marketplace feature rents an offer and the new instance converges on inventory", async () => {
   const calls = [];
   const plugin = createVastProviderPlugin({
