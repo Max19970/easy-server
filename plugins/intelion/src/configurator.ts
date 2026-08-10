@@ -18,6 +18,7 @@ export interface IntelionServerConfigurationInput {
   readonly promotionCodeId?: number;
   readonly queueWhenUnavailable?: boolean;
   readonly addonIds?: readonly number[];
+  readonly sshKeyIds?: readonly number[];
 }
 
 export interface IntelionServerConfiguration {
@@ -29,6 +30,7 @@ export interface IntelionServerConfiguration {
   readonly promotionCodeId?: number;
   readonly queueWhenUnavailable: boolean;
   readonly addonIds: readonly number[];
+  readonly sshKeyIds: readonly number[];
 }
 
 export interface IntelionServerCreationResult {
@@ -261,8 +263,14 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
     const addonIds = (input.addonIds ?? []).map((id) =>
       positiveInteger(id, "addonIds entry"),
     );
+    const sshKeyIds = (input.sshKeyIds ?? []).map((id) =>
+      positiveInteger(id, "sshKeyIds entry"),
+    );
     if (new Set(addonIds).size !== addonIds.length) {
       throw new TypeError("Intelion addonIds must not contain duplicates");
+    }
+    if (new Set(sshKeyIds).size !== sshKeyIds.length) {
+      throw new TypeError("Intelion sshKeyIds must not contain duplicates");
     }
 
     return {
@@ -274,6 +282,7 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
       ...(promotionCodeId === undefined ? {} : { promotionCodeId }),
       queueWhenUnavailable: input.queueWhenUnavailable ?? false,
       addonIds,
+      sshKeyIds,
     };
   }
 
@@ -539,6 +548,9 @@ function createPayload(
     ...(configuration.addonIds.length === 0
       ? {}
       : { addon_ids: [...configuration.addonIds] }),
+    ...(configuration.sshKeyIds.length === 0
+      ? {}
+      : { ssh_key_ids: [...configuration.sshKeyIds] }),
   };
 }
 
@@ -568,6 +580,7 @@ function parseValidateArgs(args: readonly string[]): IntelionServerConfiguration
   let promotionCodeId: number | undefined;
   let queueWhenUnavailable = false;
   const addonIds: number[] = [];
+  const sshKeyIds: number[] = [];
 
   for (let index = 0; index < args.length; index += 1) {
     const option = args[index];
@@ -604,6 +617,9 @@ function parseValidateArgs(args: readonly string[]): IntelionServerConfiguration
       case "--addon":
         addonIds.push(Number(value));
         break;
+      case "--ssh-key":
+        sshKeyIds.push(Number(value));
+        break;
       default:
         throw new Error(`Unknown Intelion configurator option: ${option}`);
     }
@@ -631,6 +647,7 @@ function parseValidateArgs(args: readonly string[]): IntelionServerConfiguration
     ...(promotionCodeId === undefined ? {} : { promotionCodeId }),
     queueWhenUnavailable,
     addonIds,
+    sshKeyIds,
   };
 }
 

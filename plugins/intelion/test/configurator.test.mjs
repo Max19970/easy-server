@@ -39,6 +39,7 @@ test("server configurator validates Intelion-owned creation choices", () => {
       promotionCodeId: 3,
       queueWhenUnavailable: true,
       addonIds: [9, 4],
+      sshKeyIds: [],
     },
   );
 });
@@ -67,6 +68,14 @@ test("server configurator rejects invalid provider-specific creation values", ()
   assert.throws(
     () => feature.validateConfiguration({ ...valid, addonIds: [4, 4] }),
     /addonIds must not contain duplicates/,
+  );
+  assert.throws(
+    () => feature.validateConfiguration({ ...valid, sshKeyIds: [246, 246] }),
+    /sshKeyIds must not contain duplicates/,
+  );
+  assert.throws(
+    () => feature.validateConfiguration({ ...valid, sshKeyIds: [0] }),
+    /sshKeyIds entry must be a positive integer/,
   );
 });
 
@@ -438,6 +447,10 @@ test("server configurator is usable through the provider-scoped CLI seam", async
       "9",
       "--addon",
       "4",
+      "--ssh-key",
+      "246",
+      "--ssh-key",
+      "247",
     ],
     {
       signal: new AbortController().signal,
@@ -460,5 +473,6 @@ test("server configurator is usable through the provider-scoped CLI seam", async
     pricePlan: 1,
     queueWhenUnavailable: true,
     addonIds: [9, 4],
+    sshKeyIds: [246, 247],
   });
 });

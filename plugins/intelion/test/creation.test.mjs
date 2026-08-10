@@ -34,6 +34,7 @@ function validConfiguration() {
     promotionCodeId: 3,
     queueWhenUnavailable: true,
     addonIds: [9, 4],
+    sshKeyIds: [246, 247],
   };
 }
 
@@ -73,6 +74,7 @@ test("server configurator creates REQUESTED resources that converge on inventory
     promocode_id: 3,
     is_in_queue: true,
     addon_ids: [9, 4],
+    ssh_key_ids: [246, 247],
   });
 
   assert.deepEqual(await plugin.provider.listInstances(context()), [
