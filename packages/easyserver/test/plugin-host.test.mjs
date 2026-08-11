@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
+import { promisify } from "node:util";
 import { PluginHost, formatPluginStatuses } from "../dist/plugin-host.js";
 import { ProviderFeatureHost } from "../dist/provider-feature-host.js";
 import { ProviderRegistry } from "../dist/provider-registry.js";
+
+const execFileAsync = promisify(execFile);
 
 function plugin({
   pluginId = "fake.plugin",
@@ -181,6 +185,55 @@ test("times out a hung plugin load and continues with healthy plugins", async ()
   assert.match(host.listPlugins()[0].error, /timed out/i);
   assert.equal(host.listPlugins()[1].state, "loaded");
   assert.deepEqual(registry.listProviderIds(), ["fake"]);
+});
+
+test("plugin load deadline keeps a standalone process alive until it fires", async () => {
+  const pluginHostUrl = new URL("../dist/plugin-host.js", import.meta.url).href;
+  const registryUrl = new URL("../dist/provider-registry.js", import.meta.url).href;
+  const script = `
+    import { PluginHost } from ${JSON.stringify(pluginHostUrl)};
+    import { ProviderRegistry } from ${JSON.stringify(registryUrl)};
+
+    const registry = new ProviderRegistry();
+    const healthy = {
+      manifest: {
+        id: "fake.plugin",
+        displayName: "Fake Plugin",
+        version: "1.0.0",
+        compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+        provider: {
+          id: "fake",
+          displayName: "Fake Provider",
+          capabilities: [],
+        },
+      },
+      provider: {
+        providerId: "fake",
+        async listInstances() { return []; },
+        async getInstance() { return undefined; },
+      },
+    };
+    const host = new PluginHost(
+      registry,
+      async (source) => source === "hung" ? new Promise(() => {}) : healthy,
+      undefined,
+      20,
+    );
+
+    host.load(["hung", "healthy"]).then(() => {
+      if (registry.listProviderIds().join(",") === "fake") {
+        console.log("loaded");
+      }
+    });
+  `;
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    "--input-type=module",
+    "-e",
+    script,
+  ]);
+
+  assert.equal(stdout.trim(), "loaded");
 });
 
 test("isolates catchable import and manifest failures", async () => {
