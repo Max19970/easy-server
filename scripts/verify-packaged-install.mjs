@@ -346,6 +346,12 @@ async function verifyCoreOnlyInstall(sdkTarball, cliTarball) {
   const result = runCli(prefix, "plugins", "list");
   assert.equal(result.stdout, "No provider plugins configured.\n");
   assert.equal(runInstalledExecutable(prefix, "--version").stdout, "0.1.0\n");
+
+  const diagnostics = JSON.parse(runCli(prefix, "doctor").stdout);
+  assert.equal(diagnostics.schemaVersion, 1);
+  assert.equal(diagnostics.easyserver.version, "0.1.0");
+  assert.deepEqual(diagnostics.plugins, []);
+  assert.equal(diagnostics.state.status, "empty");
 }
 
 async function verifyPluginInstall({
