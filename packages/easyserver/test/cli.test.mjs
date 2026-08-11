@@ -361,6 +361,55 @@ test("prints version", () => {
   assert.equal(result.stdout, "0.1.0\n");
 });
 
+test("doctor emits a privacy-safe troubleshooting payload", async () => {
+  const stateFile = join(testDirectory, "doctor-state.json");
+  const daemonFile = join(testDirectory, "doctor-daemon.json");
+  const secretRef = "secret:550e8400-e29b-41d4-a716-446655440000";
+  const providerExternalId = "remote-private-4815162342";
+  await writeFile(
+    stateFile,
+    `${JSON.stringify({
+      version: 1,
+      plugins: [
+        {
+          source: validPlugin,
+          enabled: true,
+          credentials: [{ name: "apiToken", secretRef }],
+        },
+      ],
+      instances: [
+        {
+          id: "instance:550e8400-e29b-41d4-a716-446655440001",
+          providerId: "fixture",
+          providerExternalId,
+        },
+      ],
+    })}\n`,
+    "utf8",
+  );
+
+  const result = runWithDaemon(stateFile, daemonFile, "doctor");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.schemaVersion, 1);
+  assert.equal(report.easyserver.version, "0.1.0");
+  assert.equal(report.state.configuredPlugins, 1);
+  assert.equal(report.state.credentialBindings, 1);
+  assert.equal(report.state.instanceBindings, 1);
+  assert.deepEqual(report.plugins, [
+    {
+      identity: "fixture.plugin",
+      state: "loaded",
+      version: "1.0.0",
+      providerId: "fixture",
+    },
+  ]);
+  assert.deepEqual(report.daemon, { status: "stopped" });
+  assert.equal(result.stdout.includes(secretRef), false);
+  assert.equal(result.stdout.includes(providerExternalId), false);
+  assert.equal(result.stdout.includes(validPlugin), false);
+});
+
 test("published CLI entrypoint is directly executable by Node-compatible shells", async () => {
   assert.match(await readFile(cli, "utf8"), /^#!\/usr\/bin\/env node\r?\n/);
 });

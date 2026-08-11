@@ -14,6 +14,7 @@ import {
   runForegroundConnect,
 } from "./connect-command.js";
 import { ConnectionGateway } from "./connection-gateway.js";
+import { collectDiagnostics } from "./diagnostics.js";
 import {
   ComputeManager,
   type InventoryInstance,
@@ -57,6 +58,7 @@ const help = `EasyServer
 Usage:
   easyserver --help
   easyserver --version
+  easyserver doctor
   easyserver plugins list [--plugin <module> ...]
   easyserver plugins add <module>
   easyserver plugins enable <module>
@@ -89,6 +91,15 @@ async function run(args: readonly string[]): Promise<void> {
 
   if (command === "--version" || command === "-v" || command === "version") {
     process.stdout.write(`${EASYSERVER_VERSION}\n`);
+    return;
+  }
+
+  if (command === "doctor") {
+    try {
+      await runDoctor(args.slice(1));
+    } catch (error) {
+      reportCliError(error);
+    }
     return;
   }
 
@@ -148,6 +159,18 @@ async function run(args: readonly string[]): Promise<void> {
 
   process.stderr.write(`Unknown command: ${escapeTerminalText(command)}\n\n${help}`);
   process.exitCode = 1;
+}
+
+async function runDoctor(args: readonly string[]): Promise<void> {
+  if (args.length !== 0) {
+    throw new CliUsageError("doctor does not accept arguments");
+  }
+
+  const report = await collectDiagnostics({
+    stateFile: stateFilePath(),
+    daemonFile: daemonFilePath(),
+  });
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
 
 async function runDaemon(args: readonly string[]): Promise<void> {

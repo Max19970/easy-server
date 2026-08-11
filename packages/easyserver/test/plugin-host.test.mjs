@@ -54,6 +54,7 @@ test("loads an explicitly requested plugin into the provider registry", async ()
       state: "loaded",
       pluginId: "fake.plugin",
       displayName: "Fake Plugin",
+      version: "1.0.0",
       providerId: "fake",
     },
   ]);

@@ -31,6 +31,7 @@ export interface PluginStatus {
   readonly state: PluginState;
   readonly pluginId?: string;
   readonly displayName?: string;
+  readonly version?: string;
   readonly providerId?: string;
   readonly error?: string;
 }
@@ -262,6 +263,7 @@ class PluginRuntime {
       state: this.#admitting ? "loaded" : "disabled",
       pluginId: this.pluginId,
       displayName: this.#plugin.manifest.displayName,
+      version: this.#plugin.manifest.version,
       providerId: this.providerId,
     };
   }
