@@ -83,6 +83,26 @@ const partialFailingPlugin = `data:text/javascript,${encodeURIComponent(`
     },
   };
 `)}`;
+const incompatiblePlugin = `data:text/javascript,${encodeURIComponent(`
+  export default {
+    manifest: {
+      id: "fixture.incompatible",
+      displayName: "Incompatible Fixture",
+      version: "1.0.0",
+      compatibility: { easyserver: "^0.2.0", pluginSdk: "^0.1.0" },
+      provider: {
+        id: "incompatible",
+        displayName: "Incompatible Provider",
+        capabilities: [],
+      },
+    },
+    provider: {
+      providerId: "incompatible",
+      async listInstances() { return []; },
+      async getInstance() { return undefined; },
+    },
+  };
+`)}`;
 const providerCollisionPlugin = `data:text/javascript,${encodeURIComponent(`
   export default {
     manifest: {
@@ -555,6 +575,39 @@ test("broken plugins are not persisted by plugins add", () => {
   const list = runWithState(stateFile, "plugins", "list");
   assert.equal(list.status, 0);
   assert.equal(list.stdout, "No provider plugins configured.\n");
+});
+
+test("configured incompatible plugin fails without rewriting durable state", async () => {
+  const stateFile = join(testDirectory, "incompatible-configured-state.json");
+  const persisted = `${JSON.stringify({
+    version: 1,
+    plugins: [
+      {
+        source: incompatiblePlugin,
+        enabled: true,
+        credentials: [
+          {
+            name: "api-key",
+            secretRef: "secret:550e8400-e29b-41d4-a716-446655440000",
+          },
+        ],
+      },
+    ],
+    instances: [
+      {
+        id: "instance:550e8400-e29b-41d4-a716-446655440001",
+        providerId: "incompatible",
+        providerExternalId: "remote-1",
+      },
+    ],
+  })}\n`;
+  await writeFile(stateFile, persisted, "utf8");
+
+  const list = runWithState(stateFile, "plugins", "list");
+
+  assert.equal(list.status, 0);
+  assert.match(list.stdout, /^failed\s+data:text\/javascript,.*requires EasyServer \^0\.2\.0/m);
+  assert.equal(await readFile(stateFile, "utf8"), persisted);
 });
 
 test("hung plugin validation does not hold the Local State lock", async () => {
