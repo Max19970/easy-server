@@ -12,6 +12,7 @@ import {
   normalizedError,
 } from "@easyai101/easyserver-plugin-sdk";
 import { retryWithHostTrust } from "../dist/connect-command.js";
+import { JsonStateStore } from "../dist/state-store.js";
 import {
   claimLocalDaemonDescriptor,
   LocalDaemonClient,
@@ -97,6 +98,20 @@ async function findFreePort() {
     server.close((error) => (error ? reject(error) : resolve())),
   );
   return port;
+}
+
+async function waitForIntentState(client, name, expected, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const status = (await client.listEndpointIntents()).find(
+      (intent) => intent.name === name,
+    );
+    if (status?.state === expected) {
+      return status;
+    }
+    await delay(10);
+  }
+  assert.fail(`Endpoint intent ${name} did not reach ${expected}`);
 }
 
 async function roundTrip(endpoint, payload) {
@@ -763,6 +778,339 @@ test("distinct idempotency keys allow duplicate targets and closed keys can be r
     assert.equal(gateway.sessions.size, 2);
   } finally {
     await daemon.close().catch(() => undefined);
+  }
+});
+
+test("persisted Endpoint intent is rebuilt after daemon restart without reviving the old transport", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "easyserver-intent-restart-"));
+  const store = new JsonStateStore(join(directory, "state.json"));
+  const localPort = await findFreePort();
+  const intent = {
+    name: "persisted",
+    enabled: true,
+    instanceId: "instance:550e8400-e29b-41d4-a716-446655440000",
+    remoteHost: "127.0.0.1",
+    remotePort: 8188,
+    localPort,
+    accessMethodId: "fixture-bastion",
+  };
+  await store.write({ version: 1, plugins: [], endpointIntents: [intent] });
+
+  const firstGateway = await createFakeGateway();
+  const firstDaemon = await startLocalConnectionDaemon({
+    gateway: firstGateway,
+    authToken: "first-token",
+    stateStore: store,
+  });
+  const firstClient = new LocalDaemonClient(firstDaemon.address, "first-token");
+  let secondDaemon;
+
+  try {
+    const first = await waitForIntentState(firstClient, "persisted", "live");
+    assert.equal(first.endpoint.port, localPort);
+    assert.equal(firstGateway.sessions.size, 1);
+    assert.deepEqual(await firstClient.listSessions(), []);
+
+    await firstDaemon.close();
+    await expectConnectionRefused(first.endpoint);
+    assert.equal(firstGateway.sessions.size, 0);
+    assert.deepEqual((await store.read()).endpointIntents, [intent]);
+
+    const secondGateway = await createFakeGateway();
+    secondDaemon = await startLocalConnectionDaemon({
+      gateway: secondGateway,
+      authToken: "second-token",
+      stateStore: store,
+    });
+    const secondClient = new LocalDaemonClient(secondDaemon.address, "second-token");
+    const restored = await waitForIntentState(secondClient, "persisted", "live");
+    assert.equal(restored.endpoint.port, localPort);
+    assert.equal(secondGateway.sessions.size, 1);
+    assert.deepEqual(await secondClient.listSessions(), []);
+  } finally {
+    await secondDaemon?.close().catch(() => undefined);
+    await firstDaemon.close().catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("failed Endpoint intent restoration is actionable and can recover on retry", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "easyserver-intent-retry-"));
+  const store = new JsonStateStore(join(directory, "state.json"));
+  await store.write({
+    version: 1,
+    plugins: [],
+    endpointIntents: [
+      {
+        name: "recoverable",
+        enabled: true,
+        instanceId: "instance:550e8400-e29b-41d4-a716-446655440000",
+        remoteHost: "127.0.0.1",
+        remotePort: 8188,
+        accessMethodId: "blocked-method",
+      },
+      {
+        name: "healthy-sibling",
+        enabled: true,
+        instanceId: "instance:550e8400-e29b-41d4-a716-446655440000",
+        remoteHost: "127.0.0.1",
+        remotePort: 8188,
+      },
+    ],
+  });
+  const baseGateway = await createFakeGateway();
+  let blocked = true;
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint(...args) {
+        if (blocked && args[5] === "blocked-method") {
+          throw normalizedError("conflict", "Requested local port is occupied");
+        }
+        return baseGateway.openEndpoint(...args);
+      },
+    },
+    authToken: "fixture-token",
+    stateStore: store,
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    const failed = await waitForIntentState(client, "recoverable", "error");
+    assert.deepEqual(failed.failure, {
+      code: "conflict",
+      message: "Requested local port is occupied",
+    });
+    assert.equal("endpoint" in failed, false);
+    const sibling = await waitForIntentState(client, "healthy-sibling", "live");
+    assert.ok(sibling.endpoint.port > 0);
+    assert.equal(baseGateway.sessions.size, 1);
+
+    blocked = false;
+    const retrying = await client.retryEndpointIntent("recoverable");
+    assert.equal(retrying.state, "starting");
+    const recovered = await waitForIntentState(client, "recoverable", "live");
+    assert.equal(baseGateway.sessions.size, 2);
+    assert.ok(recovered.endpoint.port > 0);
+  } finally {
+    await daemon.close().catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("disabling and removing an Endpoint intent changes desired state without touching unrelated state", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "easyserver-intent-remove-"));
+  const store = new JsonStateStore(join(directory, "state.json"));
+  await store.write({
+    version: 1,
+    plugins: [{ source: "unrelated", enabled: false }],
+  });
+  const gateway = await createFakeGateway();
+  const daemon = await startLocalConnectionDaemon({
+    gateway,
+    authToken: "fixture-token",
+    stateStore: store,
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    await client.createEndpointIntent({
+      name: "toggle",
+      instanceId: "instance:550e8400-e29b-41d4-a716-446655440000",
+      remotePort: 8188,
+    });
+    const live = await waitForIntentState(client, "toggle", "live");
+    const endpoint = live.endpoint;
+    const alreadyEnabled = await client.setEndpointIntentEnabled("toggle", true);
+    assert.equal(alreadyEnabled.state, "live");
+    assert.equal(gateway.sessions.size, 1);
+
+    const disabled = await client.setEndpointIntentEnabled("toggle", false);
+    assert.equal(disabled.state, "disabled");
+    await expectConnectionRefused(endpoint);
+    assert.equal((await store.read()).endpointIntents[0].enabled, false);
+
+    await client.setEndpointIntentEnabled("toggle", true);
+    const restored = await waitForIntentState(client, "toggle", "live");
+    await client.removeEndpointIntent("toggle");
+    await expectConnectionRefused(restored.endpoint);
+
+    const state = await store.read();
+    assert.deepEqual(state.plugins, [{ source: "unrelated", enabled: false }]);
+    assert.equal(state.endpointIntents, undefined);
+    assert.deepEqual(await client.listEndpointIntents(), []);
+  } finally {
+    await daemon.close().catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("disabling an intent while realization is pending closes a late transport", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "easyserver-intent-late-"));
+  const store = new JsonStateStore(join(directory, "state.json"));
+  await store.write({ version: 1, plugins: [] });
+  const baseGateway = await createFakeGateway();
+  let releaseOpen;
+  const gate = new Promise((resolve) => {
+    releaseOpen = resolve;
+  });
+  let openStarted;
+  const started = new Promise((resolve) => {
+    openStarted = resolve;
+  });
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint(...args) {
+        openStarted();
+        await gate;
+        return baseGateway.openEndpoint(...args);
+      },
+    },
+    authToken: "fixture-token",
+    stateStore: store,
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    const created = await client.createEndpointIntent({
+      name: "late",
+      instanceId: "instance:550e8400-e29b-41d4-a716-446655440000",
+      remotePort: 8188,
+    });
+    assert.equal(created.state, "starting");
+    await started;
+    let disableSettled = false;
+    const disabling = client.setEndpointIntentEnabled("late", false).then((status) => {
+      disableSettled = true;
+      return status;
+    });
+    await delay(50);
+    assert.equal(disableSettled, false);
+
+    releaseOpen();
+    const disabled = await disabling;
+    assert.equal(disabled.state, "disabled");
+    assert.equal(baseGateway.sessions.size, 0);
+    assert.equal((await client.listEndpointIntents())[0].state, "disabled");
+  } finally {
+    releaseOpen();
+    await daemon.close().catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("removed intent cleanup can be retried after a close failure", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "easyserver-intent-remove-retry-"));
+  const store = new JsonStateStore(join(directory, "state.json"));
+  await store.write({ version: 1, plugins: [] });
+  const baseGateway = await createFakeGateway();
+  let failClose = true;
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint(...args) {
+        const opened = await baseGateway.openEndpoint(...args);
+        const close = opened.session.close.bind(opened.session);
+        opened.session.close = async () => {
+          if (failClose) {
+            failClose = false;
+            throw new Error("fixture cleanup failure");
+          }
+          return close();
+        };
+        return opened;
+      },
+    },
+    authToken: "fixture-token",
+    stateStore: store,
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    await client.createEndpointIntent({
+      name: "cleanup",
+      instanceId: "instance:550e8400-e29b-41d4-a716-446655440000",
+      remotePort: 8188,
+    });
+    const live = await waitForIntentState(client, "cleanup", "live");
+
+    await assert.rejects(client.removeEndpointIntent("cleanup"), /fixture cleanup failure/);
+    assert.equal((await store.read()).endpointIntents, undefined);
+    assert.deepEqual(await client.listEndpointIntents(), []);
+    assert.equal(baseGateway.sessions.size, 1);
+
+    await assert.rejects(
+      client.createEndpointIntent({
+        name: "cleanup",
+        instanceId: "instance:550e8400-e29b-41d4-a716-446655440000",
+        remotePort: 22,
+      }),
+      (error) => error?.code === "conflict" && /awaiting cleanup/.test(error.message),
+    );
+
+    await client.removeEndpointIntent("cleanup");
+    assert.equal(baseGateway.sessions.size, 0);
+    await expectConnectionRefused(live.endpoint);
+
+    const reused = await client.createEndpointIntent({
+      name: "cleanup",
+      instanceId: "instance:550e8400-e29b-41d4-a716-446655440000",
+      remotePort: 22,
+    });
+    assert.equal(reused.state, "starting");
+    await waitForIntentState(client, "cleanup", "live");
+  } finally {
+    await daemon.close().catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("daemon close waits for late intent realization cleanup", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "easyserver-intent-close-wait-"));
+  const store = new JsonStateStore(join(directory, "state.json"));
+  await store.write({ version: 1, plugins: [] });
+  const baseGateway = await createFakeGateway();
+  let releaseOpen;
+  const gate = new Promise((resolve) => {
+    releaseOpen = resolve;
+  });
+  let openStarted;
+  const started = new Promise((resolve) => {
+    openStarted = resolve;
+  });
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint(...args) {
+        openStarted();
+        await gate;
+        return baseGateway.openEndpoint(...args);
+      },
+    },
+    authToken: "fixture-token",
+    stateStore: store,
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    await client.createEndpointIntent({
+      name: "late-close",
+      instanceId: "instance:550e8400-e29b-41d4-a716-446655440000",
+      remotePort: 8188,
+    });
+    await started;
+
+    let settled = false;
+    const closing = daemon.close().then(() => {
+      settled = true;
+    });
+    await delay(50);
+    assert.equal(settled, false);
+
+    releaseOpen();
+    await closing;
+    assert.equal(baseGateway.sessions.size, 0);
+  } finally {
+    releaseOpen();
+    await daemon.close().catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

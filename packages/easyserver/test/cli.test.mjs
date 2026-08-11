@@ -1520,6 +1520,48 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
     assert.equal(close.status, 0, close.stderr);
     await waitForConnectionRefused(endpoint);
 
+    const intentLocalPort = await findFreePort();
+    const createIntent = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "intents",
+      "create",
+      "persisted-main",
+      instanceId,
+      "--port",
+      String(echoAddress.port),
+      "--local-port",
+      String(intentLocalPort),
+      "--access-method",
+      "fixture-loopback",
+    );
+    assert.equal(createIntent.status, 0, createIntent.stderr);
+    assert.match(createIntent.stdout, /persisted-main state=starting enabled=true/);
+
+    let intentList;
+    const intentDeadline = Date.now() + 3000;
+    while (Date.now() < intentDeadline) {
+      intentList = runWithDaemon(
+        stateFile,
+        daemonFile,
+        "sessions",
+        "intents",
+        "list",
+      );
+      if (intentList.stdout.includes("persisted-main state=live")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(intentList?.status, 0, intentList?.stderr);
+    assert.match(
+      intentList?.stdout ?? "",
+      new RegExp(`persisted-main state=live.*endpoint=127\\.0\\.0\\.1:${intentLocalPort}.*access-method=fixture-loopback`),
+    );
+    const intentEndpoint = { host: "127.0.0.1", port: intentLocalPort };
+    assert.equal(await roundTrip(intentEndpoint, "intent-before-restart"), "intent-before-restart");
+
     const second = runWithDaemon(
       stateFile,
       daemonFile,
@@ -1543,6 +1585,7 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
     daemon.child.kill();
     await once(daemon.child, "exit");
     await waitForConnectionRefused(secondEndpoint);
+    await waitForConnectionRefused(intentEndpoint);
 
     daemon = startDaemon(stateFile, daemonFile);
     await waitForDaemonFile(
@@ -1559,6 +1602,28 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
     );
     assert.equal(afterRestart.status, 0, afterRestart.stderr);
     assert.equal(afterRestart.stdout, "No connection sessions found.\n");
+
+    let restoredIntent;
+    const restoreDeadline = Date.now() + 3000;
+    while (Date.now() < restoreDeadline) {
+      restoredIntent = runWithDaemon(
+        stateFile,
+        daemonFile,
+        "sessions",
+        "intents",
+        "list",
+      );
+      if (restoredIntent.stdout.includes("persisted-main state=live")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(restoredIntent?.status, 0, restoredIntent?.stderr);
+    assert.match(
+      restoredIntent?.stdout ?? "",
+      new RegExp(`persisted-main state=live.*endpoint=127\\.0\\.0\\.1:${intentLocalPort}`),
+    );
+    assert.equal(await roundTrip(intentEndpoint, "intent-after-restart"), "intent-after-restart");
   } finally {
     if (daemon.child.exitCode === null) {
       daemon.child.kill();

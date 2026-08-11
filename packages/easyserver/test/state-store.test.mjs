@@ -228,6 +228,53 @@ test("managed provenance and pending acquisition identities persist without rota
   });
 });
 
+test("Endpoint intents persist desired configuration without runtime transport state", async () => {
+  await withTempDirectory(async (directory) => {
+    const store = new JsonStateStore(join(directory, "state.json"));
+    const intent = {
+      name: "comfyui-main",
+      enabled: true,
+      instanceId: "instance:550e8400-e29b-41d4-a716-446655440000",
+      remoteHost: "127.0.0.1",
+      remotePort: 8188,
+      localPort: 54321,
+      accessMethodId: "direct-ssh",
+    };
+
+    await store.write({ version: 1, plugins: [], endpointIntents: [intent] });
+    assert.deepEqual(await new JsonStateStore(store.path).read(), {
+      version: 1,
+      plugins: [],
+      endpointIntents: [intent],
+    });
+
+    await assert.rejects(
+      store.write({
+        version: 1,
+        plugins: [],
+        endpointIntents: [intent, { ...intent }],
+      }),
+      /duplicate name/,
+    );
+    await assert.rejects(
+      store.write({
+        version: 1,
+        plugins: [],
+        endpointIntents: [{ ...intent, localPort: 70000 }],
+      }),
+      /localPort must be an integer between 1 and 65535/,
+    );
+    await assert.rejects(
+      store.write({
+        version: 1,
+        plugins: [],
+        endpointIntents: [{ ...intent, instanceId: "instance:not-a-uuid" }],
+      }),
+      /instanceId must be instance:<uuid>/,
+    );
+  });
+});
+
 test("last-known instance observations persist only normalized privacy-safe fields", async () => {
   await withTempDirectory(async (directory) => {
     const path = join(directory, "state.json");

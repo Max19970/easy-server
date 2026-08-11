@@ -15,6 +15,12 @@ import type {
   Endpoint,
   OpenEndpointResult,
 } from "./connection-gateway.js";
+import {
+  EndpointIntentService,
+  type CreateEndpointIntentRequest,
+  type EndpointIntentStatus,
+} from "./endpoint-intent-service.js";
+import type { JsonStateStore } from "./state-store.js";
 
 const MAX_REQUEST_BYTES = 64 * 1024;
 const DEFAULT_HEALTH_TIMEOUT_MS = 1_000;
@@ -191,12 +197,17 @@ export async function removeLocalDaemonDescriptor(path: string): Promise<void> {
 export async function startLocalConnectionDaemon(options: {
   readonly gateway: ConnectionGateway | EndpointOpener;
   readonly authToken: string;
+  readonly stateStore?: JsonStateStore;
 }): Promise<LocalConnectionDaemon> {
   if (options.authToken.length === 0) {
     throw new TypeError("authToken must be non-empty");
   }
 
   const sessions = new Map<string, OwnedSession>();
+  const intentService =
+    options.stateStore === undefined
+      ? undefined
+      : new EndpointIntentService(options.gateway, options.stateStore);
   const sessionIdsByIdempotencyKey = new Map<string, string>();
   const pendingIdempotentSessions = new Map<string, PendingIdempotentSession>();
   const pendingSetups = new Set<AbortController>();
@@ -366,6 +377,52 @@ export async function startLocalConnectionDaemon(options: {
         return;
       }
 
+      if (request.method === "GET" && request.url === "/intents") {
+        if (intentService === undefined) {
+          throw normalizedError("unsupported-operation", "Endpoint intents are not configured");
+        }
+        sendJson(response, 200, intentService.list());
+        return;
+      }
+
+      if (request.method === "POST" && request.url === "/intents") {
+        if (intentService === undefined) {
+          throw normalizedError("unsupported-operation", "Endpoint intents are not configured");
+        }
+        const status = await intentService.create(
+          parseCreateIntentRequest(await readJson(request)),
+        );
+        sendJson(response, 201, status);
+        return;
+      }
+
+      const intentRoute = parseIntentRoute(request.url);
+      if (intentRoute !== undefined && intentService !== undefined) {
+        if (request.method === "DELETE" && intentRoute.action === undefined) {
+          await intentService.remove(intentRoute.name);
+          sendJson(response, 200, { ok: true });
+          return;
+        }
+        if (request.method === "POST" && intentRoute.action === "retry") {
+          sendJson(response, 200, intentService.retry(intentRoute.name));
+          return;
+        }
+        if (
+          request.method === "POST" &&
+          (intentRoute.action === "enable" || intentRoute.action === "disable")
+        ) {
+          sendJson(
+            response,
+            200,
+            await intentService.setEnabled(
+              intentRoute.name,
+              intentRoute.action === "enable",
+            ),
+          );
+          return;
+        }
+      }
+
       if (request.method === "GET" && request.url === "/sessions") {
         sendJson(
           response,
@@ -496,6 +553,13 @@ export async function startLocalConnectionDaemon(options: {
     throw new Error("Failed to determine daemon control address");
   }
 
+  try {
+    await intentService?.restore();
+  } catch (error) {
+    await closeHttpServer(server).catch(() => undefined);
+    throw error;
+  }
+
   return {
     address: { host: "127.0.0.1", port: address.port },
     close() {
@@ -508,6 +572,12 @@ export async function startLocalConnectionDaemon(options: {
 
         try {
           await closeHttpServer(server);
+        } catch (error) {
+          errors.push(error);
+        }
+
+        try {
+          await intentService?.close();
         } catch (error) {
           errors.push(error);
         }
@@ -567,6 +637,34 @@ export class LocalDaemonClient {
 
   async closeSession(id: string): Promise<void> {
     await this.#request("DELETE", `/sessions/${encodeURIComponent(id)}`);
+  }
+
+  async listEndpointIntents(): Promise<readonly EndpointIntentStatus[]> {
+    return this.#request("GET", "/intents");
+  }
+
+  async createEndpointIntent(
+    request: CreateEndpointIntentRequest,
+  ): Promise<EndpointIntentStatus> {
+    return this.#request("POST", "/intents", request);
+  }
+
+  async retryEndpointIntent(name: string): Promise<EndpointIntentStatus> {
+    return this.#request("POST", `/intents/${encodeURIComponent(name)}/retry`);
+  }
+
+  async setEndpointIntentEnabled(
+    name: string,
+    enabled: boolean,
+  ): Promise<EndpointIntentStatus> {
+    return this.#request(
+      "POST",
+      `/intents/${encodeURIComponent(name)}/${enabled ? "enable" : "disable"}`,
+    );
+  }
+
+  async removeEndpointIntent(name: string): Promise<void> {
+    await this.#request("DELETE", `/intents/${encodeURIComponent(name)}`);
   }
 
   async #request<T>(
@@ -641,6 +739,69 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   }
 
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function parseCreateIntentRequest(value: unknown): CreateEndpointIntentRequest {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError("Invalid create-intent request");
+  }
+  const input = value as Record<string, unknown>;
+  if (typeof input.name !== "string") {
+    throw new TypeError("Endpoint intent name must be a string");
+  }
+  if (typeof input.instanceId !== "string") {
+    throw new TypeError("Endpoint intent instanceId must be a string");
+  }
+  if (typeof input.remotePort !== "number") {
+    throw new TypeError("Endpoint intent remotePort must be a number");
+  }
+  if (input.remoteHost !== undefined && typeof input.remoteHost !== "string") {
+    throw new TypeError("Endpoint intent remoteHost must be a string");
+  }
+  if (input.localPort !== undefined && typeof input.localPort !== "number") {
+    throw new TypeError("Endpoint intent localPort must be a number");
+  }
+  if (
+    input.accessMethodId !== undefined &&
+    typeof input.accessMethodId !== "string"
+  ) {
+    throw new TypeError("Endpoint intent accessMethodId must be a string");
+  }
+  if (input.enabled !== undefined && typeof input.enabled !== "boolean") {
+    throw new TypeError("Endpoint intent enabled must be a boolean");
+  }
+  return {
+    name: input.name,
+    instanceId: input.instanceId,
+    remotePort: input.remotePort,
+    ...(input.remoteHost === undefined ? {} : { remoteHost: input.remoteHost }),
+    ...(input.localPort === undefined ? {} : { localPort: input.localPort }),
+    ...(input.accessMethodId === undefined
+      ? {}
+      : { accessMethodId: input.accessMethodId }),
+    ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
+  };
+}
+
+function parseIntentRoute(
+  url: string | undefined,
+): { readonly name: string; readonly action?: "retry" | "enable" | "disable" } | undefined {
+  if (url === undefined || !url.startsWith("/intents/")) {
+    return undefined;
+  }
+  const parts = url.slice("/intents/".length).split("/");
+  if (parts.length < 1 || parts.length > 2 || parts[0].length === 0) {
+    return undefined;
+  }
+  const name = decodeURIComponent(parts[0]);
+  if (parts.length === 1) {
+    return { name };
+  }
+  const action = parts[1];
+  if (action !== "retry" && action !== "enable" && action !== "disable") {
+    return undefined;
+  }
+  return { name, action };
 }
 
 function sameSessionIntent(

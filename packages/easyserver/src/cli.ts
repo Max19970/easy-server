@@ -48,6 +48,7 @@ import { OsKeyringSecretStore } from "./secret-store.js";
 import { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
 import { JsonStateStore, type PluginRegistration } from "./state-store.js";
 import { escapeTerminalText } from "./terminal-text.js";
+import type { EndpointIntentStatus } from "./endpoint-intent-service.js";
 import { EASYSERVER_VERSION } from "./version.js";
 import {
   claimLocalDaemonDescriptor,
@@ -92,6 +93,12 @@ Usage:
   easyserver sessions create <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>] [--access-method <id>] [--idempotency-key <key>]
   easyserver sessions list
   easyserver sessions close <session-id>
+  easyserver sessions intents list
+  easyserver sessions intents create <name> <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>] [--access-method <id>]
+  easyserver sessions intents enable <name>
+  easyserver sessions intents disable <name>
+  easyserver sessions intents retry <name>
+  easyserver sessions intents remove <name>
   easyserver provider <provider-id> <feature-id> <command> [--yes] [args...]
 `;
 
@@ -228,7 +235,11 @@ async function runDaemon(args: readonly string[]): Promise<void> {
     secretStore,
   );
   const authToken = randomBytes(32).toString("base64url");
-  const daemon = await startLocalConnectionDaemon({ gateway, authToken });
+  const daemon = await startLocalConnectionDaemon({
+    gateway,
+    authToken,
+    stateStore: store,
+  });
   let releaseDescriptor: (() => Promise<void>) | undefined;
   let stop!: () => void;
   const stopped = new Promise<void>((resolve) => {
@@ -260,6 +271,11 @@ async function runDaemon(args: readonly string[]): Promise<void> {
 
 async function runSessions(args: readonly string[]): Promise<void> {
   const [command] = args;
+
+  if (command === "intents") {
+    await runSessionIntents(args.slice(1));
+    return;
+  }
 
   if (command === "list" && args.length === 1) {
     const client = await localDaemonClient();
@@ -308,6 +324,75 @@ async function runSessions(args: readonly string[]): Promise<void> {
   }
 
   throw new CliUsageError(`Unknown sessions command: ${command ?? "(missing)"}`);
+}
+
+async function runSessionIntents(args: readonly string[]): Promise<void> {
+  const [command, name] = args;
+  const client = await localDaemonClient();
+
+  if (command === "list" && args.length === 1) {
+    process.stdout.write(formatEndpointIntents(await client.listEndpointIntents()));
+    return;
+  }
+
+  if (command === "create" && name !== undefined) {
+    const { instanceId, remotePort, remoteHost, localPort, accessMethodId } =
+      parseConnectArgs(args.slice(2), "sessions intents create");
+    const status = await client.createEndpointIntent({
+      name,
+      instanceId,
+      remotePort,
+      ...(remoteHost === undefined ? {} : { remoteHost }),
+      ...(localPort === undefined ? {} : { localPort }),
+      ...(accessMethodId === undefined ? {} : { accessMethodId }),
+    });
+    process.stdout.write(`${formatEndpointIntent(status)}\n`);
+    return;
+  }
+
+  if (
+    (command === "enable" || command === "disable") &&
+    name !== undefined &&
+    args.length === 2
+  ) {
+    const status = await client.setEndpointIntentEnabled(name, command === "enable");
+    process.stdout.write(`${formatEndpointIntent(status)}\n`);
+    return;
+  }
+
+  if (command === "retry" && name !== undefined && args.length === 2) {
+    process.stdout.write(
+      `${formatEndpointIntent(await client.retryEndpointIntent(name))}\n`,
+    );
+    return;
+  }
+
+  if (command === "remove" && name !== undefined && args.length === 2) {
+    await client.removeEndpointIntent(name);
+    process.stdout.write(`Removed Endpoint intent ${escapeTerminalText(name)}\n`);
+    return;
+  }
+
+  throw new CliUsageError(`Unknown sessions intents command: ${command ?? "(missing)"}`);
+}
+
+function formatEndpointIntents(intents: readonly EndpointIntentStatus[]): string {
+  if (intents.length === 0) {
+    return "No Endpoint intents configured.\n";
+  }
+  return `${intents.map(formatEndpointIntent).join("\n")}\n`;
+}
+
+function formatEndpointIntent(intent: EndpointIntentStatus): string {
+  const endpoint =
+    intent.state === "live"
+      ? ` endpoint=${intent.endpoint.host}:${intent.endpoint.port} access-method=${escapeTerminalText(intent.accessMethod.id)} kind=${escapeTerminalText(intent.accessMethod.kind)}`
+      : "";
+  const failure =
+    intent.state === "error"
+      ? ` error=${intent.failure.code}:${escapeTerminalText(intent.failure.message)}`
+      : "";
+  return `${escapeTerminalText(intent.name)} state=${intent.state} enabled=${intent.enabled} instance=${escapeTerminalText(intent.instanceId)} target=${escapeTerminalText(intent.remoteHost)}:${intent.remotePort} requested-local-port=${intent.localPort ?? "dynamic"} requested-access-method=${intent.accessMethodId === undefined ? "default" : escapeTerminalText(intent.accessMethodId)}${endpoint}${failure}`;
 }
 
 async function localDaemonClient(): Promise<LocalDaemonClient> {

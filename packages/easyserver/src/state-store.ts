@@ -45,11 +45,22 @@ export interface PendingManagedResource {
   readonly providerExternalId: string;
 }
 
+export interface EndpointIntent {
+  readonly name: string;
+  readonly enabled: boolean;
+  readonly instanceId: string;
+  readonly remoteHost: string;
+  readonly remotePort: number;
+  readonly localPort?: number;
+  readonly accessMethodId?: string;
+}
+
 export interface EasyServerState {
   readonly version: 1;
   readonly plugins: readonly PluginRegistration[];
   readonly instances?: readonly InstanceBinding[];
   readonly pendingManagedResources?: readonly PendingManagedResource[];
+  readonly endpointIntents?: readonly EndpointIntent[];
 }
 
 export class JsonStateStore {
@@ -256,6 +267,10 @@ function parseState(value: unknown): EasyServerState {
     state.pendingManagedResources,
     "state.pendingManagedResources",
   );
+  const endpointIntents = parseEndpointIntents(
+    state.endpointIntents,
+    "state.endpointIntents",
+  );
 
   return {
     version: 1,
@@ -264,6 +279,7 @@ function parseState(value: unknown): EasyServerState {
     ...(pendingManagedResources === undefined
       ? {}
       : { pendingManagedResources }),
+    ...(endpointIntents === undefined ? {} : { endpointIntents }),
   };
 }
 
@@ -411,6 +427,76 @@ function parseInstanceObservation(
     observedAt,
     name: expectNonEmptyString(observation.name, `${path}.name`),
   };
+}
+
+function parseEndpointIntents(
+  value: unknown,
+  path: string,
+): readonly EndpointIntent[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${path} must be an array`);
+  }
+
+  const intents: EndpointIntent[] = [];
+  const seenNames = new Set<string>();
+  for (const [index, candidate] of value.entries()) {
+    const intent = expectRecord(candidate, `${path}[${index}]`);
+    const name = expectNonEmptyString(intent.name, `${path}[${index}].name`);
+    if (name.length > 128) {
+      throw new TypeError(`${path}[${index}].name must be at most 128 characters`);
+    }
+    if (seenNames.has(name)) {
+      throw new TypeError(`${path} contains duplicate name: ${name}`);
+    }
+    if (typeof intent.enabled !== "boolean") {
+      throw new TypeError(`${path}[${index}].enabled must be a boolean`);
+    }
+    const instanceId = expectNonEmptyString(
+      intent.instanceId,
+      `${path}[${index}].instanceId`,
+    );
+    if (!COMPUTE_INSTANCE_ID_PATTERN.test(instanceId)) {
+      throw new TypeError(`${path}[${index}].instanceId must be instance:<uuid>`);
+    }
+    const remoteHost = expectNonEmptyString(
+      intent.remoteHost,
+      `${path}[${index}].remoteHost`,
+    );
+    const remotePort = parsePort(intent.remotePort, `${path}[${index}].remotePort`);
+    const localPort =
+      intent.localPort === undefined
+        ? undefined
+        : parsePort(intent.localPort, `${path}[${index}].localPort`);
+    const accessMethodId =
+      intent.accessMethodId === undefined
+        ? undefined
+        : expectNonEmptyString(
+            intent.accessMethodId,
+            `${path}[${index}].accessMethodId`,
+          );
+
+    seenNames.add(name);
+    intents.push({
+      name,
+      enabled: intent.enabled,
+      instanceId,
+      remoteHost,
+      remotePort,
+      ...(localPort === undefined ? {} : { localPort }),
+      ...(accessMethodId === undefined ? {} : { accessMethodId }),
+    });
+  }
+  return intents;
+}
+
+function parsePort(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 65_535) {
+    throw new TypeError(`${path} must be an integer between 1 and 65535`);
+  }
+  return value;
 }
 
 function parseCredentialBindings(
