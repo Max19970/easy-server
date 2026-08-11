@@ -1,6 +1,8 @@
+import type { SecretReference } from "@easyai101/easyserver-plugin-sdk";
 import type { SecretStore } from "./secret-store.js";
 import {
   JsonStateStore,
+  type EasyServerState,
   type PluginRegistration,
 } from "./state-store.js";
 
@@ -16,17 +18,18 @@ export async function setPluginCredential(
   secret: string,
 ): Promise<CredentialUpdateResult> {
   assertCredentialName(name);
-  let previousSecretRef: Awaited<ReturnType<SecretStore["create"]>> | undefined;
-  let newSecretRef: Awaited<ReturnType<SecretStore["create"]>> | undefined;
+  findPlugin((await stateStore.read()).plugins, source);
+
+  const newSecretRef = await secretStore.create(secret);
+  let previousSecretRef: SecretReference | undefined;
 
   try {
-    await stateStore.update(async (state) => {
+    await stateStore.update((state) => {
       const index = findPlugin(state.plugins, source);
       const plugin = state.plugins[index];
       previousSecretRef = plugin.credentials?.find(
         (credential) => credential.name === name,
       )?.secretRef;
-      newSecretRef = await secretStore.create(secret);
       const credentials = [
         ...(plugin.credentials ?? []).filter(
           (credential) => credential.name !== name,
@@ -40,13 +43,14 @@ export async function setPluginCredential(
       return { ...state, plugins };
     });
   } catch (error) {
-    if (newSecretRef !== undefined) {
+    const referenced = await secretReferenceState(stateStore, newSecretRef);
+    if (referenced === false) {
       try {
         await secretStore.delete(newSecretRef);
       } catch (cleanupError) {
         throw new AggregateError(
           [error, cleanupError],
-          "Failed to persist provider credential and clean up the new secret",
+          "Failed to persist provider credential and clean up the unused new secret",
         );
       }
     }
@@ -54,10 +58,11 @@ export async function setPluginCredential(
   }
 
   return {
-    previousSecretRemoved:
-      previousSecretRef === undefined
-        ? true
-        : await secretStore.delete(previousSecretRef).catch(() => false),
+    previousSecretRemoved: await removeSecretIfUnused(
+      stateStore,
+      secretStore,
+      previousSecretRef,
+    ),
   };
 }
 
@@ -68,7 +73,7 @@ export async function removePluginCredential(
   name: string,
 ): Promise<CredentialUpdateResult> {
   assertCredentialName(name);
-  let previousSecretRef: Awaited<ReturnType<SecretStore["create"]>> | undefined;
+  let previousSecretRef: SecretReference | undefined;
 
   await stateStore.update((state) => {
     const index = findPlugin(state.plugins, source);
@@ -98,11 +103,46 @@ export async function removePluginCredential(
   });
 
   return {
-    previousSecretRemoved:
-      previousSecretRef === undefined
-        ? true
-        : await secretStore.delete(previousSecretRef).catch(() => false),
+    previousSecretRemoved: await removeSecretIfUnused(
+      stateStore,
+      secretStore,
+      previousSecretRef,
+    ),
   };
+}
+
+async function removeSecretIfUnused(
+  stateStore: JsonStateStore,
+  secretStore: SecretStore,
+  ref: SecretReference | undefined,
+): Promise<boolean> {
+  if (ref === undefined) {
+    return true;
+  }
+  const referenced = await secretReferenceState(stateStore, ref);
+  if (referenced !== false) {
+    return false;
+  }
+  return secretStore.delete(ref).catch(() => false);
+}
+
+async function secretReferenceState(
+  stateStore: JsonStateStore,
+  ref: SecretReference,
+): Promise<boolean | undefined> {
+  try {
+    return stateReferencesSecret(await stateStore.read(), ref);
+  } catch {
+    // Failure to prove a secret unused must fail safe: retaining an orphan is
+    // preferable to deleting a secret that committed state may still reference.
+    return undefined;
+  }
+}
+
+function stateReferencesSecret(state: EasyServerState, ref: SecretReference): boolean {
+  return state.plugins.some((plugin) =>
+    plugin.credentials?.some((credential) => credential.secretRef === ref),
+  );
 }
 
 function findPlugin(plugins: readonly PluginRegistration[], source: string): number {

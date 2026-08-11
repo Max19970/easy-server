@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
 import {
@@ -71,6 +72,241 @@ test("concurrent credential updates preserve every binding and secret", async ()
   assert.equal(
     await secrets.get(byName.get("secondary-key").secretRef),
     "second-secret",
+  );
+});
+
+test("a hung Secret Store create does not hold the Local State lock", async () => {
+  const { store } = await fixture();
+  const backing = new InMemorySecretStore();
+  let createStartedResolve;
+  const createStarted = new Promise((resolve) => {
+    createStartedResolve = resolve;
+  });
+  let releaseCreate;
+  const createGate = new Promise((resolve) => {
+    releaseCreate = resolve;
+  });
+  const secrets = {
+    async create(secret) {
+      createStartedResolve();
+      await createGate;
+      return backing.create(secret);
+    },
+    get: (ref) => backing.get(ref),
+    delete: (ref) => backing.delete(ref),
+  };
+
+  const credentialUpdate = setPluginCredential(
+    store,
+    secrets,
+    "@easyai101/easyserver-plugin-vastai",
+    "api-key",
+    "slow-secret",
+  );
+  await createStarted;
+
+  const independent = new JsonStateStore(store.path).update((state) => ({
+    ...state,
+    instances: [
+      ...(state.instances ?? []),
+      {
+        id: "instance:f3e4bc3a-b59c-43db-b218-6bc77bb06acd",
+        providerId: "fixture",
+        providerExternalId: "remote-independent",
+      },
+    ],
+  }));
+  const outcome = await Promise.race([
+    independent.then(() => "committed"),
+    delay(250).then(() => "blocked"),
+  ]);
+  assert.equal(outcome, "committed");
+
+  releaseCreate();
+  await credentialUpdate;
+  assert.equal((await store.read()).instances?.length, 1);
+});
+
+test("concurrent state change between preparation and commit cleans an unused secret", async () => {
+  const { store } = await fixture();
+  const backing = new InMemorySecretStore();
+  let createStartedResolve;
+  const createStarted = new Promise((resolve) => {
+    createStartedResolve = resolve;
+  });
+  let releaseCreate;
+  const createGate = new Promise((resolve) => {
+    releaseCreate = resolve;
+  });
+  let createdRef;
+  const secrets = {
+    async create(secret) {
+      createStartedResolve();
+      await createGate;
+      createdRef = await backing.create(secret);
+      return createdRef;
+    },
+    get: (ref) => backing.get(ref),
+    delete: (ref) => backing.delete(ref),
+  };
+
+  const pending = setPluginCredential(
+    store,
+    secrets,
+    "@easyai101/easyserver-plugin-vastai",
+    "api-key",
+    "prepared-secret",
+  );
+  await createStarted;
+  await new JsonStateStore(store.path).update((state) => ({
+    ...state,
+    plugins: state.plugins.filter(
+      (plugin) => plugin.source !== "@easyai101/easyserver-plugin-vastai",
+    ),
+  }));
+  releaseCreate();
+
+  await assert.rejects(pending, /Plugin source is not configured/);
+  assert.ok(createdRef);
+  assert.equal(await secrets.get(createdRef), undefined);
+  assert.deepEqual((await store.read()).plugins, []);
+});
+
+test("pre-commit failure cleans the prepared secret and preserves the old binding", async () => {
+  const { store } = await fixture();
+  const backing = new InMemorySecretStore();
+  let createdRef;
+  const secrets = {
+    async create(secret) {
+      createdRef = await backing.create(secret);
+      return createdRef;
+    },
+    get: (ref) => backing.get(ref),
+    delete: (ref) => backing.delete(ref),
+  };
+  await setPluginCredential(
+    store,
+    secrets,
+    "@easyai101/easyserver-plugin-vastai",
+    "api-key",
+    "first-key",
+  );
+  const oldRef = (await store.read()).plugins[0].credentials[0].secretRef;
+
+  const failing = new JsonStateStore(store.path, async () => {
+    throw new Error("fixture pre-commit failure");
+  });
+  await assert.rejects(
+    setPluginCredential(
+      failing,
+      secrets,
+      "@easyai101/easyserver-plugin-vastai",
+      "api-key",
+      "second-key",
+    ),
+    /fixture pre-commit failure/,
+  );
+
+  assert.equal((await store.read()).plugins[0].credentials[0].secretRef, oldRef);
+  assert.notEqual(createdRef, oldRef);
+  assert.equal(await secrets.get(createdRef), undefined);
+  assert.equal(await secrets.get(oldRef), "first-key");
+});
+
+test("post-commit failure preserves the newly referenced secret", async () => {
+  const { store, secrets } = await fixture();
+  await setPluginCredential(
+    store,
+    secrets,
+    "@easyai101/easyserver-plugin-vastai",
+    "api-key",
+    "first-key",
+  );
+  const oldRef = (await store.read()).plugins[0].credentials[0].secretRef;
+  const failing = new JsonStateStore(store.path, async (from, to) => {
+    await rename(from, to);
+    throw new Error("fixture post-commit failure");
+  });
+
+  await assert.rejects(
+    setPluginCredential(
+      failing,
+      secrets,
+      "@easyai101/easyserver-plugin-vastai",
+      "api-key",
+      "second-key",
+    ),
+    /fixture post-commit failure/,
+  );
+
+  const freshState = await new JsonStateStore(store.path).read();
+  const committedRef = freshState.plugins[0].credentials[0].secretRef;
+  assert.notEqual(committedRef, oldRef);
+  assert.equal(await secrets.get(committedRef), "second-key");
+  assert.equal(await secrets.get(oldRef), "first-key");
+});
+
+test("old-secret cleanup failure cannot invalidate a committed replacement", async () => {
+  const { store, secrets: backing } = await fixture();
+  await setPluginCredential(
+    store,
+    backing,
+    "@easyai101/easyserver-plugin-vastai",
+    "api-key",
+    "first-key",
+  );
+  const oldRef = (await store.read()).plugins[0].credentials[0].secretRef;
+  const secrets = {
+    create: (secret) => backing.create(secret),
+    get: (ref) => backing.get(ref),
+    async delete(ref) {
+      if (ref === oldRef) {
+        throw new Error("fixture cleanup failure");
+      }
+      return backing.delete(ref);
+    },
+  };
+
+  const result = await setPluginCredential(
+    store,
+    secrets,
+    "@easyai101/easyserver-plugin-vastai",
+    "api-key",
+    "second-key",
+  );
+  assert.equal(result.previousSecretRemoved, false);
+
+  const committedRef = (await new JsonStateStore(store.path).read()).plugins[0]
+    .credentials[0].secretRef;
+  assert.notEqual(committedRef, oldRef);
+  assert.equal(await secrets.get(committedRef), "second-key");
+  assert.equal(await secrets.get(oldRef), "first-key");
+});
+
+test("concurrent replacement cleanup never deletes the winning committed secret", async () => {
+  const { store, secrets } = await fixture();
+  const secondStore = new JsonStateStore(store.path);
+
+  await Promise.all([
+    setPluginCredential(
+      store,
+      secrets,
+      "@easyai101/easyserver-plugin-vastai",
+      "api-key",
+      "first-contender",
+    ),
+    setPluginCredential(
+      secondStore,
+      secrets,
+      "@easyai101/easyserver-plugin-vastai",
+      "api-key",
+      "second-contender",
+    ),
+  ]);
+
+  const winner = (await store.read()).plugins[0].credentials[0].secretRef;
+  assert.ok(
+    ["first-contender", "second-contender"].includes(await secrets.get(winner)),
   );
 });
 

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
+import { JsonStateStore } from "../dist/state-store.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const validPlugin = fileURLToPath(
@@ -92,6 +93,73 @@ function startDaemon(stateFile, daemonFile) {
   child.stdout.on("data", (chunk) => (stdout += chunk));
   child.stderr.on("data", (chunk) => (stderr += chunk));
   return { child, output: () => ({ stdout, stderr }) };
+}
+
+function startCli(stateFile, ...args) {
+  const child = spawn(process.execPath, [cli, ...args], {
+    env: { ...process.env, EASYSERVER_STATE_FILE: stateFile },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => (stdout += chunk));
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  return { child, output: () => ({ stdout, stderr }) };
+}
+
+async function waitForFile(path, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      return await readFile(path, "utf8");
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  assert.fail(`file was not created: ${path}`);
+}
+
+async function writeDelayedPlugin(pluginPath, startedPath, releasePath, providerId) {
+  await writeFile(
+    pluginPath,
+    `
+import { access, writeFile } from "node:fs/promises";
+await writeFile(${JSON.stringify(startedPath)}, "started", "utf8");
+for (;;) {
+  try {
+    await access(${JSON.stringify(releasePath)});
+    break;
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+export default {
+  manifest: {
+    id: ${JSON.stringify(`fixture.delayed.${providerId}`)},
+    displayName: "Delayed Fixture",
+    version: "1.0.0",
+    compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+    provider: {
+      id: ${JSON.stringify(providerId)},
+      displayName: "Delayed Provider",
+      capabilities: [],
+    },
+  },
+  provider: {
+    providerId: ${JSON.stringify(providerId)},
+    async listInstances() { return []; },
+    async getInstance() { return undefined; },
+  },
+};
+`,
+    "utf8",
+  );
 }
 
 async function waitForDaemonFile(
@@ -380,6 +448,82 @@ test("broken plugins are not persisted by plugins add", () => {
   const list = runWithState(stateFile, "plugins", "list");
   assert.equal(list.status, 0);
   assert.equal(list.stdout, "No provider plugins configured.\n");
+});
+
+test("hung plugin validation does not hold the Local State lock", async () => {
+  const stateFile = join(testDirectory, "hung-validation-state.json");
+  const pluginPath = join(testDirectory, "delayed-independent-plugin.mjs");
+  const startedPath = join(testDirectory, "delayed-independent.started");
+  const releasePath = join(testDirectory, "delayed-independent.release");
+  await writeDelayedPlugin(pluginPath, startedPath, releasePath, "delayed-independent");
+  const operation = startCli(stateFile, "plugins", "add", pluginPath);
+
+  try {
+    await waitForFile(startedPath);
+    const independent = new JsonStateStore(stateFile).update((state) => ({
+      ...state,
+      instances: [
+        ...(state.instances ?? []),
+        {
+          id: "instance:f3e4bc3a-b59c-43db-b218-6bc77bb06acd",
+          providerId: "fixture",
+          providerExternalId: "remote-independent",
+        },
+      ],
+    }));
+    const outcome = await Promise.race([
+      independent.then(() => "committed"),
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 300)),
+    ]);
+    assert.equal(outcome, "committed");
+
+    await writeFile(releasePath, "release", "utf8");
+    const [code] = await once(operation.child, "exit");
+    assert.equal(code, 0, JSON.stringify(operation.output()));
+    assert.equal((await new JsonStateStore(stateFile).read()).instances?.length, 1);
+  } finally {
+    await writeFile(releasePath, "release", "utf8").catch(() => undefined);
+    if (operation.child.exitCode === null) {
+      operation.child.kill();
+      await once(operation.child, "exit").catch(() => undefined);
+    }
+  }
+});
+
+test("plugin activation revalidates concurrent enabled-provider changes", async () => {
+  const stateFile = join(testDirectory, "activation-revalidation-state.json");
+  const pluginPath = join(testDirectory, "delayed-collision-plugin.mjs");
+  const startedPath = join(testDirectory, "delayed-collision.started");
+  const releasePath = join(testDirectory, "delayed-collision.release");
+  await writeDelayedPlugin(pluginPath, startedPath, releasePath, "fixture");
+  const operation = startCli(stateFile, "plugins", "add", pluginPath);
+
+  try {
+    await waitForFile(startedPath);
+    const competing = new JsonStateStore(stateFile).update((state) => ({
+      ...state,
+      plugins: [...state.plugins, { source: validPlugin, enabled: true }],
+    }));
+    const outcome = await Promise.race([
+      competing.then(() => "committed"),
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 300)),
+    ]);
+    assert.equal(outcome, "committed");
+
+    await writeFile(releasePath, "release", "utf8");
+    const [code] = await once(operation.child, "exit");
+    assert.equal(code, 1);
+    assert.match(operation.output().stderr, /Provider already registered: fixture/);
+    assert.deepEqual((await new JsonStateStore(stateFile).read()).plugins, [
+      { source: validPlugin, enabled: true },
+    ]);
+  } finally {
+    await writeFile(releasePath, "release", "utf8").catch(() => undefined);
+    if (operation.child.exitCode === null) {
+      operation.child.kill();
+      await once(operation.child, "exit").catch(() => undefined);
+    }
+  }
 });
 
 test("lists healthy and broken explicitly requested plugins", () => {

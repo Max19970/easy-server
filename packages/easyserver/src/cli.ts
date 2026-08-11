@@ -666,21 +666,42 @@ async function listPlugins(
 
 async function addPlugin(store: JsonStateStore, source: string): Promise<void> {
   let status: PluginStatus | undefined;
-  await store.update(async (state) => {
+
+  for (;;) {
+    const snapshot = await store.read();
     if (
-      state.plugins.some(
+      snapshot.plugins.some(
         (plugin) => canonicalPluginSource(plugin.source) === source,
       )
     ) {
       throw new Error(`Plugin source is already configured: ${source}`);
     }
 
-    status = await validatePluginActivation(state.plugins, source);
-    return {
-      ...state,
-      plugins: [...state.plugins, { source, enabled: true }],
-    };
-  });
+    status = await validatePluginActivation(snapshot.plugins, source);
+    let retry = false;
+    await store.update((state) => {
+      if (
+        state.plugins.some(
+          (plugin) => canonicalPluginSource(plugin.source) === source,
+        )
+      ) {
+        throw new Error(`Plugin source is already configured: ${source}`);
+      }
+      if (!samePluginActivationInputs(state.plugins, snapshot.plugins)) {
+        retry = true;
+        return state;
+      }
+      return {
+        ...state,
+        plugins: [...state.plugins, { source, enabled: true }],
+      };
+    });
+
+    if (!retry) {
+      break;
+    }
+  }
+
   process.stdout.write(`Added ${status?.pluginId ?? source}\n`);
 }
 
@@ -689,28 +710,82 @@ async function setPluginEnabled(
   source: string,
   enabled: boolean,
 ): Promise<void> {
-  await store.update(async (state) => {
-    const index = state.plugins.findIndex(
-      (plugin) => canonicalPluginSource(plugin.source) === source,
-    );
+  if (!enabled) {
+    await store.update((state) => {
+      const index = findConfiguredPlugin(state.plugins, source);
+      if (!state.plugins[index].enabled) {
+        return state;
+      }
+      const plugins = state.plugins.map<PluginRegistration>(
+        (plugin, pluginIndex) =>
+          pluginIndex === index ? { ...plugin, source, enabled: false } : plugin,
+      );
+      return { ...state, plugins };
+    });
+    process.stdout.write(`Disabled ${source}\n`);
+    return;
+  }
 
-    if (index < 0) {
-      throw new Error(`Plugin source is not configured: ${source}`);
-    }
-    if (state.plugins[index].enabled === enabled) {
-      return state;
-    }
-    if (enabled) {
-      await validatePluginActivation(state.plugins, source);
+  for (;;) {
+    const snapshot = await store.read();
+    const snapshotIndex = findConfiguredPlugin(snapshot.plugins, source);
+    if (snapshot.plugins[snapshotIndex].enabled) {
+      break;
     }
 
-    const plugins = state.plugins.map<PluginRegistration>(
-      (plugin, pluginIndex) =>
-        pluginIndex === index ? { ...plugin, source, enabled } : plugin,
-    );
-    return { ...state, plugins };
-  });
-  process.stdout.write(`${enabled ? "Enabled" : "Disabled"} ${source}\n`);
+    await validatePluginActivation(snapshot.plugins, source);
+    let retry = false;
+    await store.update((state) => {
+      const index = findConfiguredPlugin(state.plugins, source);
+      if (state.plugins[index].enabled) {
+        return state;
+      }
+      if (!samePluginActivationInputs(state.plugins, snapshot.plugins)) {
+        retry = true;
+        return state;
+      }
+      const plugins = state.plugins.map<PluginRegistration>(
+        (plugin, pluginIndex) =>
+          pluginIndex === index ? { ...plugin, source, enabled: true } : plugin,
+      );
+      return { ...state, plugins };
+    });
+
+    if (!retry) {
+      break;
+    }
+  }
+
+  process.stdout.write(`Enabled ${source}\n`);
+}
+
+function findConfiguredPlugin(
+  plugins: readonly PluginRegistration[],
+  source: string,
+): number {
+  const index = plugins.findIndex(
+    (plugin) => canonicalPluginSource(plugin.source) === source,
+  );
+  if (index < 0) {
+    throw new Error(`Plugin source is not configured: ${source}`);
+  }
+  return index;
+}
+
+function samePluginActivationInputs(
+  current: readonly PluginRegistration[],
+  snapshot: readonly PluginRegistration[],
+): boolean {
+  const currentEnabled = current
+    .filter((plugin) => plugin.enabled)
+    .map((plugin) => canonicalPluginSource(plugin.source));
+  const snapshotEnabled = snapshot
+    .filter((plugin) => plugin.enabled)
+    .map((plugin) => canonicalPluginSource(plugin.source));
+  return (
+    currentEnabled.length === snapshotEnabled.length &&
+    currentEnabled.every((source, index) => source === snapshotEnabled[index])
+  );
 }
 
 async function validatePluginActivation(
