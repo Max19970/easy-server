@@ -11,6 +11,17 @@ import {
 } from "./connection-gateway.js";
 import type { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
 
+export type ConfirmHostTrust = (
+  trust: HostTrustRequiredError,
+  signal: AbortSignal,
+) => Promise<boolean>;
+
+export interface HostTrustRetryOptions {
+  readonly sshAdapter: Pick<OpenSshAccessAdapter, "enrollHostKey">;
+  readonly signal?: AbortSignal;
+  readonly confirmHostTrust?: ConfirmHostTrust;
+}
+
 export interface ForegroundConnectOptions {
   readonly gateway: ConnectionGateway;
   readonly sshAdapter: OpenSshAccessAdapter;
@@ -18,10 +29,7 @@ export interface ForegroundConnectOptions {
   readonly remotePort: number;
   readonly remoteHost?: string;
   readonly context: OperationContext;
-  readonly confirmHostTrust?: (
-    trust: HostTrustRequiredError,
-    signal: AbortSignal,
-  ) => Promise<boolean>;
+  readonly confirmHostTrust?: ConfirmHostTrust;
   readonly onEndpoint: (endpoint: Endpoint) => void;
 }
 
@@ -51,31 +59,44 @@ export async function runForegroundConnect(
 async function openWithTrust(
   options: ForegroundConnectOptions,
 ): Promise<OpenEndpointResult> {
+  return retryWithHostTrust(
+    () =>
+      options.gateway.openEndpoint(
+        options.instanceId,
+        options.remotePort,
+        options.remoteHost ?? "127.0.0.1",
+        options.context,
+      ),
+    {
+      sshAdapter: options.sshAdapter,
+      signal: options.context.signal,
+      ...(options.confirmHostTrust === undefined
+        ? {}
+        : { confirmHostTrust: options.confirmHostTrust }),
+    },
+  );
+}
+
+export async function retryWithHostTrust<T>(
+  operation: () => Promise<T>,
+  options: HostTrustRetryOptions,
+): Promise<T> {
   try {
-    return await options.gateway.openEndpoint(
-      options.instanceId,
-      options.remotePort,
-      options.remoteHost ?? "127.0.0.1",
-      options.context,
-    );
+    return await operation();
   } catch (error) {
     if (!isHostTrustRequiredError(error) || options.confirmHostTrust === undefined) {
       throw error;
     }
 
-    if (!(await options.confirmHostTrust(error, options.context.signal))) {
+    const signal = options.signal ?? new AbortController().signal;
+    if (!(await options.confirmHostTrust(error, signal))) {
       throw normalizedError(
         "cancelled",
         `SSH host trust was declined for ${error.host}:${error.port}`,
       );
     }
 
-    await options.sshAdapter.enrollHostKey(error, options.context.signal);
-    return options.gateway.openEndpoint(
-      options.instanceId,
-      options.remotePort,
-      options.remoteHost ?? "127.0.0.1",
-      options.context,
-    );
+    await options.sshAdapter.enrollHostKey(error, signal);
+    return operation();
   }
 }

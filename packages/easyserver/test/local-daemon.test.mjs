@@ -11,6 +11,7 @@ import {
   isHostTrustRequiredError,
   normalizedError,
 } from "@easyai101/easyserver-plugin-sdk";
+import { retryWithHostTrust } from "../dist/connect-command.js";
 import {
   claimLocalDaemonDescriptor,
   LocalDaemonClient,
@@ -83,7 +84,7 @@ async function expectConnectionRefused(endpoint) {
   assert.equal(outcome, "error");
 }
 
-test("daemon preserves typed SSH host-trust-required results without enrolling trust", async () => {
+test("daemon preserves typed SSH host-trust-required results without non-interactive enrollment", async () => {
   const daemon = await startLocalConnectionDaemon({
     gateway: {
       async openEndpoint() {
@@ -101,10 +102,20 @@ test("daemon preserves typed SSH host-trust-required results without enrolling t
 
   try {
     await assert.rejects(
-      client.createSession({
-        instanceId: "instance:fixture",
-        remotePort: 8188,
-      }),
+      retryWithHostTrust(
+        () =>
+          client.createSession({
+            instanceId: "instance:fixture",
+            remotePort: 8188,
+          }),
+        {
+          sshAdapter: {
+            async enrollHostKey() {
+              assert.fail("non-interactive session creation must not enroll trust");
+            },
+          },
+        },
+      ),
       (error) =>
         isHostTrustRequiredError(error) &&
         error.host === "gpu.example" &&
@@ -112,6 +123,166 @@ test("daemon preserves typed SSH host-trust-required results without enrolling t
         error.keyType === "ssh-ed25519" &&
         error.fingerprint === "SHA256:fixture",
     );
+  } finally {
+    await daemon.close();
+  }
+});
+
+test("caller-side SSH trust enrollment retries daemon session creation once", async () => {
+  const trust = hostTrustRequiredError(
+    "gpu.example",
+    22,
+    "ssh-ed25519",
+    "SHA256:fixture",
+  );
+  let attempts = 0;
+  let enrolled;
+  let confirmed;
+  let resolveClosed;
+  const closed = new Promise((resolve) => {
+    resolveClosed = resolve;
+  });
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint() {
+        attempts += 1;
+        if (attempts === 1) {
+          throw trust;
+        }
+        return {
+          endpoint: { host: "127.0.0.1", port: 41000 },
+          session: {
+            closed,
+            async close() {
+              resolveClosed();
+            },
+          },
+        };
+      },
+    },
+    authToken: "fixture-token",
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    const session = await retryWithHostTrust(
+      () =>
+        client.createSession({
+          instanceId: "instance:fixture",
+          remotePort: 8188,
+        }),
+      {
+        sshAdapter: {
+          async enrollHostKey(value) {
+            enrolled = value;
+          },
+        },
+        async confirmHostTrust(value) {
+          confirmed = value;
+          return true;
+        },
+      },
+    );
+
+    assert.equal(session.state, "live");
+    assert.deepEqual(session.endpoint, { host: "127.0.0.1", port: 41000 });
+    assert.equal(attempts, 2);
+    assert.ok(isHostTrustRequiredError(confirmed));
+    assert.equal(confirmed.fingerprint, trust.fingerprint);
+    assert.equal(enrolled, confirmed);
+    await client.closeSession(session.id);
+  } finally {
+    await daemon.close();
+  }
+});
+
+test("declining daemon-session SSH trust does not enroll or retry", async () => {
+  let attempts = 0;
+  let enrollments = 0;
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint() {
+        attempts += 1;
+        throw hostTrustRequiredError(
+          "gpu.example",
+          22,
+          "ssh-ed25519",
+          "SHA256:fixture",
+        );
+      },
+    },
+    authToken: "fixture-token",
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    await assert.rejects(
+      retryWithHostTrust(
+        () =>
+          client.createSession({
+            instanceId: "instance:fixture",
+            remotePort: 8188,
+          }),
+        {
+          sshAdapter: {
+            async enrollHostKey() {
+              enrollments += 1;
+            },
+          },
+          async confirmHostTrust() {
+            return false;
+          },
+        },
+      ),
+      (error) => error?.code === "cancelled" && /trust was declined/.test(error.message),
+    );
+    assert.equal(attempts, 1);
+    assert.equal(enrollments, 0);
+  } finally {
+    await daemon.close();
+  }
+});
+
+test("changed SSH host keys are not reinterpreted as first-use trust", async () => {
+  let attempts = 0;
+  let confirmations = 0;
+  let enrollments = 0;
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint() {
+        attempts += 1;
+        throw normalizedError("authentication", "SSH host key mismatch for gpu.example:22");
+      },
+    },
+    authToken: "fixture-token",
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    await assert.rejects(
+      retryWithHostTrust(
+        () =>
+          client.createSession({
+            instanceId: "instance:fixture",
+            remotePort: 8188,
+          }),
+        {
+          sshAdapter: {
+            async enrollHostKey() {
+              enrollments += 1;
+            },
+          },
+          async confirmHostTrust() {
+            confirmations += 1;
+            return true;
+          },
+        },
+      ),
+      (error) => error?.code === "authentication" && /host key mismatch/.test(error.message),
+    );
+    assert.equal(attempts, 1);
+    assert.equal(confirmations, 0);
+    assert.equal(enrollments, 0);
   } finally {
     await daemon.close();
   }

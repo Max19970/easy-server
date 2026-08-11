@@ -9,7 +9,10 @@ import {
   type HostTrustRequiredError,
 } from "@easyai101/easyserver-plugin-sdk";
 import { AccessAdapterRegistry } from "./access-adapter-registry.js";
-import { runForegroundConnect } from "./connect-command.js";
+import {
+  retryWithHostTrust,
+  runForegroundConnect,
+} from "./connect-command.js";
 import { ConnectionGateway } from "./connection-gateway.js";
 import {
   ComputeManager,
@@ -231,11 +234,20 @@ async function runSessions(args: readonly string[]): Promise<void> {
       "sessions create",
     );
     const client = await localDaemonClient();
-    const session = await client.createSession({
+    const request = {
       instanceId,
       remotePort,
       ...(remoteHost === undefined ? {} : { remoteHost }),
-    });
+    };
+    const session = await retryWithHostTrust(
+      () => client.createSession(request),
+      {
+        sshAdapter: new OpenSshAccessAdapter(),
+        ...(process.stdin.isTTY && process.stdout.isTTY
+          ? { confirmHostTrust: confirmHostTrustInteractively }
+          : {}),
+      },
+    );
     process.stdout.write(
       `${session.id} endpoint=${session.endpoint.host}:${session.endpoint.port}\n`,
     );
