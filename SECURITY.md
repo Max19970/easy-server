@@ -1,17 +1,24 @@
 # Security policy
 
-EasyServer's trust boundaries and `0.1.0` security assumptions are documented in [`docs/security-model.md`](docs/security-model.md).
+EasyServer's trust boundaries and security assumptions are documented in [`docs/security-model.md`](docs/security-model.md).
 
 ## Supported versions
 
-After the first public release, security fixes are provided for the latest released EasyServer `0.1.x` version. Unreleased development snapshots are not a supported release line.
+While `0.1.x` is the current released minor line, security fixes target the latest released `0.1.x` version. After a newer minor becomes current, critical security or data-integrity fixes may be backported to `0.1.x` at maintainer discretion, but general maintenance and indefinite backport support are not promised. Unreleased development snapshots are not a supported release line.
+
+See [Support and maintenance policy](docs/support-and-maintenance.md) for the broader maintenance rules.
 
 ## Reporting a vulnerability
 
-Please do not open a public GitHub issue for a suspected vulnerability.
+Please do **not** open a public GitHub issue for a suspected or undisclosed vulnerability.
 
-Use GitHub's private vulnerability reporting for this repository: open the repository's **Security** area and choose **Report a vulnerability**. Private vulnerability reporting is enabled for EasyServer.
+Use GitHub's private vulnerability reporting for this repository:
 
-Include enough information to reproduce and assess the issue when practical: affected EasyServer/package version, environment, impact, reproduction steps and any proposed mitigation. Do not include third-party credentials or unrelated secret material.
+1. Open the repository's **Security** area.
+2. Choose **Report a vulnerability**.
+3. Describe the affected EasyServer/package version, environment, impact and reproduction steps.
+4. Include only the minimum sensitive evidence required to reproduce the issue.
 
-We will coordinate remediation and disclosure through the private report. If the issue affects a released version, compatibility-relevant fixes will also be called out in the corresponding release notes.
+Private vulnerability reporting is enabled for EasyServer. Do not include real API keys, private SSH keys, daemon bearer tokens, raw credentials or unrelated provider/account data; use redacted or synthetic values whenever possible.
+
+Confirmed security issues are investigated and remediated on a best-effort basis. EasyServer does not promise a fixed acknowledgement or remediation SLA. We will coordinate remediation and disclosure through the private report, and compatibility-relevant fixes affecting a released version will be called out in the corresponding release notes.

@@ -12,6 +12,7 @@ Current public guides:
 - [Intelion.cloud quick start](providers/intelion.md)
 - [Provider Plugin authoring and operational safety](plugin-authoring-and-operational-safety.md)
 - [Versioning and compatibility](versioning-and-compatibility.md)
+- [Support and maintenance policy](support-and-maintenance.md)
 - [Supported platforms](supported-platforms.md)
 - [Security model](security-model.md)
 - [0.1.0 dependency and supply-chain audit](dependency-audit-0.1.0.md)
