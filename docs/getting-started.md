@@ -134,6 +134,18 @@ easyserver instances destroy <instance-id> --yes
 
 Also, `stopped` does **not** universally mean `not billed`; provider billing/storage/reservation semantics remain provider-specific. When a rented resource is no longer needed, follow the provider guide and verify the destructive cleanup required by that provider.
 
+### Wait for provider convergence
+
+Lifecycle mutations report that the request was dispatched; provider state may converge later. Use the host-owned observation primitive instead of writing provider-specific polling loops or repeating a mutation:
+
+```sh
+easyserver instances wait <instance-id> --state running
+easyserver instances wait <instance-id> --state stopped --timeout 300
+easyserver instances wait <instance-id> --state absent --timeout 300
+```
+
+`--state` accepts normalized EasyServer instance states plus the special `absent` target for provider-confirmed disappearance. `--timeout` is in seconds and defaults to 120. Waiting uses only repeated `getInstance()` observation with bounded backoff; it never dispatches start/stop/restart/destroy. This makes it safe as a recovery step after `outcome-unknown`: observe the existing operation rather than blindly repeating it. Timeout and cancellation are reported separately and include the last normalized state EasyServer observed.
+
 ## Expose a remote TCP service locally
 
 `connect` exposes one remote TCP target as an EasyServer-owned local loopback Endpoint:
