@@ -267,7 +267,6 @@ export class ComputeManager {
             state,
             binding,
             admission,
-            error.code === "outcome-unknown",
           ).catch(() => undefined);
         }
         throw error;
@@ -281,7 +280,6 @@ export class ComputeManager {
     state: EasyServerState,
     binding: InstanceBinding,
     admission: ProviderAdmission,
-    preserveMissingBinding: boolean,
   ): Promise<void> {
     const reconciliationContext = { signal: new AbortController().signal };
     const snapshot = await this.operations.run(
@@ -295,9 +293,7 @@ export class ComputeManager {
         ),
     );
     if (snapshot === undefined) {
-      if (!preserveMissingBinding) {
-        await this.removeBinding(state, binding.id);
-      }
+      await this.removeBinding(state, binding.id);
       return;
     }
 

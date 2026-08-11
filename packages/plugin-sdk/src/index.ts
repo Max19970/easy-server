@@ -98,6 +98,12 @@ export interface ProviderAdapter {
   listInstances(
     context: ProviderOperationContext,
   ): Promise<readonly ProviderInstanceSnapshot[]>;
+  /**
+   * Return `undefined` only when the provider can authoritatively confirm that
+   * the requested resource does not exist. Transient, unavailable, rate-limited,
+   * or otherwise inconclusive lookups must reject instead of returning
+   * `undefined`, so EasyServer does not discard canonical local identity.
+   */
   getInstance(
     providerExternalId: string,
     context: ProviderOperationContext,

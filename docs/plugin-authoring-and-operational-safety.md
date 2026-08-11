@@ -83,6 +83,8 @@ export default plugin;
 
 The manifest Provider ID and `provider.providerId` must agree. IDs are stable API identity, not display text.
 
+`ProviderAdapter.getInstance()` has one deletion boundary: return `undefined` only when the provider can authoritatively confirm that the requested resource no longer exists. Authentication failures, rate limits, transport failures, provider outages, eventual-consistency gaps and other inconclusive lookups must reject with an appropriate normalized error instead. EasyServer preserves the canonical `instance:<uuid>` binding across those uncertain failures; a definitive `undefined` may remove it. The same rule applies to inspect, lifecycle preflight and post-mutation reconciliation.
+
 ## 2. Installing, enabling and disabling
 
 EasyServer does not scan arbitrary installed packages. Installing a package and registering it with EasyServer are intentionally separate actions: installation puts the module in the CLI's module-resolution environment; `plugins add` validates and persists the plugin registration.

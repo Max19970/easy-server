@@ -438,7 +438,7 @@ test("cancelled lifecycle mutation after dispatch reports outcome unknown, is no
   });
 });
 
-test("uncertain mutation does not discard stable local identity on a transient missing lookup", async () => {
+test("uncertain mutation does not discard stable local identity when reconciliation is unavailable", async () => {
   await withStore(async (store) => {
     const registry = new ProviderRegistry();
     const snapshot = {
@@ -455,7 +455,10 @@ test("uncertain mutation does not discard stable local identity on a transient m
       list: async () => [snapshot],
       get: async () => {
         getCalls += 1;
-        return getCalls === 1 ? snapshot : undefined;
+        if (getCalls === 1) {
+          return snapshot;
+        }
+        throw normalizedError("provider-unavailable", "fixture lookup is unavailable");
       },
       destroy: async () => {
         throw normalizedError("outcome-unknown", "fixture destroy is uncertain");
@@ -474,6 +477,116 @@ test("uncertain mutation does not discard stable local identity on a transient m
     const [after] = await manager.listInstances(context);
     assert.equal(after.providerExternalId, before.providerExternalId);
     assert.equal(after.id, before.id);
+  });
+});
+
+test("outcome-unknown reconciliation honors definitive absence", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const snapshot = {
+      providerExternalId: "remote-destroyed",
+      state: "running",
+      rawState: "running",
+      availableActions: ["instance.destroy"],
+    };
+    let getCalls = 0;
+
+    registerProvider(registry, {
+      providerId: "definitive-after-mutation",
+      capabilities: ["instance.destroy"],
+      list: async () => [snapshot],
+      get: async () => {
+        getCalls += 1;
+        return getCalls === 1 ? snapshot : undefined;
+      },
+      destroy: async () => {
+        throw normalizedError("outcome-unknown", "fixture destroy result was lost");
+      },
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const [before] = await manager.listInstances(context);
+    await assert.rejects(
+      manager.performAction(before.id, "instance.destroy", context),
+      (error) => error?.code === "outcome-unknown",
+    );
+
+    assert.equal(
+      (await store.read()).instances?.some((binding) => binding.id === before.id) ?? false,
+      false,
+    );
+  });
+});
+
+test("transient inspect and lifecycle lookup failures preserve canonical identity", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const snapshot = {
+      providerExternalId: "remote-transient",
+      state: "running",
+      rawState: "running",
+      availableActions: ["instance.stop"],
+    };
+    let unavailable = false;
+
+    registerProvider(registry, {
+      providerId: "transient",
+      capabilities: ["instance.stop"],
+      list: async () => [snapshot],
+      get: async () => {
+        if (unavailable) {
+          throw normalizedError("provider-unavailable", "fixture provider is unavailable");
+        }
+        return snapshot;
+      },
+      powerAction: async () => assert.fail("mutation must not dispatch"),
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const [before] = await manager.listInstances(context);
+    unavailable = true;
+
+    await assert.rejects(
+      manager.inspectInstance(before.id, context),
+      (error) => error?.code === "provider-unavailable",
+    );
+    await assert.rejects(
+      manager.performAction(before.id, "instance.stop", context),
+      (error) => error?.code === "provider-unavailable",
+    );
+
+    unavailable = false;
+    const [after] = await new ComputeManager(registry, store).listInstances(context);
+    assert.equal(after.id, before.id);
+  });
+});
+
+test("definitive getInstance absence removes the canonical binding", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const snapshot = {
+      providerExternalId: "remote-gone",
+      state: "running",
+      rawState: "running",
+      availableActions: [],
+    };
+    let absent = false;
+
+    registerProvider(registry, {
+      providerId: "definitive",
+      capabilities: [],
+      list: async () => [snapshot],
+      get: async () => (absent ? undefined : snapshot),
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const [before] = await manager.listInstances(context);
+    absent = true;
+    assert.equal(await manager.inspectInstance(before.id, context), undefined);
+
+    absent = false;
+    const [after] = await new ComputeManager(registry, store).listInstances(context);
+    assert.notEqual(after.id, before.id);
   });
 });
 
