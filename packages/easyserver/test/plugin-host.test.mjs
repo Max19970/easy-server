@@ -392,4 +392,16 @@ test("formats loaded, disabled, and failed diagnostics distinctly", async () => 
   const output = formatPluginStatuses(host.listPlugins());
   assert.match(output, /^disabled\s+fake\.plugin provider=fake/m);
   assert.match(output, /^failed\s+broken error=bad plugin/m);
+
+  const escaped = formatPluginStatuses([
+    {
+      source: "broken\nrecord\u001b[2J",
+      state: "failed",
+      error: "bad\rmessage\u001b[31m",
+    },
+  ]);
+  assert.ok(escaped.includes("broken\\nrecord\\u001b[2J"));
+  assert.ok(escaped.includes("error=bad\\rmessage\\u001b[31m"));
+  assert.equal(escaped.includes("\u001b"), false);
+  assert.equal(escaped.split("\n").length, 2);
 });

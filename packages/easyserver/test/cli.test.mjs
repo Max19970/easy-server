@@ -103,6 +103,58 @@ const providerCollisionPlugin = `data:text/javascript,${encodeURIComponent(`
     },
   };
 `)}`;
+const unsafeProviderExternalId = "remote\nforged\r\u001b[31m";
+const unsafeFeatureDisplayName = "Unsafe\nFeature\u001b[2J";
+const unsafeCommandDescription = "Unsafe\rDescription\u001b[31m";
+const terminalOutputPlugin = `data:text/javascript,${encodeURIComponent(`
+  const externalId = ${JSON.stringify(unsafeProviderExternalId)};
+  export default {
+    manifest: {
+      id: "fixture.terminal-output",
+      displayName: "Terminal Output Fixture",
+      version: "1.0.0",
+      compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+      provider: {
+        id: "terminal-output",
+        displayName: "Terminal Output Provider",
+        capabilities: [],
+      },
+    },
+    provider: {
+      providerId: "terminal-output",
+      async listInstances() {
+        return [{
+          providerExternalId: externalId,
+          state: "running",
+          rawState: "READY",
+          availableActions: [],
+        }];
+      },
+      async getInstance(providerExternalId) {
+        return providerExternalId === externalId
+          ? {
+              providerExternalId: externalId,
+              state: "running",
+              rawState: "READY",
+              availableActions: [],
+            }
+          : undefined;
+      },
+    },
+    features: [{
+      id: "marketplace",
+      displayName: ${JSON.stringify(unsafeFeatureDisplayName)},
+      cli: {
+        commands: [{
+          name: "show",
+          description: ${JSON.stringify(unsafeCommandDescription)},
+          operation: "read",
+          async run() {},
+        }],
+      },
+    }],
+  };
+`)}`;
 const testDirectory = await mkdtemp(join(tmpdir(), "easyserver-cli-"));
 const emptyStateFile = join(testDirectory, "empty-state.json");
 
@@ -691,6 +743,46 @@ test("instances list reports total inventory failure when no useful state exists
   assert.equal(result.status, 1);
   assert.equal(result.stdout, "No compute instances found.\n");
   assert.match(result.stderr, /Provider partial-failing inventory failed/);
+});
+
+test("escapes provider-controlled terminal text without mutating provider identity", () => {
+  const stateFile = join(testDirectory, "terminal-output-state.json");
+  assert.equal(
+    runWithState(stateFile, "plugins", "add", terminalOutputPlugin).status,
+    0,
+  );
+
+  const inventory = runWithState(stateFile, "instances", "list");
+  assert.equal(inventory.status, 0);
+  assert.ok(
+    inventory.stdout.includes("external=remote\\nforged\\r\\u001b[31m"),
+  );
+  assert.equal(inventory.stdout.includes(unsafeProviderExternalId), false);
+  assert.equal(inventory.stdout.includes("\u001b"), false);
+  const [instanceId] = inventory.stdout.match(/instance:[0-9a-f-]+/i) ?? [];
+  assert.ok(instanceId);
+
+  const inspect = runWithState(stateFile, "instances", "inspect", instanceId);
+  assert.equal(inspect.status, 0);
+  assert.equal(
+    JSON.parse(inspect.stdout).providerExternalId,
+    unsafeProviderExternalId,
+  );
+
+  const features = runWithState(stateFile, "provider");
+  assert.equal(features.status, 0);
+  assert.ok(features.stdout.includes("Unsafe\\nFeature\\u001b[2J"));
+  assert.equal(features.stdout.includes(unsafeFeatureDisplayName), false);
+
+  const commands = runWithState(
+    stateFile,
+    "provider",
+    "terminal-output",
+    "marketplace",
+  );
+  assert.equal(commands.status, 0);
+  assert.ok(commands.stdout.includes("Unsafe\\rDescription\\u001b[31m"));
+  assert.equal(commands.stdout.includes(unsafeCommandDescription), false);
 });
 
 test("mounts provider feature commands and reconciles requested inventory changes", async () => {

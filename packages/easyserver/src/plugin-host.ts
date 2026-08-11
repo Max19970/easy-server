@@ -19,6 +19,7 @@ import {
   type ProviderAdmission,
 } from "./provider-registry.js";
 import type { SecretStore } from "./secret-store.js";
+import { escapeTerminalText } from "./terminal-text.js";
 import { EASYSERVER_VERSION } from "./version.js";
 
 const DEFAULT_PLUGIN_LOAD_TIMEOUT_MS = 10_000;
@@ -275,9 +276,13 @@ export function formatPluginStatuses(
 
   return `${statuses
     .map((status) => {
-      const label = status.pluginId ?? status.source;
-      const provider = status.providerId === undefined ? "" : ` provider=${status.providerId}`;
-      const error = status.error === undefined ? "" : ` error=${status.error}`;
+      const label = escapeTerminalText(status.pluginId ?? status.source);
+      const provider = status.providerId === undefined
+        ? ""
+        : ` provider=${escapeTerminalText(status.providerId)}`;
+      const error = status.error === undefined
+        ? ""
+        : ` error=${escapeTerminalText(status.error)}`;
       return `${status.state.padEnd(8)} ${label}${provider}${error}`;
     })
     .join("\n")}\n`;

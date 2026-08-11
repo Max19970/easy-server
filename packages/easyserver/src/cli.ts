@@ -30,6 +30,7 @@ import { ProviderRegistry } from "./provider-registry.js";
 import { OsKeyringSecretStore } from "./secret-store.js";
 import { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
 import { JsonStateStore, type PluginRegistration } from "./state-store.js";
+import { escapeTerminalText } from "./terminal-text.js";
 import { EASYSERVER_VERSION } from "./version.js";
 import {
   claimLocalDaemonDescriptor,
@@ -142,7 +143,7 @@ async function run(args: readonly string[]): Promise<void> {
     return;
   }
 
-  process.stderr.write(`Unknown command: ${command}\n\n${help}`);
+  process.stderr.write(`Unknown command: ${escapeTerminalText(command)}\n\n${help}`);
   process.exitCode = 1;
 }
 
@@ -244,7 +245,7 @@ async function runSessions(args: readonly string[]): Promise<void> {
   if (command === "close" && args[1] !== undefined && args.length === 2) {
     const client = await localDaemonClient();
     await client.closeSession(args[1]);
-    process.stdout.write(`Closed ${args[1]}\n`);
+    process.stdout.write(`Closed ${escapeTerminalText(args[1])}\n`);
     return;
   }
 
@@ -274,9 +275,9 @@ function formatPersistentSessions(
           : "";
       const failure =
         session.state === "failed"
-          ? ` error=${session.failure.code}:${session.failure.message}`
+          ? ` error=${session.failure.code}:${escapeTerminalText(session.failure.message)}`
           : "";
-      return `${session.id} state=${session.state}${endpoint} instance=${session.instanceId} target=${session.remoteHost}:${session.remotePort}${failure}`;
+      return `${session.id} state=${session.state}${endpoint} instance=${session.instanceId} target=${escapeTerminalText(session.remoteHost)}:${session.remotePort}${failure}`;
     })
     .join("\n")}\n`;
 }
@@ -329,7 +330,7 @@ async function confirmHostTrustInteractively(
   signal: AbortSignal,
 ): Promise<boolean> {
   process.stdout.write(
-    `Unknown SSH host ${trust.host}:${trust.port}\n${trust.keyType} fingerprint: ${trust.fingerprint}\n`,
+    `Unknown SSH host ${escapeTerminalText(trust.host)}:${trust.port}\n${escapeTerminalText(trust.keyType)} fingerprint: ${escapeTerminalText(trust.fingerprint)}\n`,
   );
   const readline = createInterface({ input: process.stdin, output: process.stdout });
 
@@ -525,7 +526,7 @@ async function runInstances(args: readonly string[]): Promise<void> {
       for (const provider of inventory.providers) {
         if (provider.status === "failed") {
           process.stderr.write(
-            `Provider ${provider.providerId} inventory failed (${provider.error.code}): ${provider.error.message}\n`,
+            `Provider ${escapeTerminalText(provider.providerId)} inventory failed (${provider.error.code}): ${escapeTerminalText(provider.error.message)}\n`,
           );
         }
       }
@@ -548,7 +549,7 @@ async function runInstances(args: readonly string[]): Promise<void> {
     const action = instanceAction(command);
     if (action !== undefined && instanceId !== undefined && args.length === 2) {
       await manager.performAction(instanceId, action, context);
-      process.stdout.write(`Requested ${action} for ${instanceId}\n`);
+      process.stdout.write(`Requested ${action} for ${escapeTerminalText(instanceId)}\n`);
       return;
     }
 
@@ -610,7 +611,9 @@ async function runPluginCredential(
       name,
       secret,
     );
-    process.stdout.write(`Configured credential ${name} for ${rawSource}\n`);
+    process.stdout.write(
+      `Configured credential ${escapeTerminalText(name)} for ${escapeTerminalText(rawSource)}\n`,
+    );
     if (!result.previousSecretRemoved) {
       process.stderr.write(
         "Warning: previous credential could not be removed from the OS secret store.\n",
@@ -631,7 +634,9 @@ async function runPluginCredential(
       persistedPluginSource(rawSource),
       name,
     );
-    process.stdout.write(`Removed credential ${name} from ${rawSource}\n`);
+    process.stdout.write(
+      `Removed credential ${escapeTerminalText(name)} from ${escapeTerminalText(rawSource)}\n`,
+    );
     if (!result.previousSecretRemoved) {
       process.stderr.write(
         "Warning: credential reference was removed but the OS secret could not be deleted.\n",
@@ -715,7 +720,7 @@ async function addPlugin(store: JsonStateStore, source: string): Promise<void> {
     }
   }
 
-  process.stdout.write(`Added ${status?.pluginId ?? source}\n`);
+  process.stdout.write(`Added ${escapeTerminalText(status?.pluginId ?? source)}\n`);
 }
 
 async function setPluginEnabled(
@@ -735,7 +740,7 @@ async function setPluginEnabled(
       );
       return { ...state, plugins };
     });
-    process.stdout.write(`Disabled ${source}\n`);
+    process.stdout.write(`Disabled ${escapeTerminalText(source)}\n`);
     return;
   }
 
@@ -769,7 +774,7 @@ async function setPluginEnabled(
     }
   }
 
-  process.stdout.write(`Enabled ${source}\n`);
+  process.stdout.write(`Enabled ${escapeTerminalText(source)}\n`);
 }
 
 function findConfiguredPlugin(
@@ -829,7 +834,7 @@ function formatProviderFeatures(
   return `${features
     .map(
       (feature) =>
-        `${feature.providerId}/${feature.featureId} ${feature.displayName}`,
+        `${escapeTerminalText(feature.providerId)}/${escapeTerminalText(feature.featureId)} ${escapeTerminalText(feature.displayName)}`,
     )
     .join("\n")}\n`;
 }
@@ -840,11 +845,14 @@ function formatProviderCommands(
   commands: readonly import("@easyai101/easyserver-plugin-sdk").ProviderCliCommand[],
 ): string {
   if (commands.length === 0) {
-    return `No CLI commands for ${providerId}/${featureId}.\n`;
+    return `No CLI commands for ${escapeTerminalText(providerId)}/${escapeTerminalText(featureId)}.\n`;
   }
 
   return `${commands
-    .map((command) => `${command.name.padEnd(12)} ${command.description}`)
+    .map(
+      (command) =>
+        `${escapeTerminalText(command.name).padEnd(12)} ${escapeTerminalText(command.description)}`,
+    )
     .join("\n")}\n`;
 }
 
@@ -880,7 +888,7 @@ function formatInventory(instances: readonly InventoryInstance[]): string {
       const actions = instance.availableActions.length === 0
         ? "-"
         : instance.availableActions.join(",");
-      return `${instance.id} provider=${instance.providerId} external=${instance.providerExternalId} freshness=${instance.freshness} state=${state} actions=${actions}${observedAt}${name}`;
+      return `${instance.id} provider=${escapeTerminalText(instance.providerId)} external=${escapeTerminalText(instance.providerExternalId)} freshness=${instance.freshness} state=${state} actions=${actions}${observedAt}${name}`;
     })
     .join("\n")}\n`;
 }
@@ -950,8 +958,8 @@ function daemonFilePath(): string {
 function reportCliError(error: unknown): void {
   process.stderr.write(
     error instanceof CliUsageError
-      ? `${errorMessage(error)}\n\n${help}`
-      : `${errorMessage(error)}\n`,
+      ? `${escapeTerminalText(errorMessage(error))}\n\n${help}`
+      : `${escapeTerminalText(errorMessage(error))}\n`,
   );
   process.exitCode = 1;
 }
