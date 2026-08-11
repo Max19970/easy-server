@@ -465,12 +465,8 @@ export class LocalDaemonClient {
 }
 
 function sessionFailure(error: unknown): PersistentSessionFailure {
-  if (isNormalizedError(error)) {
-    return { code: error.code, message: error.message };
-  }
-
   return {
-    code: "plugin-failure",
+    code: isNormalizedError(error) ? error.code : "plugin-failure",
     message: "Connection Session cleanup failed",
   };
 }

@@ -9,6 +9,7 @@ import test from "node:test";
 import {
   hostTrustRequiredError,
   isHostTrustRequiredError,
+  normalizedError,
 } from "@easyai101/easyserver-plugin-sdk";
 import {
   claimLocalDaemonDescriptor,
@@ -327,7 +328,9 @@ test("unexpected session closure failure remains observable and can be retried",
       instanceId: "instance:fixture",
       remotePort: 8188,
     });
-    rejectClosed(new Error("provider-private-payload=secret"));
+    rejectClosed(
+      normalizedError("plugin-failure", "provider-private-payload=secret"),
+    );
     await delay(0);
 
     assert.deepEqual(await client.listSessions(), [
