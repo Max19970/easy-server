@@ -51,6 +51,13 @@ The Intelion.cloud plugin declares `api-token` as its required credential name. 
 
 Intelion acquisition is exposed as the `server-configurator` Provider Feature.
 
+Every first-party configurator command publishes its own argument help. For example:
+
+```sh
+easyserver provider intelion server-configurator os-images --help
+easyserver provider intelion server-configurator create --help
+```
+
 List available flavors:
 
 ```sh

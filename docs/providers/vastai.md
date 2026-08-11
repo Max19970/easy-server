@@ -53,7 +53,14 @@ The Vast.ai plugin declares `api-key` as its required credential name. Before co
 
 ## 3. Search the marketplace
 
-Vast.ai acquisition is a Provider Feature named `marketplace`:
+Vast.ai acquisition is a Provider Feature named `marketplace`. Its command-specific arguments are discoverable directly from the CLI:
+
+```sh
+easyserver provider vastai marketplace search --help
+easyserver provider vastai marketplace rent --help
+```
+
+For example, search the marketplace with:
 
 ```sh
 easyserver provider vastai marketplace search \

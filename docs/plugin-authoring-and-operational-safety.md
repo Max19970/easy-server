@@ -202,6 +202,24 @@ const feature = {
         name: "rent",
         description: "Rent one provider offer",
         operation: "mutation",
+        help: {
+          arguments: [
+            {
+              name: "offer-id",
+              description: "Provider marketplace offer ID",
+              required: true,
+            },
+          ],
+          options: [
+            {
+              name: "--image",
+              valueName: "image",
+              description: "Provider-compatible image",
+              required: true,
+            },
+          ],
+          examples: ["123 --image example/image:latest"],
+        },
         async run(args, context) {
           const rental = await rentProviderOffer(args, context);
           return {
@@ -222,6 +240,14 @@ easyserver provider <provider-id> <feature-id> <command> [args...]
 ```
 
 The CLI command must declare `operation: "read" | "mutation"` so the host can apply correct cancellation and uncertainty semantics.
+
+Commands may also declare lightweight `help` metadata for positional arguments, options and examples. This metadata is descriptive only: Provider Plugins still own argument parsing and semantics, and EasyServer does not reinterpret it as a universal provisioning schema. When metadata exists, users can run:
+
+```text
+easyserver provider <provider-id> <feature-id> <command> --help
+```
+
+The host renders that help without calling the command's `run()` function, so asking for help never dispatches Provider work or a mutation. Plugins without `help` metadata remain compatible; EasyServer shows the command description plus a `[provider-args...]` fallback instead of inventing argument details.
 
 ### Acquisition handoff to canonical EasyServer identity
 
