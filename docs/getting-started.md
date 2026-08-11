@@ -100,6 +100,19 @@ Use the EasyServer `instance-id` shown by these commands for lifecycle and conne
 
 `instances list` refreshes Providers independently. If one Provider is unavailable while another succeeds, EasyServer still prints the useful inventory and marks each entry as `fresh`, `stale` or `unobserved`. `stale` means the last privacy-safe normalized observation is being shown; `unobserved` means EasyServer knows the canonical identity but has no prior usable observation. Stale/unobserved entries never advertise lifecycle actions. A useful partial listing exits with status `2`; a complete listing exits with `0`, while a total failure with nothing useful to show exits with `1`.
 
+Each instance also has provider-independent management state:
+
+- `management=managed` means EasyServer has explicit management intent for the resource. Resources acquired through an EasyServer Provider Feature become managed automatically once they reconcile into inventory, including when the first post-acquisition refresh failed and a later refresh observes them.
+- `management=discovered` means the resource was merely visible through the configured provider account (or came from older Local State that predates provenance tracking). Discovery alone never grants destructive ownership.
+
+To intentionally bring a pre-existing provider resource under EasyServer management without changing its canonical identity:
+
+```sh
+easyserver instances adopt <instance-id>
+```
+
+Adoption is local management intent; it does not recreate, restart or otherwise mutate the provider resource.
+
 ## Lifecycle
 
 A provider advertises which normalized lifecycle operations it supports, and each instance snapshot reports which of those operations are currently available.
@@ -111,7 +124,9 @@ easyserver instances restart <instance-id>
 easyserver instances destroy <instance-id>
 ```
 
-An unavailable action is rejected rather than guessed from generic state. Also, `stopped` does **not** universally mean `not billed`; provider billing/storage/reservation semantics remain provider-specific. When a rented resource is no longer needed, follow the provider guide and verify the destructive cleanup required by that provider.
+An unavailable action is rejected rather than guessed from generic state. Reversible power actions remain governed by the Provider snapshot, but `instances destroy` additionally requires `management=managed`; a discovered resource must be explicitly adopted before EasyServer will dispatch that destructive mutation.
+
+Also, `stopped` does **not** universally mean `not billed`; provider billing/storage/reservation semantics remain provider-specific. When a rented resource is no longer needed, follow the provider guide and verify the destructive cleanup required by that provider.
 
 ## Expose a remote TCP service locally
 

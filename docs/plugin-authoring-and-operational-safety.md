@@ -227,7 +227,7 @@ return {
 
 This field is deliberately narrow. It identifies affected Provider resources for host reconciliation; it is **not** a universal provisioning result and must not grow provider-specific pricing, image, region or configuration fields. Keep those details in the Provider-owned feature result/output.
 
-After the command itself resolves successfully, EasyServer treats the remote mutation as confirmed successful. It may then refresh that Provider's inventory and match each affected Provider ID to the canonical `instance:<uuid>` produced by normal reconciliation. A successful handoff can therefore be used immediately with `instances inspect`, lifecycle commands or `connect` without making the caller rediscover which local identity belongs to the newly acquired resource.
+After the command itself resolves successfully, EasyServer treats the remote mutation as confirmed successful. It durably records management intent for the returned affected Provider identities, then may refresh that Provider's inventory and match each affected Provider ID to the canonical `instance:<uuid>` produced by normal reconciliation. A successful handoff can therefore be used immediately with `instances inspect`, lifecycle commands or `connect` without making the caller rediscover which local identity belongs to the newly acquired resource. If the first refresh fails, the pending management intent survives so a later observation still classifies that acquired resource as `managed` rather than merely `discovered`.
 
 Mutation outcome and handoff outcome are separate:
 
@@ -237,6 +237,8 @@ Mutation outcome and handoff outcome are separate:
 - a later `instances list`/refresh may complete reconciliation without redispatching the acquisition mutation.
 
 For multiple affected resources, preserve Provider-returned order. Each ID is reconciled independently; duplicate or empty IDs are invalid command results. Do not tell users or calling code to repeat a confirmed rent/create merely to obtain a canonical ID. Recovery is **Observe / Refresh / Wait**, because blindly repeating a billable mutation can create duplicate paid resources.
+
+Provider inventory itself does not decide ownership. A resource that merely appears in `listInstances()` without matching explicit EasyServer acquisition/adoption intent is normalized as `management=discovered`. Provider Plugins must not fabricate an EasyServer-managed flag in snapshots. Users may explicitly adopt such a canonical instance through the host; adoption preserves its `instance:<uuid>` identity. EasyServer blocks destructive `instance.destroy` for discovered resources until that host-owned management intent exists, while provider-declared reversible power availability remains snapshot-owned.
 
 ## 5. Operation cancellation, deadlines and uncertain mutations
 
