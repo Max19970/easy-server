@@ -194,8 +194,11 @@ const feature = {
         description: "Rent one provider offer",
         operation: "mutation",
         async run(args, context) {
-          // Return this when the mutation changes provider inventory.
-          return { refreshProviderInventory: true };
+          const rental = await rentProviderOffer(args, context);
+          return {
+            refreshProviderInventory: true,
+            affectedProviderExternalIds: [rental.providerExternalId],
+          };
         },
       },
     ],
@@ -210,6 +213,30 @@ easyserver provider <provider-id> <feature-id> <command> [args...]
 ```
 
 The CLI command must declare `operation: "read" | "mutation"` so the host can apply correct cancellation and uncertainty semantics.
+
+### Acquisition handoff to canonical EasyServer identity
+
+When a successful Provider Feature mutation creates, rents or otherwise affects one or more compute resources that should enter normalized EasyServer inventory, return their stable Provider identities in `affectedProviderExternalIds`.
+
+```ts
+return {
+  refreshProviderInventory: true,
+  affectedProviderExternalIds: [result.providerExternalId],
+};
+```
+
+This field is deliberately narrow. It identifies affected Provider resources for host reconciliation; it is **not** a universal provisioning result and must not grow provider-specific pricing, image, region or configuration fields. Keep those details in the Provider-owned feature result/output.
+
+After the command itself resolves successfully, EasyServer treats the remote mutation as confirmed successful. It may then refresh that Provider's inventory and match each affected Provider ID to the canonical `instance:<uuid>` produced by normal reconciliation. A successful handoff can therefore be used immediately with `instances inspect`, lifecycle commands or `connect` without making the caller rediscover which local identity belongs to the newly acquired resource.
+
+Mutation outcome and handoff outcome are separate:
+
+- if the mutation itself is uncertain after dispatch, it remains `outcome-unknown`; the host may observe inventory, but it does not claim the mutation succeeded;
+- if the mutation resolves successfully and the follow-up inventory refresh fails, the mutation **remains successful** and the handoff is reported as failed/pending rather than `outcome-unknown`;
+- if refresh succeeds but one affected Provider ID is not yet visible, the handoff is partial and that ID remains unresolved until a later observation;
+- a later `instances list`/refresh may complete reconciliation without redispatching the acquisition mutation.
+
+For multiple affected resources, preserve Provider-returned order. Each ID is reconciled independently; duplicate or empty IDs are invalid command results. Do not tell users or calling code to repeat a confirmed rent/create merely to obtain a canonical ID. Recovery is **Observe / Refresh / Wait**, because blindly repeating a billable mutation can create duplicate paid resources.
 
 ## 5. Operation cancellation, deadlines and uncertain mutations
 
