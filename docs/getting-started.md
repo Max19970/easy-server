@@ -208,7 +208,17 @@ Persistent sessions accept the same optional stable local port and explicit Acce
 easyserver sessions create <instance-id> --port 8188 --local-port 54321 --access-method direct-ssh
 ```
 
-The command reports whether the requested local port was dynamic or fixed, the actual loopback Endpoint, and the selected Access Method ID/kind. `sessions list` preserves both the requested local port and selected method alongside that realized Endpoint. Inspect and close sessions with:
+The command reports whether the requested local port was dynamic or fixed, the actual loopback Endpoint, and the selected Access Method ID/kind. `sessions list` preserves both the requested local port and selected method alongside that realized Endpoint.
+
+For reliable automation, give a create intent a stable idempotency key:
+
+```sh
+easyserver sessions create <instance-id> --port 8188 --idempotency-key comfyui-main
+```
+
+Retrying the same key with the same instance, remote target, requested local port and Access Method reuses the same live session instead of opening another tunnel. Reusing that key with different settings fails with `conflict`. Different keys may intentionally create multiple sessions to the same target. A successful `sessions close` releases the key for later reuse; idempotency state is daemon-local and does not survive a daemon restart.
+
+Inspect and close sessions with:
 
 ```sh
 easyserver sessions list
