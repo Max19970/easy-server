@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -34,6 +34,19 @@ async function withStore(run) {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+async function findFreePort() {
+  const server = createServer();
+  server.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const port = address.port;
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  return port;
 }
 
 function endpointDeferred() {
@@ -95,6 +108,7 @@ test("foreground connect exposes a reachable EasyServer endpoint until cancellat
 
     const controller = new AbortController();
     const endpoint = endpointDeferred();
+    const requestedLocalPort = await findFreePort();
     const running = runForegroundConnect({
       gateway: new ConnectionGateway(
         registry,
@@ -108,12 +122,16 @@ test("foreground connect exposes a reachable EasyServer endpoint until cancellat
       },
       instanceId: INSTANCE_ID,
       remotePort: 8080,
+      localPort: requestedLocalPort,
       context: { signal: controller.signal },
       onEndpoint: endpoint.resolve,
     });
 
     const published = await endpoint.promise;
-    assert.equal(published.host, "127.0.0.1");
+    assert.deepEqual(published, {
+      host: "127.0.0.1",
+      port: requestedLocalPort,
+    });
     const socket = connect(published);
     socket.on("error", () => undefined);
     await once(socket, "connect");

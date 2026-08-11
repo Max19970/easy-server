@@ -24,6 +24,7 @@ interface PersistentConnectionSessionBase {
   readonly instanceId: string;
   readonly remoteHost: string;
   readonly remotePort: number;
+  readonly requestedLocalPort?: number;
 }
 
 export interface PersistentSessionFailure {
@@ -58,6 +59,7 @@ export interface CreatePersistentSessionRequest {
   readonly instanceId: string;
   readonly remotePort: number;
   readonly remoteHost?: string;
+  readonly localPort?: number;
 }
 
 export interface LocalDaemonAddress {
@@ -71,6 +73,7 @@ interface EndpointOpener {
     remotePort: number,
     remoteHost: string,
     context: OperationContext,
+    localPort?: number,
   ): Promise<OpenEndpointResult>;
 }
 
@@ -188,13 +191,15 @@ export async function startLocalConnectionDaemon(options: {
       return failure;
     }
 
-    const { instanceId, remoteHost, remotePort } = owned.descriptor;
+    const { instanceId, remoteHost, remotePort, requestedLocalPort } =
+      owned.descriptor;
     owned.descriptor = {
       id,
       state: "failed",
       instanceId,
       remoteHost,
       remotePort,
+      ...(requestedLocalPort === undefined ? {} : { requestedLocalPort }),
       failure,
     };
     owned.failedAt = ++failedSequence;
@@ -224,6 +229,9 @@ export async function startLocalConnectionDaemon(options: {
       instanceId: descriptor.instanceId,
       remoteHost: descriptor.remoteHost,
       remotePort: descriptor.remotePort,
+      ...(descriptor.requestedLocalPort === undefined
+        ? {}
+        : { requestedLocalPort: descriptor.requestedLocalPort }),
     };
     owned.failedAt = undefined;
   };
@@ -264,6 +272,7 @@ export async function startLocalConnectionDaemon(options: {
             input.remotePort,
             input.remoteHost,
             { signal: setupController.signal },
+            input.localPort,
           );
         } finally {
           pendingSetups.delete(setupController);
@@ -281,6 +290,9 @@ export async function startLocalConnectionDaemon(options: {
           instanceId: input.instanceId,
           remoteHost: input.remoteHost,
           remotePort: input.remotePort,
+          ...(input.localPort === undefined
+            ? {}
+            : { requestedLocalPort: input.localPort }),
         };
         const owned: OwnedSession = { descriptor, session: opened.session };
         sessions.set(id, owned);
@@ -506,6 +518,7 @@ function parseCreateRequest(value: unknown): {
   readonly instanceId: string;
   readonly remotePort: number;
   readonly remoteHost: string;
+  readonly localPort?: number;
 } {
   if (typeof value !== "object" || value === null) {
     throw new TypeError("Invalid create-session request");
@@ -529,11 +542,21 @@ function parseCreateRequest(value: unknown): {
   ) {
     throw new TypeError("remoteHost must be non-empty");
   }
+  if (
+    input.localPort !== undefined &&
+    (typeof input.localPort !== "number" ||
+      !Number.isInteger(input.localPort) ||
+      input.localPort < 1 ||
+      input.localPort > 65_535)
+  ) {
+    throw new TypeError("localPort must be an integer between 1 and 65535");
+  }
 
   return {
     instanceId: input.instanceId,
     remotePort: input.remotePort,
     remoteHost: input.remoteHost ?? "127.0.0.1",
+    ...(input.localPort === undefined ? {} : { localPort: input.localPort }),
   };
 }
 

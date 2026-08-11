@@ -82,9 +82,9 @@ Usage:
   easyserver instances stop <instance-id>
   easyserver instances restart <instance-id>
   easyserver instances destroy <instance-id> [--yes]
-  easyserver connect <instance-id> --port <remote-port> [--host <remote-host>]
+  easyserver connect <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>]
   easyserver daemon run
-  easyserver sessions create <instance-id> --port <remote-port> [--host <remote-host>]
+  easyserver sessions create <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>]
   easyserver sessions list
   easyserver sessions close <session-id>
   easyserver provider <provider-id> <feature-id> <command> [--yes] [args...]
@@ -263,7 +263,7 @@ async function runSessions(args: readonly string[]): Promise<void> {
   }
 
   if (command === "create") {
-    const { instanceId, remotePort, remoteHost } = parseConnectArgs(
+    const { instanceId, remotePort, remoteHost, localPort } = parseConnectArgs(
       args.slice(1),
       "sessions create",
     );
@@ -272,6 +272,7 @@ async function runSessions(args: readonly string[]): Promise<void> {
       instanceId,
       remotePort,
       ...(remoteHost === undefined ? {} : { remoteHost }),
+      ...(localPort === undefined ? {} : { localPort }),
     };
     const session = await retryWithHostTrust(
       () => client.createSession(request),
@@ -283,7 +284,7 @@ async function runSessions(args: readonly string[]): Promise<void> {
       },
     );
     process.stdout.write(
-      `${session.id} endpoint=${session.endpoint.host}:${session.endpoint.port}\n`,
+      `${session.id} requested-local-port=${session.requestedLocalPort ?? "dynamic"} endpoint=${session.endpoint.host}:${session.endpoint.port}\n`,
     );
     return;
   }
@@ -323,13 +324,13 @@ function formatPersistentSessions(
         session.state === "failed"
           ? ` error=${session.failure.code}:${escapeTerminalText(session.failure.message)}`
           : "";
-      return `${session.id} state=${session.state}${endpoint} instance=${session.instanceId} target=${escapeTerminalText(session.remoteHost)}:${session.remotePort}${failure}`;
+      return `${session.id} state=${session.state}${endpoint} requested-local-port=${session.requestedLocalPort ?? "dynamic"} instance=${session.instanceId} target=${escapeTerminalText(session.remoteHost)}:${session.remotePort}${failure}`;
     })
     .join("\n")}\n`;
 }
 
 async function runConnect(args: readonly string[]): Promise<void> {
-  const { instanceId, remotePort, remoteHost } = parseConnectArgs(args);
+  const { instanceId, remotePort, remoteHost, localPort } = parseConnectArgs(args);
   const store = new JsonStateStore(stateFilePath());
   const state = await store.read();
   const registry = new ProviderRegistry();
@@ -357,6 +358,7 @@ async function runConnect(args: readonly string[]): Promise<void> {
       instanceId,
       remotePort,
       remoteHost,
+      localPort,
       context: { signal: controller.signal },
       ...(isInteractiveTerminal()
         ? { confirmHostTrust: confirmHostTrustInteractively }
@@ -432,6 +434,7 @@ function parseConnectArgs(
   readonly instanceId: string;
   readonly remotePort: number;
   readonly remoteHost?: string;
+  readonly localPort?: number;
 } {
   const [instanceId, ...options] = args;
   if (instanceId === undefined || instanceId.trim().length === 0) {
@@ -440,6 +443,7 @@ function parseConnectArgs(
 
   let remotePort: number | undefined;
   let remoteHost: string | undefined;
+  let localPort: number | undefined;
 
   for (let index = 0; index < options.length; index += 2) {
     const option = options[index];
@@ -471,6 +475,20 @@ function parseConnectArgs(
       continue;
     }
 
+    if (option === "--local-port") {
+      if (localPort !== undefined) {
+        throw new CliUsageError(`${commandName} accepts --local-port only once`);
+      }
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) {
+        throw new CliUsageError(
+          `${commandName} --local-port must be an integer between 1 and 65535`,
+        );
+      }
+      localPort = parsed;
+      continue;
+    }
+
     throw new CliUsageError(`Unknown ${commandName} option: ${option}`);
   }
 
@@ -478,9 +496,12 @@ function parseConnectArgs(
     throw new CliUsageError(`${commandName} requires --port <remote-port>`);
   }
 
-  return remoteHost === undefined
-    ? { instanceId, remotePort }
-    : { instanceId, remotePort, remoteHost };
+  return {
+    instanceId,
+    remotePort,
+    ...(remoteHost === undefined ? {} : { remoteHost }),
+    ...(localPort === undefined ? {} : { localPort }),
+  };
 }
 
 async function runProvider(args: readonly string[]): Promise<void> {

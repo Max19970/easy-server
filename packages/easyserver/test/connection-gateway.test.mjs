@@ -144,6 +144,19 @@ async function startEchoServer() {
   };
 }
 
+async function findFreePort() {
+  const server = createServer();
+  server.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const port = address.port;
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  return port;
+}
+
 async function roundTrip(endpoint, payload) {
   const socket = connect(endpoint);
   await once(socket, "connect");
@@ -205,6 +218,76 @@ test("local Endpoint forwards TCP bytes and close releases listener and admissio
     await result.session.closed;
     assert.equal(releases, 1);
     await expectConnectionRefused(result.endpoint);
+    await echo.close();
+  });
+});
+
+test("explicit local Endpoint port is bound exactly while default remains dynamic", async () => {
+  await withState(async (store) => {
+    const echo = await startEchoServer();
+    const requestedPort = await findFreePort();
+    const providers = new ProviderRegistry();
+    const access = new AccessAdapterRegistry();
+    registerProvider(providers);
+    access.registerBuiltIn(loopbackAdapter());
+    const gateway = new ConnectionGateway(providers, access, store);
+
+    const fixed = await gateway.openEndpoint(
+      INSTANCE_ID,
+      echo.port,
+      "127.0.0.1",
+      operationContext(),
+      requestedPort,
+    );
+    assert.deepEqual(fixed.endpoint, {
+      host: "127.0.0.1",
+      port: requestedPort,
+    });
+    assert.equal(await roundTrip(fixed.endpoint, "fixed"), "fixed");
+    await fixed.session.close();
+
+    const dynamic = await gateway.openEndpoint(
+      INSTANCE_ID,
+      echo.port,
+      operationContext(),
+    );
+    assert.equal(dynamic.endpoint.host, "127.0.0.1");
+    assert.ok(dynamic.endpoint.port > 0);
+    assert.equal(await roundTrip(dynamic.endpoint, "dynamic"), "dynamic");
+    await dynamic.session.close();
+    await echo.close();
+  });
+});
+
+test("occupied explicit local Endpoint port is a normalized conflict", async () => {
+  await withState(async (store) => {
+    const echo = await startEchoServer();
+    const occupied = await startEchoServer();
+    const providers = new ProviderRegistry();
+    const access = new AccessAdapterRegistry();
+    let releases = 0;
+    let transportCloses = 0;
+    registerProvider(providers, { onRelease: () => (releases += 1) });
+    access.registerBuiltIn(
+      loopbackAdapter({ onTransportClose: () => (transportCloses += 1) }),
+    );
+
+    await assert.rejects(
+      new ConnectionGateway(providers, access, store).openEndpoint(
+        INSTANCE_ID,
+        echo.port,
+        "127.0.0.1",
+        operationContext(),
+        occupied.port,
+      ),
+      (error) =>
+        error?.code === "conflict" &&
+        error.message === `Local Endpoint port is already in use: ${occupied.port}`,
+    );
+    assert.equal(transportCloses, 1);
+    assert.equal(releases, 1);
+
+    await occupied.close();
     await echo.close();
   });
 });

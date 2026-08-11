@@ -25,9 +25,19 @@ async function createFakeGateway() {
 
   return {
     sessions,
-    async openEndpoint() {
+    async openEndpoint(
+      _instanceId,
+      _remotePort,
+      _remoteHost,
+      _context,
+      localPort,
+    ) {
       const server = createServer((socket) => socket.pipe(socket));
-      server.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+      server.listen({
+        host: "127.0.0.1",
+        port: localPort ?? 0,
+        exclusive: true,
+      });
       await once(server, "listening");
       const address = server.address();
       assert.ok(address && typeof address !== "string");
@@ -62,6 +72,19 @@ async function createFakeGateway() {
       };
     },
   };
+}
+
+async function findFreePort() {
+  const server = createServer();
+  server.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const port = address.port;
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  return port;
 }
 
 async function roundTrip(endpoint, payload) {
@@ -562,6 +585,37 @@ test("failed session retention is bounded", async () => {
     assert.equal(retained.length, 100);
     assert.equal(retained.some((session) => session.id === created[0].id), false);
     assert.equal(retained.every((session) => session.state === "failed"), true);
+  } finally {
+    await daemon.close().catch(() => undefined);
+  }
+});
+
+test("daemon session creation preserves requested and actual local ports", async () => {
+  const gateway = await createFakeGateway();
+  const daemon = await startLocalConnectionDaemon({
+    gateway,
+    authToken: "fixture-token",
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    const requestedLocalPort = await findFreePort();
+    const fixed = await client.createSession({
+      instanceId: "instance:fixed",
+      remotePort: 8188,
+      localPort: requestedLocalPort,
+    });
+    assert.equal(fixed.requestedLocalPort, requestedLocalPort);
+    assert.equal(fixed.endpoint.port, requestedLocalPort);
+    assert.equal(fixed.endpoint.host, "127.0.0.1");
+
+    const dynamic = await client.createSession({
+      instanceId: "instance:dynamic",
+      remotePort: 8188,
+    });
+    assert.equal(dynamic.requestedLocalPort, undefined);
+    assert.ok(dynamic.endpoint.port > 0);
+    assert.deepEqual(await client.listSessions(), [fixed, dynamic]);
   } finally {
     await daemon.close().catch(() => undefined);
   }

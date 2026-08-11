@@ -322,6 +322,19 @@ async function waitForDaemonFile(
   assert.fail(`daemon control file was not created: ${JSON.stringify(daemon.output())}`);
 }
 
+async function findFreePort() {
+  const server = createServer();
+  server.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const port = address.port;
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  return port;
+}
+
 async function roundTrip(endpoint, payload) {
   const socket = connect(endpoint);
   await once(socket, "connect");
@@ -1402,6 +1415,7 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
       new RegExp(firstDescriptor.authToken.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
     );
 
+    const requestedLocalPort = await findFreePort();
     const create = runWithDaemon(
       stateFile,
       daemonFile,
@@ -1410,13 +1424,17 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
       instanceId,
       "--port",
       String(echoAddress.port),
+      "--local-port",
+      String(requestedLocalPort),
     );
     assert.equal(create.status, 0, create.stderr);
     const match = create.stdout.match(
-      /^(\S+) endpoint=(127\.0\.0\.1):(\d+)$/m,
+      /^(\S+) requested-local-port=(\d+) endpoint=(127\.0\.0\.1):(\d+)$/m,
     );
     assert.ok(match, create.stdout);
-    const [, sessionId, host, portText] = match;
+    const [, sessionId, requestedPortText, host, portText] = match;
+    assert.equal(Number(requestedPortText), requestedLocalPort);
+    assert.equal(Number(portText), requestedLocalPort);
     const endpoint = { host, port: Number(portText) };
 
     assert.equal(await roundTrip(endpoint, "after-cli-exit"), "after-cli-exit");
@@ -1424,6 +1442,7 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
     const list = runWithDaemon(stateFile, daemonFile, "sessions", "list");
     assert.equal(list.status, 0, list.stderr);
     assert.match(list.stdout, new RegExp(sessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(list.stdout, new RegExp(`requested-local-port=${requestedLocalPort}`));
 
     const close = runWithDaemon(
       stateFile,
@@ -1445,7 +1464,9 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
       String(echoAddress.port),
     );
     assert.equal(second.status, 0, second.stderr);
-    const secondMatch = second.stdout.match(/endpoint=(127\.0\.0\.1):(\d+)/);
+    const secondMatch = second.stdout.match(
+      /requested-local-port=dynamic endpoint=(127\.0\.0\.1):(\d+)/,
+    );
     assert.ok(secondMatch, second.stdout);
     const secondEndpoint = {
       host: secondMatch[1],

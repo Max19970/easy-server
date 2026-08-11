@@ -28,6 +28,7 @@ export interface ForegroundConnectOptions {
   readonly instanceId: string;
   readonly remotePort: number;
   readonly remoteHost?: string;
+  readonly localPort?: number;
   readonly context: OperationContext;
   readonly confirmHostTrust?: ConfirmHostTrust;
   readonly onEndpoint: (endpoint: Endpoint) => void;
@@ -66,6 +67,7 @@ async function openWithTrust(
         options.remotePort,
         options.remoteHost ?? "127.0.0.1",
         options.context,
+        options.localPort,
       ),
     {
       sshAdapter: options.sshAdapter,

@@ -49,18 +49,21 @@ export class ConnectionGateway {
     remotePort: number,
     remoteHost?: string,
     context?: OperationContext,
+    localPort?: number,
   ): Promise<OpenEndpointResult>;
   async openEndpoint(
     instanceId: string,
     remotePort: number,
     context: OperationContext,
     remoteHost?: string,
+    localPort?: number,
   ): Promise<OpenEndpointResult>;
   async openEndpoint(
     instanceId: string,
     remotePort: number,
     remoteHostOrContext: string | OperationContext = "127.0.0.1",
     contextOrRemoteHost?: OperationContext | string,
+    localPort?: number,
   ): Promise<OpenEndpointResult> {
     const remoteHost =
       typeof remoteHostOrContext === "string"
@@ -76,6 +79,7 @@ export class ConnectionGateway {
         : remoteHostOrContext;
 
     validateTarget(remoteHost, remotePort);
+    validateLocalPort(localPort);
     if (context.signal.aborted) {
       throw normalizedError("cancelled", "Connection setup was cancelled");
     }
@@ -226,7 +230,7 @@ export class ConnectionGateway {
         session.accept(socket);
       });
       scope.register(() => closeServer(server));
-      await listenLoopback(server);
+      await listenLoopback(server, localPort);
 
       const address = server.address();
       if (address === null || typeof address === "string") {
@@ -466,10 +470,23 @@ class CleanupScope {
   }
 }
 
-async function listenLoopback(server: Server): Promise<void> {
+async function listenLoopback(
+  server: Server,
+  localPort?: number,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error) => {
       server.off("listening", onListening);
+      if (localPort !== undefined && errorCode(error) === "EADDRINUSE") {
+        reject(
+          normalizedError(
+            "conflict",
+            `Local Endpoint port is already in use: ${localPort}`,
+            error,
+          ),
+        );
+        return;
+      }
       reject(error);
     };
     const onListening = () => {
@@ -479,7 +496,11 @@ async function listenLoopback(server: Server): Promise<void> {
 
     server.once("error", onError);
     server.once("listening", onListening);
-    server.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+    server.listen({
+      host: "127.0.0.1",
+      port: localPort ?? 0,
+      exclusive: true,
+    });
   });
 }
 
@@ -522,6 +543,21 @@ function accessMethodDeferredCredentialIds(method: AccessMethod): Set<string> {
     }
   }
   return ids;
+}
+
+function validateLocalPort(port: number | undefined): void {
+  if (port === undefined) {
+    return;
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new TypeError("localPort must be an integer between 1 and 65535");
+  }
+}
+
+function errorCode(error: unknown): unknown {
+  return typeof error === "object" && error !== null && "code" in error
+    ? (error as { readonly code?: unknown }).code
+    : undefined;
 }
 
 function validateTarget(host: string, port: number): void {
