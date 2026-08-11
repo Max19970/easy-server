@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { normalizedError } from "@easyai101/easyserver-plugin-sdk";
 import { ComputeManager } from "../dist/compute-manager.js";
@@ -10,6 +11,16 @@ import { ProviderRegistry } from "../dist/provider-registry.js";
 import { JsonStateStore } from "../dist/state-store.js";
 
 const context = { signal: new AbortController().signal };
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 async function withStore(run) {
   const directory = await mkdtemp(join(tmpdir(), "easyserver-compute-manager-"));
@@ -587,6 +598,139 @@ test("definitive getInstance absence removes the canonical binding", async () =>
     absent = false;
     const [after] = await new ComputeManager(registry, store).listInstances(context);
     assert.notEqual(after.id, before.id);
+  });
+});
+
+test("same-provider refreshes serialize from remote observation through commit", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const initial = {
+      providerExternalId: "remote-stale",
+      state: "running",
+      rawState: "running",
+      availableActions: [],
+    };
+    const olderStarted = deferred();
+    const newerStarted = deferred();
+    const olderResult = deferred();
+    const newerResult = deferred();
+    let call = 0;
+
+    registerProvider(registry, {
+      providerId: "ordered",
+      capabilities: [],
+      list: async () => {
+        call += 1;
+        if (call === 1) {
+          return [initial];
+        }
+        if (call === 2) {
+          olderStarted.resolve();
+          return olderResult.promise;
+        }
+        newerStarted.resolve();
+        return newerResult.promise;
+      },
+      get: async () => undefined,
+    });
+
+    const firstManager = new ComputeManager(
+      registry,
+      new JsonStateStore(store.path),
+    );
+    const secondManager = new ComputeManager(
+      registry,
+      new JsonStateStore(store.path),
+    );
+    const [before] = await firstManager.refreshProvider("ordered", context);
+
+    const older = firstManager.refreshProvider("ordered", context);
+    await olderStarted.promise;
+    const newer = secondManager.refreshProvider("ordered", context);
+    assert.equal(
+      await Promise.race([
+        newerStarted.promise.then(() => "started"),
+        delay(50).then(() => "blocked"),
+      ]),
+      "blocked",
+    );
+
+    olderResult.resolve([initial]);
+    const [olderInstance] = await older;
+    assert.equal(olderInstance.id, before.id);
+
+    await newerStarted.promise;
+    newerResult.resolve([]);
+    assert.deepEqual(await newer, []);
+
+    const state = await new JsonStateStore(store.path).read();
+    assert.equal(
+      state.instances?.some(
+        (binding) => binding.providerExternalId === initial.providerExternalId,
+      ) ?? false,
+      false,
+    );
+  });
+});
+
+test("independent provider refreshes observe concurrently and merge", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const alpha = {
+      providerExternalId: "alpha-remote",
+      state: "running",
+      rawState: "running",
+      availableActions: [],
+    };
+    const beta = {
+      providerExternalId: "beta-remote",
+      state: "stopped",
+      rawState: "stopped",
+      availableActions: [],
+    };
+    const alphaStarted = deferred();
+    const betaStarted = deferred();
+    const alphaResult = deferred();
+    const betaResult = deferred();
+    registerProvider(registry, {
+      providerId: "alpha-independent",
+      capabilities: [],
+      list: async () => {
+        alphaStarted.resolve();
+        return alphaResult.promise;
+      },
+      get: async () => alpha,
+    });
+    registerProvider(registry, {
+      providerId: "beta-independent",
+      capabilities: [],
+      list: async () => {
+        betaStarted.resolve();
+        return betaResult.promise;
+      },
+      get: async () => beta,
+    });
+
+    const first = new ComputeManager(registry, new JsonStateStore(store.path));
+    const second = new ComputeManager(registry, new JsonStateStore(store.path));
+    const alphaRefresh = first.refreshProvider("alpha-independent", context);
+    const betaRefresh = second.refreshProvider("beta-independent", context);
+    await Promise.all([alphaStarted.promise, betaStarted.promise]);
+
+    alphaResult.resolve([alpha]);
+    betaResult.resolve([beta]);
+    const [alphaInstances, betaInstances] = await Promise.all([
+      alphaRefresh,
+      betaRefresh,
+    ]);
+
+    assert.equal(alphaInstances[0].providerExternalId, alpha.providerExternalId);
+    assert.equal(betaInstances[0].providerExternalId, beta.providerExternalId);
+    const state = await new JsonStateStore(store.path).read();
+    assert.deepEqual(
+      new Set(state.instances?.map((binding) => binding.providerExternalId)),
+      new Set([alpha.providerExternalId, beta.providerExternalId]),
+    );
   });
 });
 

@@ -159,6 +159,8 @@ Always preserve the Provider's raw state next to the normalized state. If the Pr
 
 `providerExternalId` must be the Provider's stable identity for the same remote resource across repeated inventory reads. Do not derive it from display names, list positions or mutable metadata. EasyServer reconciles refreshed Provider inventory against that identity so local instance identity can survive state changes and process restarts. A complete successful provider refresh may remove a binding that is genuinely absent; an uncertain mutation should instead be followed by reconciliation rather than inventing a new identity or assuming deletion.
 
+EasyServer serializes full inventory refreshes for the same Provider from the remote `listInstances()` observation through Local State reconciliation. A later same-Provider refresh waits rather than overtaking an older in-flight observation, so snapshots cannot commit out of order across processes. Different Providers use independent refresh locks and are free to observe concurrently.
+
 ## 4. Provider-specific functionality belongs in Provider Features
 
 Do not create a universal `Offer`, `ProvisionRequest`, server profile or form schema merely because several Providers can create compute.

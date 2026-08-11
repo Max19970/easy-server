@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   isNormalizedError,
   normalizedError,
@@ -11,6 +11,12 @@ import {
   type ProviderInstanceSnapshot,
   type ProviderRawState,
 } from "@easyai101/easyserver-plugin-sdk";
+import {
+  acquireFilesystemLock,
+  FilesystemLockCancelledError,
+  FilesystemLockTimeoutError,
+  type FilesystemLockLease,
+} from "./filesystem-lock.js";
 import { HostOperationRunner } from "./host-operation.js";
 import {
   providerOperationContext,
@@ -41,53 +47,13 @@ export class ComputeManager {
   ) {}
 
   async listInstances(context: OperationContext): Promise<readonly ComputeInstance[]> {
-    const snapshotsByProvider = new Map<
-      string,
-      readonly ProviderInstanceSnapshot[]
-    >();
-
+    const instances: ComputeInstance[] = [];
     for (const providerId of this.registry.listProviderIds()) {
-      const admission = this.registry.acquire(providerId);
-      if (admission === undefined) {
-        continue;
-      }
-
-      try {
-        snapshotsByProvider.set(
-          providerId,
-          parseProviderInstanceList(
-            await this.operations.run(
-              "read",
-              `Provider ${providerId} listInstances`,
-              context,
-              (operationContext) =>
-                admission.provider.listInstances(
-                  providerOperationContext(admission, operationContext),
-                ),
-            ),
-            admission.capabilities,
-          ),
-        );
-      } finally {
-        admission.release();
+      const refreshed = await this.refreshRegisteredProvider(providerId, context);
+      if (refreshed !== undefined) {
+        instances.push(...refreshed);
       }
     }
-
-    const instances: ComputeInstance[] = [];
-    await this.stateStore.update((state) => {
-      let nextState = state;
-      for (const [providerId, snapshots] of snapshotsByProvider) {
-        const reconciled = reconcileProviderInventory(
-          nextState,
-          providerId,
-          snapshots,
-        );
-        nextState = reconciled.state;
-        instances.push(...reconciled.instances);
-      }
-      return nextState;
-    });
-
     return instances;
   }
 
@@ -95,39 +61,14 @@ export class ComputeManager {
     providerId: string,
     context: OperationContext,
   ): Promise<readonly ComputeInstance[]> {
-    const admission = this.registry.acquire(providerId);
-    if (admission === undefined) {
+    const refreshed = await this.refreshRegisteredProvider(providerId, context);
+    if (refreshed === undefined) {
       throw normalizedError(
         "provider-unavailable",
         `Provider is not available: ${providerId}`,
       );
     }
-
-    let snapshots: readonly ProviderInstanceSnapshot[];
-    try {
-      snapshots = parseProviderInstanceList(
-        await this.operations.run(
-          "read",
-          `Provider ${providerId} listInstances`,
-          context,
-          (operationContext) =>
-            admission.provider.listInstances(
-              providerOperationContext(admission, operationContext),
-            ),
-        ),
-        admission.capabilities,
-      );
-    } finally {
-      admission.release();
-    }
-
-    let instances: readonly ComputeInstance[] = [];
-    await this.stateStore.update((state) => {
-      const reconciled = reconcileProviderInventory(state, providerId, snapshots);
-      instances = reconciled.instances;
-      return reconciled.state;
-    });
-    return instances;
+    return refreshed;
   }
 
   async inspectInstance(
@@ -276,6 +217,52 @@ export class ComputeManager {
     }
   }
 
+  private async refreshRegisteredProvider(
+    providerId: string,
+    context: OperationContext,
+  ): Promise<readonly ComputeInstance[] | undefined> {
+    const admission = this.registry.acquire(providerId);
+    if (admission === undefined) {
+      return undefined;
+    }
+
+    let refreshLock: FilesystemLockLease | undefined;
+    try {
+      refreshLock = await acquireProviderRefreshLock(
+        this.stateStore.path,
+        providerId,
+        context.signal,
+      );
+      const snapshots = parseProviderInstanceList(
+        await this.operations.run(
+          "read",
+          `Provider ${providerId} listInstances`,
+          context,
+          (operationContext) =>
+            admission.provider.listInstances(
+              providerOperationContext(admission, operationContext),
+            ),
+        ),
+        admission.capabilities,
+      );
+
+      let instances: readonly ComputeInstance[] = [];
+      await this.stateStore.update(async (state) => {
+        await refreshLock!.assertOwned();
+        const reconciled = reconcileProviderInventory(state, providerId, snapshots);
+        instances = reconciled.instances;
+        return reconciled.state;
+      });
+      return instances;
+    } finally {
+      try {
+        await refreshLock?.release();
+      } finally {
+        admission.release();
+      }
+    }
+  }
+
   private async refreshBindingAfterMutation(
     state: EasyServerState,
     binding: InstanceBinding,
@@ -312,6 +299,34 @@ export class ComputeManager {
         ? state
         : { ...state, instances };
     });
+  }
+}
+
+async function acquireProviderRefreshLock(
+  statePath: string,
+  providerId: string,
+  signal: AbortSignal,
+): Promise<FilesystemLockLease> {
+  const providerKey = createHash("sha256").update(providerId).digest("hex");
+  try {
+    return await acquireFilesystemLock(
+      `${statePath}.provider-refresh.${providerKey}.lock`,
+      { timeoutMs: 65_000, signal },
+    );
+  } catch (error) {
+    if (error instanceof FilesystemLockCancelledError) {
+      throw normalizedError(
+        "cancelled",
+        `Provider ${providerId} inventory refresh was cancelled`,
+      );
+    }
+    if (error instanceof FilesystemLockTimeoutError) {
+      throw normalizedError(
+        "timeout",
+        `Timed out waiting for Provider ${providerId} inventory refresh`,
+      );
+    }
+    throw error;
   }
 }
 
