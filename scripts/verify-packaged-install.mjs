@@ -53,6 +53,8 @@ try {
     absentPackageName: "@easyai101/easyserver-plugin-vastai",
     sdkTarball,
     cliTarball,
+    providerCommand: ["provider", "example", "catalog", "show"],
+    providerCommandOutput: "example-offer gpu=ExampleGPU price=0.00\n",
   });
   await verifyPluginInstall({
     packageName: "@easyai101/easyserver-external-ts-provider",
@@ -362,6 +364,8 @@ async function verifyPluginInstall({
   absentPackageName,
   sdkTarball,
   cliTarball,
+  providerCommand,
+  providerCommandOutput,
 }) {
   const prefix = await createPrefix(providerId);
   installGlobally(prefix, sdkTarball, cliTarball);
@@ -377,6 +381,10 @@ async function verifyPluginInstall({
 
   const list = runCli(prefix, "plugins", "list");
   assert.match(list.stdout, new RegExp(`^loaded\\s+${pluginId} provider=${providerId}$`, "m"));
+
+  if (providerCommand !== undefined) {
+    assert.equal(runCli(prefix, ...providerCommand).stdout, providerCommandOutput);
+  }
 
   runCli(prefix, "plugins", "disable", packageName);
   assert.equal(runCli(prefix, "--version").stdout, "0.1.0\n");
