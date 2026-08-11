@@ -438,6 +438,55 @@ test("loads first-party workspace packages as explicit provider plugins", () => 
   }
 });
 
+test("first-party provider command help needs no configured credentials or provider work", () => {
+  const stateFile = join(testDirectory, "provider-command-help-state.json");
+  assert.equal(
+    runWithState(
+      stateFile,
+      "plugins",
+      "add",
+      "@easyai101/easyserver-plugin-vastai",
+    ).status,
+    0,
+  );
+  assert.equal(
+    runWithState(stateFile, "plugins", "add", intelionPlugin).status,
+    0,
+  );
+
+  const vastHelp = runWithState(
+    stateFile,
+    "provider",
+    "vastai",
+    "marketplace",
+    "rent",
+    "--help",
+  );
+  assert.equal(vastHelp.status, 0, vastHelp.stderr);
+  assert.match(
+    vastHelp.stdout,
+    /easyserver provider vastai marketplace rent <offer-id> --image <image>/,
+  );
+  assert.match(vastHelp.stdout, /--image <image> \(required\)/);
+  assert.doesNotMatch(vastHelp.stderr, /credential|authentication/i);
+
+  const intelionHelp = runWithState(
+    stateFile,
+    "provider",
+    "intelion",
+    "server-configurator",
+    "create",
+    "-h",
+  );
+  assert.equal(intelionHelp.status, 0, intelionHelp.stderr);
+  assert.match(
+    intelionHelp.stdout,
+    /easyserver provider intelion server-configurator create --name <name> --flavor <id> --disk <gb> --os <id>/,
+  );
+  assert.match(intelionHelp.stdout, /--addon <id> \(optional, repeatable\)/);
+  assert.doesNotMatch(intelionHelp.stderr, /credential|authentication/i);
+});
+
 test("lists zero configured plugins", () => {
   const result = run("plugins", "list");
   assert.equal(result.status, 0);
@@ -987,6 +1036,50 @@ test("mounts provider feature commands and reconciles requested inventory change
   );
   assert.equal(commands.status, 0);
   assert.match(commands.stdout, /echo\s+Echo provider-owned arguments/);
+
+  const legacyHelp = runWithState(
+    stateFile,
+    "provider",
+    "provider-cli",
+    "marketplace",
+    "echo",
+    "--help",
+  );
+  assert.equal(legacyHelp.status, 0);
+  assert.match(legacyHelp.stdout, /Echo provider-owned arguments/);
+  assert.match(legacyHelp.stdout, /\[provider-args\.\.\.\]/);
+  assert.match(legacyHelp.stdout, /does not declare structured argument help/);
+  assert.doesNotMatch(legacyHelp.stdout, /provider-owned:/);
+
+  const mutationHelp = runWithState(
+    stateFile,
+    "provider",
+    "provider-cli",
+    "marketplace",
+    "create",
+    "--help",
+  );
+  assert.equal(mutationHelp.status, 0);
+  assert.match(mutationHelp.stdout, /^Create a provider-owned resource$/m);
+  assert.match(mutationHelp.stdout, /^Operation: mutation$/m);
+  assert.match(
+    mutationHelp.stdout,
+    /Usage:\n  easyserver provider provider-cli marketplace create <resource-name> \[--tag <value>\.\.\.\]/,
+  );
+  assert.match(
+    mutationHelp.stdout,
+    /<resource-name> \(required\) Provider-owned resource name/,
+  );
+  assert.match(
+    mutationHelp.stdout,
+    /--tag <value> \(optional, repeatable\) Provider-owned tag/,
+  );
+  assert.match(
+    mutationHelp.stdout,
+    /easyserver provider provider-cli marketplace create gpu-box --tag team --tag demo/,
+  );
+  const stateAfterHelp = JSON.parse(await readFile(stateFile, "utf8"));
+  assert.equal(stateAfterHelp.instances, undefined);
 
   const execute = runWithState(
     stateFile,

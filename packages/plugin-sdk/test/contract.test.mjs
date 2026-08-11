@@ -200,7 +200,23 @@ test("validates provider CLI contributions without interpreting command argument
     displayName: "Marketplace",
     cli: {
       commands: [
-        { name: "search", description: "Search offers", operation: "read", run },
+        {
+          name: "search",
+          description: "Search offers",
+          operation: "read",
+          help: {
+            options: [
+              {
+                name: "--gpu",
+                valueName: "gpu-name",
+                description: "GPU model",
+                required: false,
+              },
+            ],
+            examples: ["--gpu 'RTX 4090'"],
+          },
+          run,
+        },
         { name: "rent", description: "Rent one offer", operation: "mutation", run },
       ],
     },
@@ -213,6 +229,17 @@ test("validates provider CLI contributions without interpreting command argument
 
   assert.equal(plugin.features?.[0], feature);
   assert.equal(plugin.features?.[0].cli?.commands[0].run, run);
+  assert.deepEqual(plugin.features?.[0].cli?.commands[0].help, {
+    options: [
+      {
+        name: "--gpu",
+        valueName: "gpu-name",
+        description: "GPU model",
+        required: false,
+      },
+    ],
+    examples: ["--gpu 'RTX 4090'"],
+  });
 
   assert.throws(
     () =>
@@ -249,6 +276,77 @@ test("validates provider CLI contributions without interpreting command argument
         ],
       }),
     /operation must be read or mutation/,
+  );
+
+  assert.throws(
+    () =>
+      parseProviderPlugin({
+        manifest: validManifest,
+        provider: provider(),
+        features: [
+          {
+            ...feature,
+            cli: {
+              commands: [
+                {
+                  name: "search",
+                  description: "Search offers",
+                  operation: "read",
+                  help: {
+                    options: [
+                      {
+                        name: "gpu",
+                        description: "GPU model",
+                        required: false,
+                      },
+                    ],
+                  },
+                  run,
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    /must be a long option/,
+  );
+
+  assert.throws(
+    () =>
+      parseProviderPlugin({
+        manifest: validManifest,
+        provider: provider(),
+        features: [
+          {
+            ...feature,
+            cli: {
+              commands: [
+                {
+                  name: "search",
+                  description: "Search offers",
+                  operation: "read",
+                  help: {
+                    options: [
+                      {
+                        name: "--gpu",
+                        description: "GPU model",
+                        required: false,
+                      },
+                      {
+                        name: "--gpu",
+                        description: "Duplicate GPU option",
+                        required: false,
+                      },
+                    ],
+                  },
+                  run,
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    /contains duplicate name/,
   );
 });
 

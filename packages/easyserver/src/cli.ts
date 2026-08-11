@@ -8,6 +8,7 @@ import {
   type AvailableAction,
   type HostTrustRequiredError,
   type PluginCredentialDescriptor,
+  type ProviderCliCommand,
 } from "@easyai101/easyserver-plugin-sdk";
 import { AccessAdapterRegistry } from "./access-adapter-registry.js";
 import {
@@ -493,6 +494,16 @@ async function runProvider(args: readonly string[]): Promise<void> {
       );
     }
 
+    if (
+      commandArgs.length === 1 &&
+      (commandArgs[0] === "--help" || commandArgs[0] === "-h")
+    ) {
+      process.stdout.write(
+        formatProviderCommandHelp(providerId, featureId, command),
+      );
+      return;
+    }
+
     const controller = new AbortController();
     const cancel = () => controller.abort();
     process.once("SIGINT", cancel);
@@ -922,6 +933,81 @@ function formatProviderCommands(
         `${escapeTerminalText(command.name).padEnd(12)} ${escapeTerminalText(command.description)}`,
     )
     .join("\n")}\n`;
+}
+
+function formatProviderCommandHelp(
+  providerId: string,
+  featureId: string,
+  command: ProviderCliCommand,
+): string {
+  const commandPath = `easyserver provider ${escapeTerminalText(providerId)} ${escapeTerminalText(featureId)} ${escapeTerminalText(command.name)}`;
+  const help = command.help;
+  if (help === undefined) {
+    return `${escapeTerminalText(command.description)}\n\nUsage:\n  ${commandPath} [provider-args...]\n\nThis Provider Plugin does not declare structured argument help for this command.\n`;
+  }
+
+  const argumentsHelp = help.arguments ?? [];
+  const optionsHelp = help.options ?? [];
+  const usageParts = [
+    ...argumentsHelp.map((argument) => {
+      const token = `<${escapeTerminalText(argument.name)}>${argument.repeatable ? "..." : ""}`;
+      return argument.required ? token : `[${token}]`;
+    }),
+    ...optionsHelp.map((option) => {
+      const value =
+        option.valueName === undefined
+          ? ""
+          : ` <${escapeTerminalText(option.valueName)}>`;
+      const token = `${escapeTerminalText(option.name)}${value}${option.repeatable ? "..." : ""}`;
+      return option.required ? token : `[${token}]`;
+    }),
+  ];
+
+  const lines = [
+    escapeTerminalText(command.description),
+    `Operation: ${command.operation}`,
+    "",
+    "Usage:",
+    `  ${commandPath}${usageParts.length === 0 ? "" : ` ${usageParts.join(" ")}`}`,
+  ];
+
+  if (argumentsHelp.length > 0) {
+    lines.push("", "Arguments:");
+    for (const argument of argumentsHelp) {
+      lines.push(
+        `  <${escapeTerminalText(argument.name)}> ${formatProviderHelpMarkers(argument.required, argument.repeatable)} ${escapeTerminalText(argument.description)}`,
+      );
+    }
+  }
+
+  if (optionsHelp.length > 0) {
+    lines.push("", "Options:");
+    for (const option of optionsHelp) {
+      const value =
+        option.valueName === undefined
+          ? ""
+          : ` <${escapeTerminalText(option.valueName)}>`;
+      lines.push(
+        `  ${escapeTerminalText(option.name)}${value} ${formatProviderHelpMarkers(option.required, option.repeatable)} ${escapeTerminalText(option.description)}`,
+      );
+    }
+  }
+
+  if ((help.examples?.length ?? 0) > 0) {
+    lines.push("", "Examples:");
+    for (const example of help.examples ?? []) {
+      lines.push(`  ${commandPath} ${escapeTerminalText(example)}`);
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function formatProviderHelpMarkers(
+  required: boolean,
+  repeatable: boolean | undefined,
+): string {
+  return `(${required ? "required" : "optional"}${repeatable ? ", repeatable" : ""})`;
 }
 
 function reportProviderCommandHandoff(

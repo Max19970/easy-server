@@ -262,10 +262,36 @@ export function parseProviderCliCommandResult(
 
 export type ProviderCliOperation = "read" | "mutation";
 
+export interface ProviderCliArgumentHelp {
+  /** Stable provider-owned positional argument name, rendered as <name>. */
+  readonly name: string;
+  readonly description: string;
+  readonly required: boolean;
+  readonly repeatable?: boolean;
+}
+
+export interface ProviderCliOptionHelp {
+  /** Provider-owned long option such as --gpu or --ssh-key. */
+  readonly name: string;
+  /** Optional value placeholder, rendered as <valueName>. Omit for boolean flags. */
+  readonly valueName?: string;
+  readonly description: string;
+  readonly required: boolean;
+  readonly repeatable?: boolean;
+}
+
+export interface ProviderCliCommandHelp {
+  readonly arguments?: readonly ProviderCliArgumentHelp[];
+  readonly options?: readonly ProviderCliOptionHelp[];
+  /** Provider-owned argument examples, without the leading easyserver command path. */
+  readonly examples?: readonly string[];
+}
+
 export interface ProviderCliCommand {
   readonly name: string;
   readonly description: string;
   readonly operation: ProviderCliOperation;
+  readonly help?: ProviderCliCommandHelp;
   run(
     args: readonly string[],
     context: ProviderCliCommandContext,
@@ -822,6 +848,12 @@ function parseProviderCliContribution(value: unknown, path: string): void {
         `${path}.commands[${index}].operation must be read or mutation`,
       );
     }
+    if (command.help !== undefined) {
+      parseProviderCliCommandHelp(
+        command.help,
+        `${path}.commands[${index}].help`,
+      );
+    }
     expectFunction(command.run, `${path}.commands[${index}].run`);
 
     if (seen.has(name)) {
@@ -833,7 +865,81 @@ function parseProviderCliContribution(value: unknown, path: string): void {
   }
 }
 
+function parseProviderCliCommandHelp(value: unknown, path: string): void {
+  const help = expectRecord(value, path);
+  parseProviderCliHelpItems(help.arguments, `${path}.arguments`, "argument");
+  parseProviderCliHelpItems(help.options, `${path}.options`, "option");
+
+  if (help.examples !== undefined) {
+    if (!Array.isArray(help.examples)) {
+      throw new PluginContractError(`${path}.examples must be an array`);
+    }
+    help.examples.forEach((example, index) =>
+      expectNonEmptyString(example, `${path}.examples[${index}]`),
+    );
+  }
+}
+
+function parseProviderCliHelpItems(
+  value: unknown,
+  path: string,
+  kind: "argument" | "option",
+): void {
+  if (value === undefined) {
+    return;
+  }
+  if (!Array.isArray(value)) {
+    throw new PluginContractError(`${path} must be an array`);
+  }
+
+  const seen = new Set<string>();
+  for (const [index, candidate] of value.entries()) {
+    const item = expectRecord(candidate, `${path}[${index}]`);
+    const name = expectNonEmptyString(item.name, `${path}[${index}].name`);
+    if (kind === "argument") {
+      if (!ID_PATTERN.test(name)) {
+        throw new PluginContractError(
+          `${path}[${index}].name must be a stable lowercase argument identifier`,
+        );
+      }
+    } else if (!CLI_LONG_OPTION_PATTERN.test(name)) {
+      throw new PluginContractError(
+        `${path}[${index}].name must be a long option such as --example`,
+      );
+    }
+    if (seen.has(name)) {
+      throw new PluginContractError(`${path} contains duplicate name: ${name}`);
+    }
+    seen.add(name);
+
+    expectNonEmptyString(
+      item.description,
+      `${path}[${index}].description`,
+    );
+    if (typeof item.required !== "boolean") {
+      throw new PluginContractError(`${path}[${index}].required must be a boolean`);
+    }
+    if (item.repeatable !== undefined && typeof item.repeatable !== "boolean") {
+      throw new PluginContractError(`${path}[${index}].repeatable must be a boolean`);
+    }
+
+    if (kind === "option" && item.valueName !== undefined) {
+      const valueName = expectNonEmptyString(
+        item.valueName,
+        `${path}[${index}].valueName`,
+      );
+      if (!CLI_HELP_VALUE_PATTERN.test(valueName)) {
+        throw new PluginContractError(
+          `${path}[${index}].valueName must be a simple placeholder identifier`,
+        );
+      }
+    }
+  }
+}
+
 const ID_PATTERN = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
+const CLI_LONG_OPTION_PATTERN = /^--[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const CLI_HELP_VALUE_PATTERN = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const ACCESS_KIND_PATTERN =
   /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*(?::[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*)?$/;
 const SECRET_REFERENCE_PATTERN =

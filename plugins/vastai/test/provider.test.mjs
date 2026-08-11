@@ -767,6 +767,26 @@ test("marketplace feature exposes rental through the provider-scoped CLI seam", 
   const marketplace = plugin.features[0];
   const rent = marketplace.cli?.commands.find((command) => command.name === "rent");
   assert.ok(rent);
+  assert.deepEqual(rent.help?.arguments, [
+    {
+      name: "offer-id",
+      description: "Vast.ai marketplace offer ID",
+      required: true,
+    },
+  ]);
+  assert.deepEqual(
+    rent.help?.options?.map(({ name, required, repeatable }) => ({
+      name,
+      required,
+      repeatable: repeatable ?? false,
+    })),
+    [
+      { name: "--image", required: true, repeatable: false },
+      { name: "--disk", required: false, repeatable: false },
+      { name: "--runtype", required: false, repeatable: false },
+      { name: "--label", required: false, repeatable: false },
+    ],
+  );
 
   let output = "";
   const commandResult = await rent.run(
@@ -815,6 +835,17 @@ test("marketplace feature exposes search through the provider-scoped CLI seam", 
   const marketplace = plugin.features[0];
   const search = marketplace.cli?.commands.find((command) => command.name === "search");
   assert.ok(search);
+  assert.deepEqual(
+    search.help?.options?.map(({ name, valueName }) => ({ name, valueName })),
+    [
+      { name: "--gpu", valueName: "gpu-name" },
+      { name: "--min-gpus", valueName: "count" },
+      { name: "--max-hourly", valueName: "usd" },
+      { name: "--min-reliability", valueName: "ratio" },
+      { name: "--verified", valueName: undefined },
+      { name: "--limit", valueName: "count" },
+    ],
+  );
 
   let output = "";
   await search.run(

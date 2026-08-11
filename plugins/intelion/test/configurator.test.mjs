@@ -478,6 +478,28 @@ test("server configurator is usable through the provider-scoped CLI seam", async
     (command) => command.name === "validate",
   );
   assert.ok(validate);
+  assert.deepEqual(
+    validate.help?.options?.map(({ name, required, repeatable }) => ({
+      name,
+      required,
+      repeatable: repeatable ?? false,
+    })),
+    [
+      { name: "--name", required: true, repeatable: false },
+      { name: "--flavor", required: true, repeatable: false },
+      { name: "--disk", required: true, repeatable: false },
+      { name: "--os", required: true, repeatable: false },
+      { name: "--price-plan", required: false, repeatable: false },
+      { name: "--promocode", required: false, repeatable: false },
+      { name: "--queue", required: false, repeatable: false },
+      { name: "--addon", required: false, repeatable: true },
+      { name: "--ssh-key", required: false, repeatable: true },
+    ],
+  );
+  assert.equal(
+    feature.cli?.commands.every((command) => command.help !== undefined),
+    true,
+  );
 
   let output = "";
   await validate.run(

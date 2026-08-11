@@ -54,6 +54,25 @@ export default {
             name: "create",
             description: "Create a provider-owned resource",
             operation: "mutation",
+            help: {
+              arguments: [
+                {
+                  name: "resource-name",
+                  description: "Provider-owned resource name",
+                  required: true,
+                },
+              ],
+              options: [
+                {
+                  name: "--tag",
+                  valueName: "value",
+                  description: "Provider-owned tag",
+                  required: false,
+                  repeatable: true,
+                },
+              ],
+              examples: ["gpu-box --tag team --tag demo"],
+            },
             async run(_args, context) {
               created = true;
               context.write("created:created-1\n");
