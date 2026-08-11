@@ -41,29 +41,22 @@ export class JsonStateStore {
   ) {}
 
   async read(): Promise<EasyServerState> {
-    let text: string;
-
-    try {
-      text = await readFile(this.path, "utf8");
-    } catch (error) {
-      if (isErrno(error, "ENOENT")) {
-        return emptyState();
-      }
-
-      throw error;
+    const primary = await readStateFile(this.path);
+    if (primary.kind === "valid") {
+      return primary.state;
     }
 
-    let value: unknown;
-
-    try {
-      value = JSON.parse(text);
-    } catch (error) {
-      throw new Error(`Invalid EasyServer state file: ${this.path}`, {
-        cause: error,
-      });
+    const recoveryPath = `${this.path}.recovery`;
+    const recovery = await readStateFile(recoveryPath);
+    if (recovery.kind === "valid") {
+      return recovery.state;
     }
 
-    return parseState(value);
+    if (primary.kind === "missing" && recovery.kind === "missing") {
+      return emptyState();
+    }
+
+    throw stateRecoveryError(this.path, primary, recovery);
   }
 
   async update(
@@ -96,19 +89,24 @@ export class JsonStateStore {
 
   async #writeUnlocked(state: EasyServerState): Promise<void> {
     const parsed = parseState(state);
-    const directory = dirname(this.path);
-    const temporaryPath = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
+    await this.#writeFileAtomically(this.path, parsed);
+    await this.#writeFileAtomically(`${this.path}.recovery`, parsed);
+  }
+
+  async #writeFileAtomically(path: string, state: EasyServerState): Promise<void> {
+    const directory = dirname(path);
+    const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
     let file: Awaited<ReturnType<typeof open>> | undefined;
 
     await mkdir(directory, { recursive: true });
 
     try {
       file = await open(temporaryPath, "wx", 0o600);
-      await file.writeFile(`${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+      await file.writeFile(`${JSON.stringify(state, null, 2)}\n`, "utf8");
       await file.sync();
       await file.close();
       file = undefined;
-      await this.replace(temporaryPath, this.path);
+      await this.replace(temporaryPath, path);
     } finally {
       await file?.close().catch(() => undefined);
       await rm(temporaryPath, { force: true }).catch(() => undefined);
@@ -128,6 +126,65 @@ async function acquireStateLock(path: string): Promise<FilesystemLockLease> {
     }
     throw error;
   }
+}
+
+type StateFileRead =
+  | { readonly kind: "valid"; readonly state: EasyServerState }
+  | { readonly kind: "missing" }
+  | { readonly kind: "invalid"; readonly error: Error };
+
+async function readStateFile(path: string): Promise<StateFileRead> {
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) {
+      return { kind: "missing" };
+    }
+    throw error;
+  }
+
+  try {
+    return { kind: "valid", state: parseState(JSON.parse(text)) };
+  } catch (error) {
+    return {
+      kind: "invalid",
+      error: new Error(`Invalid EasyServer state file: ${path}`, {
+        cause: error,
+      }),
+    };
+  }
+}
+
+function stateRecoveryError(
+  path: string,
+  primary: StateFileRead,
+  recovery: StateFileRead,
+): Error {
+  const primaryDescription =
+    primary.kind === "missing"
+      ? `primary state is missing: ${path}`
+      : primary.kind === "invalid"
+        ? primary.error.message
+        : "primary state is valid";
+  const recoveryPath = `${path}.recovery`;
+  const recoveryDescription =
+    recovery.kind === "missing"
+      ? `recovery state is missing: ${recoveryPath}`
+      : recovery.kind === "invalid"
+        ? recovery.error.message
+        : "recovery state is valid";
+  const cause =
+    primary.kind === "invalid"
+      ? primary.error
+      : recovery.kind === "invalid"
+        ? recovery.error
+        : undefined;
+
+  return new Error(
+    `Unable to recover EasyServer state: ${primaryDescription}; ${recoveryDescription}. Restore a valid state.json or state.json.recovery file; EasyServer will not reset Local State automatically.`,
+    cause === undefined ? undefined : { cause },
+  );
 }
 
 function emptyState(): EasyServerState {

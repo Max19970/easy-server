@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,7 +43,10 @@ test("state survives a fresh store instance and atomic replacement", async () =>
       version: 1,
       plugins: [{ source: "fixture:second", enabled: false }],
     });
-    assert.deepEqual(await readdir(join(directory, "nested")), ["state.json"]);
+    assert.deepEqual(await readdir(join(directory, "nested")), [
+      "state.json",
+      "state.json.recovery",
+    ]);
   });
 });
 
@@ -82,7 +86,7 @@ test("concurrent state updates re-read under an exclusive lock instead of losing
       { source: "fixture:first", enabled: true },
       { source: "fixture:second", enabled: true },
     ]);
-    assert.deepEqual(await readdir(directory), ["state.json"]);
+    assert.deepEqual(await readdir(directory), ["state.json", "state.json.recovery"]);
   });
 });
 
@@ -218,8 +222,11 @@ test("provider credential configuration persists only opaque secret references",
     });
 
     const serialized = await readFile(path, "utf8");
+    const recovery = await readFile(`${path}.recovery`, "utf8");
     assert.match(serialized, /secret:550e8400-e29b-41d4-a716-446655440000/);
+    assert.match(recovery, /secret:550e8400-e29b-41d4-a716-446655440000/);
     assert.doesNotMatch(serialized, /fixture-secret-value/);
+    assert.doesNotMatch(recovery, /fixture-secret-value/);
   });
 });
 
@@ -303,7 +310,7 @@ test("replacement failure leaves the previous state intact", async () => {
     );
 
     assert.deepEqual(await new JsonStateStore(path).read(), goodState);
-    assert.deepEqual(await readdir(directory), ["state.json"]);
+    assert.deepEqual(await readdir(directory), ["state.json", "state.json.recovery"]);
   });
 });
 
@@ -316,5 +323,110 @@ test("corrupt primary state is reported instead of silently reset", async () => 
       new JsonStateStore(path).read(),
       /Invalid EasyServer state file/,
     );
+  });
+});
+
+test("corrupt primary recovers the last-known-good state in a fresh process", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    const secretRef = parseSecretReference(
+      "secret:550e8400-e29b-41d4-a716-446655440000",
+    );
+    const expected = {
+      version: 1,
+      plugins: [
+        {
+          source: "fixture:provider",
+          enabled: true,
+          credentials: [{ name: "apiToken", secretRef }],
+        },
+      ],
+      instances: [
+        {
+          id: "instance:f3e4bc3a-b59c-43db-b218-6bc77bb06acd",
+          providerId: "fixture",
+          providerExternalId: "remote-recovery",
+        },
+      ],
+    };
+    await new JsonStateStore(path).write(expected);
+    await writeFile(path, "{corrupt primary", "utf8");
+
+    const moduleUrl = new URL("../dist/state-store.js", import.meta.url).href;
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import { JsonStateStore } from ${JSON.stringify(moduleUrl)}; process.stdout.write(JSON.stringify(await new JsonStateStore(${JSON.stringify(path)}).read()));`,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(child.status, 0, child.stderr);
+    assert.deepEqual(JSON.parse(child.stdout), expected);
+  });
+});
+
+test("missing primary after a committed write recovers instead of starting empty", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    const expected = {
+      version: 1,
+      plugins: [{ source: "fixture:configured", enabled: true }],
+    };
+    await new JsonStateStore(path).write(expected);
+    await rm(path, { force: true });
+
+    assert.deepEqual(await new JsonStateStore(path).read(), expected);
+  });
+});
+
+test("invalid primary and invalid recovery fail closed", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    await new JsonStateStore(path).write({
+      version: 1,
+      plugins: [{ source: "fixture:configured", enabled: true }],
+    });
+    await writeFile(path, "{corrupt primary", "utf8");
+    await writeFile(`${path}.recovery`, "{corrupt recovery", "utf8");
+
+    await assert.rejects(
+      new JsonStateStore(path).read(),
+      /Unable to recover EasyServer state/,
+    );
+  });
+});
+
+test("recovery advances only after primary commit and remains usable if recovery update fails", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    const firstState = {
+      version: 1,
+      plugins: [{ source: "fixture:first", enabled: true }],
+    };
+    const secondState = {
+      version: 1,
+      plugins: [{ source: "fixture:second", enabled: true }],
+    };
+    await new JsonStateStore(path).write(firstState);
+
+    const failing = new JsonStateStore(path, async (from, to) => {
+      if (to === `${path}.recovery`) {
+        throw new Error("fixture recovery replacement failure");
+      }
+      const { rename } = await import("node:fs/promises");
+      await rename(from, to);
+    });
+    await assert.rejects(
+      failing.write(secondState),
+      /fixture recovery replacement failure/,
+    );
+
+    assert.deepEqual(await new JsonStateStore(path).read(), secondState);
+    assert.deepEqual(JSON.parse(await readFile(`${path}.recovery`, "utf8")), firstState);
+
+    await writeFile(path, "{corrupt primary", "utf8");
+    assert.deepEqual(await new JsonStateStore(path).read(), firstState);
   });
 });

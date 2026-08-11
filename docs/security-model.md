@@ -121,7 +121,7 @@ The remote target host/port is chosen by the user and is reached through the sel
 
 ## Local State
 
-Local State persists configuration and provider/resource identities, not raw credentials. Writes use a temporary file, explicit file creation, fsync and atomic replacement; concurrent writers coordinate through an exclusive lock. Corrupt state is reported rather than silently discarded.
+Local State persists configuration and provider/resource identities, not raw credentials. Writes use temporary files, explicit file creation, fsync and atomic replacement; concurrent writers coordinate through an ownership-generation lock. After the primary state commits, EasyServer atomically advances a validated `state.json.recovery` last-known-good mirror. A missing or corrupt primary can be read from that recovery generation without rotating canonical instance identities or Secret References; if prior state is evident but neither primary nor recovery is valid, EasyServer fails closed instead of silently resetting to an empty installation.
 
 Local State is not an encrypted database. Treat provider/resource names, IDs, plugin package specifiers and other non-secret operational metadata as visible to the current OS user. Environment overrides that relocate state are responsible for choosing an appropriate local path.
 
