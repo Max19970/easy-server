@@ -126,11 +126,17 @@ easyserver instances destroy <instance-id>
 
 An unavailable action is rejected rather than guessed from generic state. Reversible power actions remain governed by the Provider snapshot, but `instances destroy` additionally requires `management=managed`; a discovered resource must be explicitly adopted before EasyServer will dispatch that destructive mutation.
 
-Risky mutations have a host-owned safety gate. In an interactive terminal EasyServer shows the target/provider identity and consequence and requires typing `yes`. Non-interactive automation never waits for input: it must opt in explicitly with `--yes`, for example:
+Risky mutations have a host-owned safety gate. In an interactive terminal EasyServer shows the target/provider identity and consequence and requires typing `yes`. Non-interactive automation never waits for input: it must opt in explicitly with `--yes`.
+
+`instances destroy` also coordinates with EasyServer-owned daemon connections. If the target has daemon Connection Sessions or enabled persisted Endpoint intents, destroy refuses by default and reports the affected session IDs / intent names. To explicitly close those local connections first and only then dispatch the provider destroy:
 
 ```sh
-easyserver instances destroy <instance-id> --yes
+easyserver instances destroy <instance-id> --close-sessions --yes
 ```
+
+During coordinated destroy EasyServer drains that canonical instance so no new daemon session or intent can be published between the check and the remote mutation. Enabled Endpoint intents are disabled first so they cannot restore against a deleted resource, then daemon sessions are closed, and only after successful local teardown is the provider `destroy` dispatched. If any local cleanup fails, remote destroy is **not** dispatched. Closing these local connections never destroys the provider resource by itself; the destructive provider operation remains the explicit `instances destroy` step.
+
+If the daemon descriptor is stale/unreachable, destroy fails closed because EasyServer cannot safely prove which daemon connections exist. Foreground `easyserver connect` processes are intentionally not daemon-owned and cannot be reliably discovered cross-process; close any foreground connection manually before destroying its instance.
 
 Also, `stopped` does **not** universally mean `not billed`; provider billing/storage/reservation semantics remain provider-specific. When a rented resource is no longer needed, follow the provider guide and verify the destructive cleanup required by that provider.
 
