@@ -110,8 +110,14 @@ interface PendingIdempotentSession {
   readonly result: Promise<LivePersistentConnectionSession | undefined>;
 }
 
+export interface DaemonShutdownSummary {
+  readonly liveSessions: number;
+  readonly activeEndpointIntents: number;
+}
+
 export interface LocalConnectionDaemon {
   readonly address: LocalDaemonAddress;
+  readonly shutdownRequested: Promise<DaemonShutdownSummary>;
   close(): Promise<void>;
 }
 
@@ -211,6 +217,11 @@ export async function startLocalConnectionDaemon(options: {
   const sessionIdsByIdempotencyKey = new Map<string, string>();
   const pendingIdempotentSessions = new Map<string, PendingIdempotentSession>();
   const pendingSetups = new Set<AbortController>();
+  let resolveShutdownRequested!: (summary: DaemonShutdownSummary) => void;
+  const shutdownRequested = new Promise<DaemonShutdownSummary>((resolve) => {
+    resolveShutdownRequested = resolve;
+  });
+  let shutdownSignalled = false;
   let closing = false;
   let closePromise: Promise<void> | undefined;
   let failedSequence = 0;
@@ -374,6 +385,24 @@ export async function startLocalConnectionDaemon(options: {
 
       if (request.method === "GET" && request.url === "/health") {
         sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (request.method === "POST" && request.url === "/shutdown") {
+        const summary: DaemonShutdownSummary = {
+          liveSessions: [...sessions.values()].filter(
+            ({ descriptor }) => descriptor.state === "live",
+          ).length,
+          activeEndpointIntents:
+            intentService?.list().filter(
+              (intent) => intent.state === "live" || intent.state === "starting",
+            ).length ?? 0,
+        };
+        if (!shutdownSignalled) {
+          shutdownSignalled = true;
+          response.once("finish", () => resolveShutdownRequested(summary));
+        }
+        sendJson(response, 200, summary);
         return;
       }
 
@@ -562,6 +591,7 @@ export async function startLocalConnectionDaemon(options: {
 
   return {
     address: { host: "127.0.0.1", port: address.port },
+    shutdownRequested,
     close() {
       closePromise ??= (async () => {
         closing = true;
@@ -637,6 +667,10 @@ export class LocalDaemonClient {
 
   async closeSession(id: string): Promise<void> {
     await this.#request("DELETE", `/sessions/${encodeURIComponent(id)}`);
+  }
+
+  async requestShutdown(): Promise<DaemonShutdownSummary> {
+    return this.#request("POST", "/shutdown");
   }
 
   async listEndpointIntents(): Promise<readonly EndpointIntentStatus[]> {

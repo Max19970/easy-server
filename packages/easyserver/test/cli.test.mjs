@@ -201,14 +201,43 @@ function runWithStateEnv(stateFile, extraEnv, ...args) {
 }
 
 function runWithDaemon(stateFile, daemonFile, ...args) {
+  return runWithDaemonEnv(stateFile, daemonFile, {}, ...args);
+}
+
+function runWithDaemonEnv(stateFile, daemonFile, extraEnv, ...args) {
   return spawnSync(process.execPath, [cli, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
+      ...extraEnv,
       EASYSERVER_STATE_FILE: stateFile,
       EASYSERVER_DAEMON_FILE: daemonFile,
     },
   });
+}
+
+function startWithDaemon(stateFile, daemonFile, extraEnv, ...args) {
+  const child = spawn(process.execPath, [cli, ...args], {
+    env: {
+      ...process.env,
+      ...extraEnv,
+      EASYSERVER_STATE_FILE: stateFile,
+      EASYSERVER_DAEMON_FILE: daemonFile,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => (stdout += chunk));
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  return { child, output: () => ({ stdout, stderr }) };
+}
+
+async function finishCommand(command) {
+  const [code, signal] = await once(command.child, "exit");
+  return { status: code, signal, ...command.output() };
 }
 
 function startDaemon(stateFile, daemonFile) {
@@ -1403,6 +1432,202 @@ test("provider feature outcome-unknown reconciles inventory without retrying the
   assert.equal(reconciledState.instances.length, 1);
   assert.equal(reconciledState.instances[0].providerId, "provider-cli");
   assert.equal(reconciledState.instances[0].providerExternalId, "created-1");
+});
+
+test("concurrent managed daemon starts cannot delete a fresh successor descriptor", async () => {
+  const stateFile = join(testDirectory, "managed-daemon-concurrent-state.json");
+  const daemonFile = join(testDirectory, "managed-daemon-concurrent-control.json");
+  await writeFile(
+    stateFile,
+    `${JSON.stringify({ version: 1, plugins: [] })}\n`,
+    "utf8",
+  );
+  const stalePort = await findFreePort();
+  await writeFile(
+    daemonFile,
+    `${JSON.stringify({
+      version: 1,
+      address: { host: "127.0.0.1", port: stalePort },
+      authToken: "stale-concurrent-token",
+    })}\n`,
+    "utf8",
+  );
+
+  try {
+    const first = startWithDaemon(stateFile, daemonFile, {}, "daemon", "start");
+    const second = startWithDaemon(stateFile, daemonFile, {}, "daemon", "start");
+    const [firstResult, secondResult] = await Promise.all([
+      finishCommand(first),
+      finishCommand(second),
+    ]);
+
+    assert.equal(firstResult.status, 0, firstResult.stderr);
+    assert.equal(secondResult.status, 0, secondResult.stderr);
+    const running = runWithDaemon(stateFile, daemonFile, "daemon", "status");
+    assert.equal(running.status, 0, running.stderr);
+    assert.match(running.stdout, /^running endpoint=127\.0\.0\.1:\d+$/m);
+
+    const stop = runWithDaemon(stateFile, daemonFile, "daemon", "stop");
+    assert.equal(stop.status, 0, stop.stderr);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const stayedStopped = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "daemon",
+      "status",
+    );
+    assert.equal(stayedStopped.status, 1, stayedStopped.stderr);
+    assert.equal(stayedStopped.stdout, "stopped\n");
+  } finally {
+    runWithDaemon(stateFile, daemonFile, "daemon", "stop");
+  }
+});
+
+test("managed daemon startup timeout terminates its detached child", async () => {
+  const stateFile = join(testDirectory, "managed-daemon-timeout-state.json");
+  const daemonFile = join(testDirectory, "managed-daemon-timeout-control.json");
+  const pluginPath = join(testDirectory, "managed-daemon-timeout-plugin.mjs");
+  const startedPath = join(testDirectory, "managed-daemon-timeout-started.txt");
+  const releasePath = join(testDirectory, "managed-daemon-timeout-release.txt");
+  await writeDelayedPlugin(
+    pluginPath,
+    startedPath,
+    releasePath,
+    "managed-daemon-timeout",
+  );
+  await writeFile(
+    stateFile,
+    `${JSON.stringify({
+      version: 1,
+      plugins: [{ source: pluginPath, enabled: true }],
+    })}\n`,
+    "utf8",
+  );
+
+  try {
+    const start = runWithDaemonEnv(
+      stateFile,
+      daemonFile,
+      { EASYSERVER_DAEMON_START_TIMEOUT_MS: "200" },
+      "daemon",
+      "start",
+    );
+    assert.equal(start.status, 1);
+    assert.match(start.stderr, /Timed out waiting for EasyServer daemon startup/);
+    await waitForFile(startedPath);
+
+    await writeFile(releasePath, "release", "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const status = runWithDaemon(stateFile, daemonFile, "daemon", "status");
+    assert.equal(status.status, 1, status.stderr);
+    assert.equal(status.stdout, "stopped\n");
+  } finally {
+    await writeFile(releasePath, "release", "utf8").catch(() => undefined);
+    runWithDaemon(stateFile, daemonFile, "daemon", "stop");
+  }
+});
+
+test("managed daemon lifecycle recovers stale descriptors and gracefully closes live sessions", async () => {
+  const stateFile = join(testDirectory, "managed-daemon-state.json");
+  const daemonFile = join(testDirectory, "managed-daemon-control.json");
+  const instanceId = "instance:550e8400-e29b-41d4-a716-446655440000";
+  await writeFile(
+    stateFile,
+    `${JSON.stringify({
+      version: 1,
+      plugins: [{ source: daemonPlugin, enabled: true }],
+      instances: [
+        {
+          id: instanceId,
+          providerId: "daemon-fixture",
+          providerExternalId: "remote-1",
+        },
+      ],
+    })}\n`,
+    "utf8",
+  );
+
+  const stalePort = await findFreePort();
+  await writeFile(
+    daemonFile,
+    `${JSON.stringify({
+      version: 1,
+      address: { host: "127.0.0.1", port: stalePort },
+      authToken: "stale-token",
+    })}\n`,
+    "utf8",
+  );
+
+  const stale = runWithDaemon(stateFile, daemonFile, "daemon", "status");
+  assert.equal(stale.status, 2, stale.stderr);
+  assert.match(stale.stdout, /^stale reason=authenticated health check failed$/m);
+
+  const echo = createServer((socket) => socket.pipe(socket));
+  echo.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+  await once(echo, "listening");
+  const echoAddress = echo.address();
+  assert.ok(echoAddress && typeof echoAddress !== "string");
+
+  try {
+    const start = runWithDaemon(stateFile, daemonFile, "daemon", "start");
+    assert.equal(start.status, 0, start.stderr);
+    assert.match(start.stdout, /EasyServer daemon started on 127\.0\.0\.1:\d+/);
+
+    const running = runWithDaemon(stateFile, daemonFile, "daemon", "status");
+    assert.equal(running.status, 0, running.stderr);
+    assert.match(running.stdout, /^running endpoint=127\.0\.0\.1:\d+$/m);
+
+    const repeatedStart = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "daemon",
+      "start",
+    );
+    assert.equal(repeatedStart.status, 0, repeatedStart.stderr);
+    assert.match(repeatedStart.stdout, /already running/);
+
+    const create = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "create",
+      instanceId,
+      "--port",
+      String(echoAddress.port),
+    );
+    assert.equal(create.status, 0, create.stderr);
+    const endpointMatch = create.stdout.match(/endpoint=(127\.0\.0\.1):(\d+)/);
+    assert.ok(endpointMatch, create.stdout);
+    const endpoint = { host: endpointMatch[1], port: Number(endpointMatch[2]) };
+    assert.equal(await roundTrip(endpoint, "managed-daemon"), "managed-daemon");
+
+    const stop = runWithDaemon(stateFile, daemonFile, "daemon", "stop");
+    assert.equal(stop.status, 0, stop.stderr);
+    assert.match(
+      stop.stdout,
+      /Stopping EasyServer daemon; closing live-sessions=1 active-endpoint-intents=0\./,
+    );
+    assert.match(stop.stdout, /EasyServer daemon stopped\./);
+    await waitForConnectionRefused(endpoint);
+
+    const stopped = runWithDaemon(stateFile, daemonFile, "daemon", "status");
+    assert.equal(stopped.status, 1, stopped.stderr);
+    assert.equal(stopped.stdout, "stopped\n");
+
+    const repeatedStop = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "daemon",
+      "stop",
+    );
+    assert.equal(repeatedStop.status, 0, repeatedStop.stderr);
+    assert.equal(repeatedStop.stdout, "EasyServer daemon already stopped.\n");
+  } finally {
+    runWithDaemon(stateFile, daemonFile, "daemon", "stop");
+    await new Promise((resolve, reject) =>
+      echo.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
 });
 
 test("daemon-owned sessions survive the creating CLI and restart without phantom sessions", async () => {

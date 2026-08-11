@@ -1114,6 +1114,33 @@ test("daemon close waits for late intent realization cleanup", async () => {
   }
 });
 
+test("authenticated daemon shutdown reports affected live sessions to its owner", async () => {
+  const gateway = await createFakeGateway();
+  const daemon = await startLocalConnectionDaemon({
+    gateway,
+    authToken: "fixture-token",
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    await client.createSession({
+      instanceId: "instance:fixture",
+      remotePort: 8188,
+    });
+    const summary = await client.requestShutdown();
+    assert.deepEqual(summary, {
+      liveSessions: 1,
+      activeEndpointIntents: 0,
+    });
+    assert.deepEqual(await daemon.shutdownRequested, summary);
+
+    await daemon.close();
+    assert.equal(gateway.sessions.size, 0);
+  } finally {
+    await daemon.close().catch(() => undefined);
+  }
+});
+
 test("authenticated daemon control owns sessions beyond one client call", async () => {
   const gateway = await createFakeGateway();
   const daemon = await startLocalConnectionDaemon({
