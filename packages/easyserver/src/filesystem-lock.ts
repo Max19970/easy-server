@@ -19,6 +19,8 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_STALE_AFTER_MS = 5_000;
 const DEFAULT_HEARTBEAT_MS = 1_000;
 const DEFAULT_RETRY_MS = 25;
+const WINDOWS_EPERM_RETRY_LIMIT = 3;
+const WINDOWS_EPERM_MIN_RETRY_MS = 5;
 
 export class FilesystemLockTimeoutError extends Error {}
 export class FilesystemLockCancelledError extends Error {}
@@ -74,7 +76,7 @@ export async function acquireFilesystemLock(
     const ownerPath = join(lockPath, ownerName);
 
     try {
-      await retryWindowsEpermOnce(
+      await retryWindowsEperm(
         () => mkdir(lockPath, { mode: 0o700 }),
         retryMs,
       );
@@ -153,7 +155,7 @@ async function recoverStaleLock(
 ): Promise<void> {
   let observation: Awaited<ReturnType<typeof observeLockPath>>;
   try {
-    observation = await retryWindowsEpermOnce(
+    observation = await retryWindowsEperm(
       () => observeLockPath(lockPath),
       retryMs,
     );
@@ -181,7 +183,7 @@ async function recoverStaleLock(
 
   for (const entry of entries) {
     if (entry.endsWith(".owner")) {
-      await tryReclaimOwner(lockPath, entry, staleAfterMs, hooks);
+      await tryReclaimOwner(lockPath, entry, staleAfterMs, retryMs, hooks);
       continue;
     }
     if (entry.includes(".owner.reclaim.")) {
@@ -194,6 +196,7 @@ async function tryReclaimOwner(
   lockPath: string,
   ownerName: string,
   staleAfterMs: number,
+  retryMs: number,
   hooks: FilesystemLockHooks | undefined,
 ): Promise<void> {
   const ownerPath = join(lockPath, ownerName);
@@ -213,13 +216,36 @@ async function tryReclaimOwner(
   await hooks?.staleOwnerObserved?.(ownerPath);
 
   const reclaimPath = join(lockPath, `${ownerName}.reclaim.${randomUUID()}`);
-  try {
-    await rename(ownerPath, reclaimPath);
-  } catch (error) {
-    if (isErrno(error, "ENOENT")) {
-      return;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(ownerPath, reclaimPath);
+      break;
+    } catch (error) {
+      if (isErrno(error, "ENOENT")) {
+        return;
+      }
+      if (
+        process.platform !== "win32" ||
+        !isErrno(error, "EPERM") ||
+        attempt >= WINDOWS_EPERM_RETRY_LIMIT
+      ) {
+        throw error;
+      }
+
+      await delay(Math.max(retryMs, WINDOWS_EPERM_MIN_RETRY_MS));
+      let refreshed: Awaited<ReturnType<typeof stat>>;
+      try {
+        refreshed = await stat(ownerPath);
+      } catch (refreshError) {
+        if (isErrno(refreshError, "ENOENT")) {
+          return;
+        }
+        throw refreshError;
+      }
+      if (Date.now() - refreshed.mtimeMs <= staleAfterMs) {
+        return;
+      }
     }
-    throw error;
   }
 
   let claimed: Awaited<ReturnType<typeof stat>>;
@@ -325,7 +351,7 @@ async function releaseGeneration(
 
     let entries: string[];
     try {
-      entries = await retryWindowsEpermOnce(() => readdir(lockPath), retryMs);
+      entries = await retryWindowsEperm(() => readdir(lockPath), retryMs);
     } catch (error) {
       if (isErrno(error, "ENOENT")) {
         return;
@@ -353,18 +379,23 @@ async function observeLockPath(lockPath: string): Promise<
   return { metadata, entries: await readdir(lockPath) };
 }
 
-async function retryWindowsEpermOnce<T>(
+async function retryWindowsEperm<T>(
   operation: () => Promise<T>,
   retryMs: number,
 ): Promise<T> {
-  try {
-    return await operation();
-  } catch (error) {
-    if (process.platform !== "win32" || !isErrno(error, "EPERM")) {
-      throw error;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (
+        process.platform !== "win32" ||
+        !isErrno(error, "EPERM") ||
+        attempt >= WINDOWS_EPERM_RETRY_LIMIT
+      ) {
+        throw error;
+      }
+      await delay(Math.max(retryMs, WINDOWS_EPERM_MIN_RETRY_MS));
     }
-    await delay(retryMs);
-    return operation();
   }
 }
 

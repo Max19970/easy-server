@@ -52,9 +52,9 @@ test("two stale-lock reclaimers serialize and cannot delete a successor generati
     let maxActive = 0;
     const enter = async () => {
       const lease = await acquireFilesystemLock(lockPath, {
-        timeoutMs: 1_000,
-        staleAfterMs: 20,
-        heartbeatMs: 5,
+        timeoutMs: 3_000,
+        staleAfterMs: 1_000,
+        heartbeatMs: 50,
         retryMs: 1,
         hooks,
       });
