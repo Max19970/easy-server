@@ -126,6 +126,12 @@ easyserver instances destroy <instance-id>
 
 An unavailable action is rejected rather than guessed from generic state. Reversible power actions remain governed by the Provider snapshot, but `instances destroy` additionally requires `management=managed`; a discovered resource must be explicitly adopted before EasyServer will dispatch that destructive mutation.
 
+Risky mutations have a host-owned safety gate. In an interactive terminal EasyServer shows the target/provider identity and consequence and requires typing `yes`. Non-interactive automation never waits for input: it must opt in explicitly with `--yes`, for example:
+
+```sh
+easyserver instances destroy <instance-id> --yes
+```
+
 Also, `stopped` does **not** universally mean `not billed`; provider billing/storage/reservation semantics remain provider-specific. When a rented resource is no longer needed, follow the provider guide and verify the destructive cleanup required by that provider.
 
 ## Expose a remote TCP service locally

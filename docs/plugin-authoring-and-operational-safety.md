@@ -202,6 +202,7 @@ const feature = {
         name: "rent",
         description: "Rent one provider offer",
         operation: "mutation",
+        risks: ["billable"],
         help: {
           arguments: [
             {
@@ -240,6 +241,8 @@ easyserver provider <provider-id> <feature-id> <command> [args...]
 ```
 
 The CLI command must declare `operation: "read" | "mutation"` so the host can apply correct cancellation and uncertainty semantics.
+
+Risky mutations may additionally declare host-owned `risks: ["billable" | "destructive", ...]`. Do this only when explicit user consent is warranted; ordinary reversible mutations should not gain confirmation prompts merely because they mutate state. EasyServer owns the confirmation policy and non-interactive `--yes` opt-in, while the plugin owns only the truthful risk classification. Risk metadata is valid only on mutation commands.
 
 Commands may also declare lightweight `help` metadata for positional arguments, options and examples. This metadata is descriptive only: Provider Plugins still own argument parsing and semantics, and EasyServer does not reinterpret it as a universal provisioning schema. When metadata exists, users can run:
 

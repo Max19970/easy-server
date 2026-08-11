@@ -102,7 +102,13 @@ easyserver provider vastai marketplace rent <offer-id> \
   --label easyserver-demo
 ```
 
-The rental command is a mutation. If transport/cancellation happens after the request may have been dispatched, EasyServer can report `outcome-unknown` rather than pretending the rental definitely failed. In that case **do not blindly retry**; refresh inventory first:
+The rental command is billable and therefore uses EasyServer's host-owned safety gate. In an interactive terminal confirm the displayed provider/consequence prompt. Non-interactive automation must put `--yes` immediately after `rent`, before the provider-owned arguments:
+
+```sh
+easyserver provider vastai marketplace rent --yes <offer-id> --image <image>
+```
+
+If transport/cancellation happens after the request may have been dispatched, EasyServer can report `outcome-unknown` rather than pretending the rental definitely failed. In that case **do not blindly retry**; refresh inventory first:
 
 ```sh
 easyserver instances list

@@ -133,7 +133,17 @@ easyserver provider intelion server-configurator create \
   --ssh-key <ssh-key-id>
 ```
 
-The create command is a mutation. If the request may have reached Intelion but the final response becomes uncertain, EasyServer reports `outcome-unknown`. Do not blindly issue another create; reconcile first:
+The create command is billable and therefore uses EasyServer's host-owned safety gate. In an interactive terminal confirm the displayed provider/consequence prompt. Non-interactive automation must put `--yes` immediately after `create`, before the provider-owned configuration arguments:
+
+```sh
+easyserver provider intelion server-configurator create --yes \
+  --name easyserver-demo \
+  --flavor <flavor-id> \
+  --disk 30 \
+  --os <os-image-id>
+```
+
+If the request may have reached Intelion but the final response becomes uncertain, EasyServer reports `outcome-unknown`. Do not blindly issue another create; reconcile first:
 
 ```sh
 easyserver instances list
