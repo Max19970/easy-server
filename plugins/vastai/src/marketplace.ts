@@ -134,7 +134,10 @@ class MarketplaceFeature implements VastMarketplaceFeature {
   ): Promise<ProviderCliCommandResult> {
     const rental = await this.rentOffer(parseRentalArgs(args), context);
     context.write(`${JSON.stringify(rental)}\n`);
-    return { refreshProviderInventory: true };
+    return {
+      refreshProviderInventory: true,
+      affectedProviderExternalIds: [rental.providerExternalId],
+    };
   }
 }
 

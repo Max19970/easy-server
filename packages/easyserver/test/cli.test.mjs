@@ -927,9 +927,15 @@ test("mounts provider feature commands and reconciles requested inventory change
     "create",
   );
   assert.equal(create.status, 0);
-  assert.equal(create.stdout, "created:created-1\n");
+  const createLines = create.stdout.trim().split("\n");
+  assert.equal(createLines[0], "created:created-1");
+  const canonical = createLines[1].match(
+    /^EasyServer instance (instance:[0-9a-f-]+) provider=provider-cli external=created-1$/,
+  );
+  assert.ok(canonical);
   const reconciledState = JSON.parse(await readFile(stateFile, "utf8"));
   assert.equal(reconciledState.instances.length, 1);
+  assert.equal(reconciledState.instances[0].id, canonical[1]);
   assert.equal(reconciledState.instances[0].providerId, "provider-cli");
   assert.equal(reconciledState.instances[0].providerExternalId, "created-1");
 
@@ -946,6 +952,118 @@ test("mounts provider feature commands and reconciles requested inventory change
   );
   assert.equal(removed.status, 1);
   assert.match(removed.stderr, /Provider Feature not found/);
+});
+
+test("confirmed provider mutation stays successful when handoff refresh fails and later observation does not redispatch", async () => {
+  const stateFile = join(testDirectory, "provider-cli-handoff-failure-state.json");
+  const pluginPath = join(testDirectory, "provider-cli-handoff-failure-plugin.mjs");
+  const mutationCountPath = join(testDirectory, "provider-cli-handoff-mutation-count.txt");
+  const failedRefreshPath = join(testDirectory, "provider-cli-handoff-refresh-failed.txt");
+  await writeFile(
+    pluginPath,
+    `import { existsSync, readFileSync, writeFileSync } from "node:fs";
+
+const mutationCountPath = ${JSON.stringify(mutationCountPath)};
+const failedRefreshPath = ${JSON.stringify(failedRefreshPath)};
+
+function snapshot() {
+  return {
+    providerExternalId: "created-1",
+    state: "running",
+    rawState: "READY",
+    availableActions: [],
+  };
+}
+
+export default {
+  manifest: {
+    id: "fixture.handoff-failure",
+    displayName: "Handoff Failure Fixture",
+    version: "1.0.0",
+    compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+    provider: {
+      id: "handoff-failure",
+      displayName: "Handoff Failure Provider",
+      capabilities: [],
+    },
+  },
+  provider: {
+    providerId: "handoff-failure",
+    async listInstances() {
+      if (!existsSync(mutationCountPath)) {
+        return [];
+      }
+      if (!existsSync(failedRefreshPath)) {
+        writeFileSync(failedRefreshPath, "failed", "utf8");
+        throw new Error("fixture refresh failure");
+      }
+      return [snapshot()];
+    },
+    async getInstance(providerExternalId) {
+      return existsSync(mutationCountPath) && providerExternalId === "created-1"
+        ? snapshot()
+        : undefined;
+    },
+  },
+  features: [{
+    id: "marketplace",
+    displayName: "Marketplace",
+    cli: {
+      commands: [{
+        name: "create",
+        description: "Create once",
+        operation: "mutation",
+        async run(_args, context) {
+          context.markMutationDispatched();
+          const previous = existsSync(mutationCountPath)
+            ? Number(readFileSync(mutationCountPath, "utf8"))
+            : 0;
+          writeFileSync(mutationCountPath, String(previous + 1), "utf8");
+          context.write("created:created-1\\n");
+          return {
+            refreshProviderInventory: true,
+            affectedProviderExternalIds: ["created-1"],
+          };
+        },
+      }],
+    },
+  }],
+};
+`,
+    "utf8",
+  );
+
+  assert.equal(
+    runWithState(stateFile, "plugins", "add", pluginPath).status,
+    0,
+  );
+
+  const create = runWithState(
+    stateFile,
+    "provider",
+    "handoff-failure",
+    "marketplace",
+    "create",
+  );
+
+  assert.equal(create.status, 0, create.stderr);
+  assert.equal(create.stdout, "created:created-1\n");
+  assert.match(create.stderr, /Mutation succeeded/);
+  assert.match(create.stderr, /follow-up provider inventory refresh failed/);
+  assert.match(create.stderr, /Do not repeat handoff-failure\/marketplace\/create/);
+  assert.match(create.stderr, /easyserver instances list/);
+  assert.doesNotMatch(create.stderr, /outcome-unknown/);
+  assert.equal(await readFile(mutationCountPath, "utf8"), "1");
+  const afterFailedHandoff = JSON.parse(await readFile(stateFile, "utf8"));
+  assert.equal(afterFailedHandoff.instances?.length ?? 0, 0);
+
+  const observed = runWithState(stateFile, "instances", "list");
+  assert.equal(observed.status, 0, observed.stderr);
+  assert.match(
+    observed.stdout,
+    /^instance:[0-9a-f-]+ provider=handoff-failure external=created-1 freshness=fresh state=running actions=-/m,
+  );
+  assert.equal(await readFile(mutationCountPath, "utf8"), "1");
 });
 
 test("provider feature outcome-unknown reconciles inventory without retrying the mutation", async () => {

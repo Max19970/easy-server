@@ -343,7 +343,10 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
   ): Promise<ProviderCliCommandResult> {
     const result = await this.createServer(parseValidateArgs(args), context);
     context.write(`${JSON.stringify(result)}\n`);
-    return { refreshProviderInventory: true };
+    return {
+      refreshProviderInventory: true,
+      affectedProviderExternalIds: [result.providerExternalId],
+    };
   }
 }
 

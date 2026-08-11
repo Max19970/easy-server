@@ -177,5 +177,8 @@ test("server creation CLI requests provider inventory reconciliation", async () 
   );
 
   assert.equal(output, '{"providerExternalId":"502"}\n');
-  assert.deepEqual(result, { refreshProviderInventory: true });
+  assert.deepEqual(result, {
+    refreshProviderInventory: true,
+    affectedProviderExternalIds: ["502"],
+  });
 });

@@ -57,7 +57,10 @@ export default {
             async run(_args, context) {
               created = true;
               context.write("created:created-1\n");
-              return { refreshProviderInventory: true };
+              return {
+                refreshProviderInventory: true,
+                affectedProviderExternalIds: ["created-1"],
+              };
             },
           },
           {

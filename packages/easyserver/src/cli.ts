@@ -19,7 +19,10 @@ import {
   ComputeManager,
   type InventoryInstance,
 } from "./compute-manager.js";
-import { HostOperationRunner } from "./host-operation.js";
+import {
+  ProviderCommandRunner,
+  type ProviderCommandExecutionResult,
+} from "./provider-command-runner.js";
 import { ProviderFeatureHost } from "./provider-feature-host.js";
 import {
   formatPluginStatuses,
@@ -493,42 +496,27 @@ async function runProvider(args: readonly string[]): Promise<void> {
     process.once("SIGINT", cancel);
     process.once("SIGTERM", cancel);
     try {
-      const result = await new HostOperationRunner().run(
-        command.operation,
-        `Provider Feature ${providerId}/${featureId}/${commandName}`,
-        { signal: controller.signal },
-        (operationContext) =>
-          command.run(commandArgs, {
-            signal: operationContext.signal,
-            resolveCredential: (name) =>
-              admission.resolveCredential(name, operationContext.signal),
-            markMutationDispatched: operationContext.markMutationDispatched,
-            write(text) {
-              process.stdout.write(text);
-            },
-            writeError(text) {
-              process.stderr.write(text);
-            },
-          }),
+      const execution = await new ProviderCommandRunner().run({
+        providerId,
+        featureId,
+        command,
+        args: commandArgs,
+        admission,
+        inventory: new ComputeManager(registry, store),
+        context: { signal: controller.signal },
+        write(text) {
+          process.stdout.write(text);
+        },
+        writeError(text) {
+          process.stderr.write(text);
+        },
+      });
+      reportProviderCommandHandoff(
+        providerId,
+        featureId,
+        commandName,
+        execution,
       );
-      if (result?.refreshProviderInventory) {
-        await new ComputeManager(registry, store).refreshProvider(providerId, {
-          signal: new AbortController().signal,
-        });
-      }
-    } catch (error) {
-      if (
-        command.operation === "mutation" &&
-        isNormalizedError(error) &&
-        error.code === "outcome-unknown"
-      ) {
-        await new ComputeManager(registry, store)
-          .refreshProvider(providerId, {
-            signal: new AbortController().signal,
-          })
-          .catch(() => undefined);
-      }
-      throw error;
     } finally {
       process.removeListener("SIGINT", cancel);
       process.removeListener("SIGTERM", cancel);
@@ -889,6 +877,56 @@ function formatProviderCommands(
         `${escapeTerminalText(command.name).padEnd(12)} ${escapeTerminalText(command.description)}`,
     )
     .join("\n")}\n`;
+}
+
+function reportProviderCommandHandoff(
+  providerId: string,
+  featureId: string,
+  commandName: string,
+  execution: ProviderCommandExecutionResult,
+): void {
+  if (execution.operation !== "mutation") {
+    return;
+  }
+
+  for (const handoff of execution.handoff.canonicalInstances) {
+    process.stdout.write(
+      `EasyServer instance ${escapeTerminalText(handoff.instanceId)} provider=${escapeTerminalText(providerId)} external=${escapeTerminalText(handoff.providerExternalId)}\n`,
+    );
+  }
+
+  if (execution.handoff.status === "partial") {
+    process.stderr.write(
+      `Mutation succeeded, but canonical EasyServer identity is still unavailable for provider resource(s): ${formatProviderExternalIds(execution.handoff.unresolvedProviderExternalIds)}.\n${providerMutationRecoveryGuidance(providerId, featureId, commandName)}\n`,
+    );
+    return;
+  }
+
+  if (execution.handoff.status === "failed") {
+    const detail =
+      execution.handoff.failure === "invalid-provider-result"
+        ? "the Provider Plugin returned an invalid handoff result"
+        : "the follow-up provider inventory refresh failed";
+    const affected =
+      execution.handoff.affectedProviderExternalIds.length === 0
+        ? ""
+        : ` Affected provider resource(s): ${formatProviderExternalIds(execution.handoff.affectedProviderExternalIds)}.`;
+    process.stderr.write(
+      `Mutation succeeded, but EasyServer could not complete canonical instance handoff because ${detail}.${affected}\n${providerMutationRecoveryGuidance(providerId, featureId, commandName)}\n`,
+    );
+  }
+}
+
+function providerMutationRecoveryGuidance(
+  providerId: string,
+  featureId: string,
+  commandName: string,
+): string {
+  return `Do not repeat ${escapeTerminalText(providerId)}/${escapeTerminalText(featureId)}/${escapeTerminalText(commandName)} just to obtain an instance ID. Run easyserver instances list to observe/refresh inventory, or wait and retry observation.`;
+}
+
+function formatProviderExternalIds(ids: readonly string[]): string {
+  return ids.map((id) => escapeTerminalText(id)).join(", ");
 }
 
 function instanceAction(command: string | undefined): AvailableAction | undefined {

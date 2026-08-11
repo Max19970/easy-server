@@ -197,6 +197,57 @@ export interface ProviderCliCommandContext extends ProviderOperationContext {
 
 export interface ProviderCliCommandResult {
   readonly refreshProviderInventory?: boolean;
+  /**
+   * Provider-owned identities of Compute resources affected by this command.
+   * EasyServer may use them only to reconcile back to canonical instance:<uuid>
+   * identities; this is not a universal provisioning request/result schema.
+   */
+  readonly affectedProviderExternalIds?: readonly string[];
+}
+
+export function parseProviderCliCommandResult(
+  value: unknown,
+): ProviderCliCommandResult | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const result = expectRecord(value, "provider CLI command result");
+  const parsed: {
+    refreshProviderInventory?: boolean;
+    affectedProviderExternalIds?: readonly string[];
+  } = {};
+
+  if (result.refreshProviderInventory !== undefined) {
+    if (typeof result.refreshProviderInventory !== "boolean") {
+      throw new PluginContractError(
+        "provider CLI command result.refreshProviderInventory must be a boolean",
+      );
+    }
+    parsed.refreshProviderInventory = result.refreshProviderInventory;
+  }
+
+  if (result.affectedProviderExternalIds !== undefined) {
+    if (!Array.isArray(result.affectedProviderExternalIds)) {
+      throw new PluginContractError(
+        "provider CLI command result.affectedProviderExternalIds must be an array",
+      );
+    }
+    const ids = result.affectedProviderExternalIds.map((candidate) =>
+      expectNonEmptyString(
+        candidate,
+        "provider CLI command result.affectedProviderExternalIds[]",
+      ),
+    );
+    if (new Set(ids).size !== ids.length) {
+      throw new PluginContractError(
+        "provider CLI command result.affectedProviderExternalIds must not contain duplicates",
+      );
+    }
+    parsed.affectedProviderExternalIds = ids;
+  }
+
+  return parsed;
 }
 
 export type ProviderCliOperation = "read" | "mutation";

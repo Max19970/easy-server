@@ -787,7 +787,10 @@ test("marketplace feature exposes rental through the provider-scoped CLI seam", 
     label: "cli-worker",
   });
   assert.equal(output, '{"providerExternalId":"778"}\n');
-  assert.deepEqual(commandResult, { refreshProviderInventory: true });
+  assert.deepEqual(commandResult, {
+    refreshProviderInventory: true,
+    affectedProviderExternalIds: ["778"],
+  });
 });
 
 test("marketplace feature exposes search through the provider-scoped CLI seam", async () => {

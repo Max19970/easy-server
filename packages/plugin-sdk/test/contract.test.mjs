@@ -10,6 +10,7 @@ import {
   normalizedError,
   parseAccessMethods,
   parsePluginManifest,
+  parseProviderCliCommandResult,
   parseProviderInstanceList,
   parseProviderPlugin,
   parseSecretReference,
@@ -196,6 +197,32 @@ test("validates provider CLI contributions without interpreting command argument
         ],
       }),
     /operation must be read or mutation/,
+  );
+});
+
+test("validates provider CLI affected identities for host reconciliation", () => {
+  assert.deepEqual(
+    parseProviderCliCommandResult({
+      refreshProviderInventory: true,
+      affectedProviderExternalIds: ["777", "778"],
+    }),
+    {
+      refreshProviderInventory: true,
+      affectedProviderExternalIds: ["777", "778"],
+    },
+  );
+  assert.equal(parseProviderCliCommandResult(undefined), undefined);
+  assert.throws(
+    () =>
+      parseProviderCliCommandResult({
+        affectedProviderExternalIds: ["777", "777"],
+      }),
+    /must not contain duplicates/,
+  );
+  assert.throws(
+    () =>
+      parseProviderCliCommandResult({ affectedProviderExternalIds: [""] }),
+    /must be a non-empty string/,
   );
 });
 
