@@ -190,13 +190,35 @@ Passwords/private identities are resolved only after host trust succeeds.
 
 ## Persistent Endpoints with the local daemon
 
-Run the daemon in one terminal:
+For normal desktop/automation use, start the daemon without dedicating the invoking terminal:
+
+```sh
+easyserver daemon start
+```
+
+Inspect authenticated daemon health with:
+
+```sh
+easyserver daemon status
+```
+
+`status` prints `running`, `stopped` or `stale`. Its exit status is `0` for a healthy authenticated daemon, `1` when stopped and `2` when a descriptor exists but is invalid/unreachable. `daemon start` is idempotent when the daemon is already healthy and recovers stale descriptors before starting a fresh daemon.
+
+Use foreground mode when debugging or when an external process manager should own the process directly:
 
 ```sh
 easyserver daemon run
 ```
 
-Then create a daemon-owned Connection Session from another terminal:
+Graceful managed shutdown is authenticated through the daemon control channel:
+
+```sh
+easyserver daemon stop
+```
+
+Before waiting for shutdown, `stop` reports how many live ephemeral Connection Sessions and active persisted Endpoint intents will have their local transports closed. Persisted Endpoint definitions remain in Local State and will be realized again on the next start; shutting down the daemon never destroys the underlying compute resources. Repeated stop while already stopped is a successful no-op. If only a stale/unreachable descriptor remains, `stop` reports that condition without pretending it authenticated a remote shutdown.
+
+Then create a daemon-owned Connection Session:
 
 ```sh
 easyserver sessions create <instance-id> --port 8188
