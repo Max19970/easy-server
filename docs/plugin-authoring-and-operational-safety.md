@@ -117,7 +117,7 @@ Disabling is an admission boundary, not physical module unloading. Once disable 
 
 This lets a plugin be disabled without invalidating objects already owned by in-flight work.
 
-Plugins run in-process and are trusted extensions. Runtime validation and narrow interfaces isolate normal throws/rejections and accidental contract mistakes; they are **not** a security sandbox against malicious code, `process.exit()`, native crashes, process-global corruption or infinite synchronous loops.
+Plugins run in-process and are trusted extensions. Runtime validation and narrow interfaces isolate normal throws/rejections and accidental contract mistakes. Async plugin loading is bounded by a host-owned deadline so a never-settling import cannot block later configured plugins, but this does **not** preempt plugin code that synchronously blocks the Node.js thread. EasyServer is **not** a security sandbox against malicious code, `process.exit()`, native crashes, process-global corruption or infinite synchronous loops.
 
 ## 3. Provider Capabilities and Available Actions
 

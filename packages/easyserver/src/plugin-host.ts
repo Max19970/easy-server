@@ -21,6 +21,8 @@ import {
 import type { SecretStore } from "./secret-store.js";
 import { EASYSERVER_VERSION } from "./version.js";
 
+const DEFAULT_PLUGIN_LOAD_TIMEOUT_MS = 10_000;
+
 export type PluginState = "loaded" | "disabled" | "failed";
 
 export interface PluginStatus {
@@ -54,6 +56,7 @@ export class PluginHost {
   readonly #registry: ProviderRegistry;
   readonly #featureHost: ProviderFeatureHost;
   readonly #importer: PluginImporter;
+  readonly #loadTimeoutMs: number;
   readonly #records: PluginRecord[] = [];
   readonly #runtimes = new Map<string, PluginRuntime>();
 
@@ -61,10 +64,16 @@ export class PluginHost {
     registry: ProviderRegistry,
     importer: PluginImporter = importProviderPlugin,
     featureHost: ProviderFeatureHost = new ProviderFeatureHost(),
+    loadTimeoutMs = DEFAULT_PLUGIN_LOAD_TIMEOUT_MS,
   ) {
+    if (!Number.isFinite(loadTimeoutMs) || loadTimeoutMs <= 0) {
+      throw new TypeError("loadTimeoutMs must be a positive finite number");
+    }
+
     this.#registry = registry;
     this.#importer = importer;
     this.#featureHost = featureHost;
+    this.#loadTimeoutMs = loadTimeoutMs;
   }
 
   async load(
@@ -110,7 +119,12 @@ export class PluginHost {
   ): Promise<void> {
     const { source } = request;
     try {
-      const plugin = parseProviderPlugin(await this.#importer(source));
+      const imported = await withTimeout(
+        this.#importer(source),
+        this.#loadTimeoutMs,
+        `Plugin load timed out after ${this.#loadTimeoutMs} ms: ${source}`,
+      );
+      const plugin = parseProviderPlugin(imported);
       assertCompatibility(plugin);
 
       if (this.#runtimes.has(plugin.manifest.id)) {
@@ -267,6 +281,26 @@ export function formatPluginStatuses(
       return `${status.state.padEnd(8)} ${label}${provider}${error}`;
     })
     .join("\n")}\n`;
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    timer.unref();
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 async function importProviderPlugin(source: string): Promise<unknown> {

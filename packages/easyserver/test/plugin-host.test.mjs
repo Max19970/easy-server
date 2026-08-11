@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { PluginHost, formatPluginStatuses } from "../dist/plugin-host.js";
 import { ProviderFeatureHost } from "../dist/provider-feature-host.js";
@@ -154,6 +155,32 @@ test("failed plugins do not remove healthy provider features", async () => {
   assert.deepEqual(features.listFeatures().map((feature) => feature.featureId), [
     "configurator",
   ]);
+});
+
+test("times out a hung plugin load and continues with healthy plugins", async () => {
+  const registry = new ProviderRegistry();
+  const host = new PluginHost(
+    registry,
+    async (source) => {
+      if (source === "hung") {
+        return new Promise(() => {});
+      }
+      return plugin();
+    },
+    new ProviderFeatureHost(),
+    20,
+  );
+
+  const outcome = await Promise.race([
+    host.load(["hung", "healthy"]).then(() => "settled"),
+    delay(200).then(() => "hung"),
+  ]);
+
+  assert.equal(outcome, "settled");
+  assert.equal(host.listPlugins()[0].state, "failed");
+  assert.match(host.listPlugins()[0].error, /timed out/i);
+  assert.equal(host.listPlugins()[1].state, "loaded");
+  assert.deepEqual(registry.listProviderIds(), ["fake"]);
 });
 
 test("isolates catchable import and manifest failures", async () => {
