@@ -154,7 +154,7 @@ On success EasyServer prints a local address such as:
 127.0.0.1:54321
 ```
 
-The local port is allocated dynamically. If a remote application such as ComfyUI is listening on `127.0.0.1:8188`, open `http://127.0.0.1:54321` locally. EasyServer `0.1.0` provides raw TCP forwarding; it does not add HTTP path routing such as `/comfyui`.
+By default the local port is allocated dynamically. For a stable localhost address, request one explicitly with `--local-port`, for example `easyserver connect <instance-id> --port 8188 --local-port 54321`. If that local port is occupied, EasyServer reports a conflict instead of choosing another port. Without `--local-port`, dynamic allocation is unchanged. EasyServer provides raw TCP forwarding and keeps the local bind on `127.0.0.1`.
 
 The foreground command owns the Endpoint until it is cancelled. Press Ctrl+C when finished.
 
@@ -178,7 +178,13 @@ Then create a daemon-owned Connection Session from another terminal:
 easyserver sessions create <instance-id> --port 8188
 ```
 
-The command prints a session ID and its local Endpoint. Inspect and close sessions with:
+Persistent sessions accept the same optional stable local port:
+
+```sh
+easyserver sessions create <instance-id> --port 8188 --local-port 54321
+```
+
+The command reports whether the requested local port was dynamic or fixed and prints the actual loopback Endpoint. `sessions list` preserves the requested local port alongside that realized Endpoint. Inspect and close sessions with:
 
 ```sh
 easyserver sessions list
