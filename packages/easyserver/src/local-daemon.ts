@@ -110,9 +110,22 @@ interface PendingIdempotentSession {
   readonly result: Promise<LivePersistentConnectionSession | undefined>;
 }
 
+interface PendingSessionCleanup {
+  readonly instanceId: string;
+  readonly session: ConnectionSession;
+}
+
 export interface DaemonShutdownSummary {
   readonly liveSessions: number;
   readonly activeEndpointIntents: number;
+}
+
+export interface InstanceConnectionDrain {
+  readonly token: string;
+  readonly instanceId: string;
+  readonly sessionIds: readonly string[];
+  readonly endpointIntentNames: readonly string[];
+  readonly pendingCleanupCount: number;
 }
 
 export interface LocalConnectionDaemon {
@@ -216,7 +229,11 @@ export async function startLocalConnectionDaemon(options: {
       : new EndpointIntentService(options.gateway, options.stateStore);
   const sessionIdsByIdempotencyKey = new Map<string, string>();
   const pendingIdempotentSessions = new Map<string, PendingIdempotentSession>();
+  const connectionDrainTokens = new Map<string, string>();
+  const drainedInstances = new Map<string, string>();
   const pendingSetups = new Set<AbortController>();
+  const pendingConnectionOperations = new Map<string, Set<Promise<unknown>>>();
+  const pendingSessionCleanups = new Set<PendingSessionCleanup>();
   let resolveShutdownRequested!: (summary: DaemonShutdownSummary) => void;
   const shutdownRequested = new Promise<DaemonShutdownSummary>((resolve) => {
     resolveShutdownRequested = resolve;
@@ -234,6 +251,30 @@ export async function startLocalConnectionDaemon(options: {
     if (key !== undefined && sessionIdsByIdempotencyKey.get(key) === id) {
       sessionIdsByIdempotencyKey.delete(key);
     }
+  };
+
+  const trackConnectionOperation = <T>(
+    instanceId: string,
+    operation: Promise<T>,
+  ): Promise<T> => {
+    const operations = pendingConnectionOperations.get(instanceId) ?? new Set();
+    operations.add(operation);
+    pendingConnectionOperations.set(instanceId, operations);
+    const release = () => {
+      operations.delete(operation);
+      if (operations.size === 0) {
+        pendingConnectionOperations.delete(instanceId);
+      }
+    };
+    void operation.then(release, release);
+    return operation;
+  };
+
+  const rememberPendingSessionCleanup = (
+    instanceId: string,
+    session: ConnectionSession,
+  ): void => {
+    pendingSessionCleanups.add({ instanceId, session });
   };
 
   const markFailed = (
@@ -311,10 +352,67 @@ export async function startLocalConnectionDaemon(options: {
     owned.failedAt = undefined;
   };
 
-  const createSession = async (
+  const assertConnectionsAllowed = (instanceId: string): void => {
+    if (drainedInstances.has(instanceId)) {
+      throw normalizedError(
+        "conflict",
+        `Compute Instance ${instanceId} is being drained for destroy`,
+      );
+    }
+  };
+
+  const beginConnectionDrain = async (
+    instanceId: string,
+  ): Promise<InstanceConnectionDrain> => {
+    if (drainedInstances.has(instanceId)) {
+      throw normalizedError(
+        "conflict",
+        `Compute Instance ${instanceId} already has an active connection drain`,
+      );
+    }
+    const token = randomUUID();
+    drainedInstances.set(instanceId, token);
+    connectionDrainTokens.set(token, instanceId);
+
+    for (;;) {
+      const pending = [...(pendingConnectionOperations.get(instanceId) ?? [])];
+      if (pending.length === 0) {
+        break;
+      }
+      await Promise.allSettled(pending);
+    }
+
+    return {
+      token,
+      instanceId,
+      sessionIds: [...sessions.values()]
+        .filter(({ descriptor }) => descriptor.instanceId === instanceId)
+        .map(({ descriptor }) => descriptor.id),
+      endpointIntentNames:
+        intentService?.connectionNamesForInstance(instanceId) ?? [],
+      pendingCleanupCount: [...pendingSessionCleanups].filter(
+        (cleanup) => cleanup.instanceId === instanceId,
+      ).length,
+    };
+  };
+
+  const releaseConnectionDrain = (token: string): void => {
+    const instanceId = connectionDrainTokens.get(token);
+    if (instanceId === undefined) {
+      return;
+    }
+    connectionDrainTokens.delete(token);
+    if (drainedInstances.get(instanceId) === token) {
+      drainedInstances.delete(instanceId);
+    }
+  };
+
+  const createSession = (
     input: ParsedCreateSessionRequest,
   ): Promise<LivePersistentConnectionSession | undefined> => {
-    const setupController = new AbortController();
+    assertConnectionsAllowed(input.instanceId);
+    const operation = (async () => {
+      const setupController = new AbortController();
     pendingSetups.add(setupController);
     let opened: OpenEndpointResult;
     try {
@@ -329,10 +427,27 @@ export async function startLocalConnectionDaemon(options: {
     } finally {
       pendingSetups.delete(setupController);
     }
-    if (closing) {
-      await opened.session.close();
-      return undefined;
-    }
+      if (closing) {
+        try {
+          await opened.session.close();
+        } catch (error) {
+          rememberPendingSessionCleanup(input.instanceId, opened.session);
+          throw error;
+        }
+        return undefined;
+      }
+      if (drainedInstances.has(input.instanceId)) {
+        try {
+          await opened.session.close();
+        } catch (error) {
+          rememberPendingSessionCleanup(input.instanceId, opened.session);
+          throw error;
+        }
+        throw normalizedError(
+          "conflict",
+          `Compute Instance ${input.instanceId} began draining during connection setup`,
+        );
+      }
 
     const id = randomUUID();
     const descriptor: LivePersistentConnectionSession = {
@@ -369,7 +484,85 @@ export async function startLocalConnectionDaemon(options: {
         markFailed(id, owned, error);
       },
     );
-    return descriptor;
+      return descriptor;
+    })();
+    return trackConnectionOperation(input.instanceId, operation);
+  };
+
+  const closeOwnedSession = async (
+    id: string,
+    owned: OwnedSession,
+  ): Promise<void> => {
+    if (sessions.get(id) !== owned) {
+      return;
+    }
+    markClosing(owned);
+    try {
+      await owned.session.close();
+    } catch (error) {
+      const failure = markFailed(id, owned, error);
+      throw normalizedError("plugin-failure", failure.message);
+    }
+
+    if (owned.descriptor.state === "failed") {
+      throw normalizedError("plugin-failure", owned.descriptor.failure.message);
+    }
+    if (sessions.get(id) === owned) {
+      sessions.delete(id);
+      releaseIdempotencyKey(id, owned.descriptor);
+    }
+  };
+
+  const closeInstanceConnectionsForDrain = async (token: string): Promise<void> => {
+    const instanceId = connectionDrainTokens.get(token);
+    if (instanceId === undefined) {
+      throw normalizedError("not-found", `Connection drain not found: ${token}`);
+    }
+
+    const errors: unknown[] = [];
+    try {
+      await intentService?.drainInstance(instanceId);
+    } catch (error) {
+      errors.push(error);
+    }
+
+    for (const [id, owned] of [...sessions.entries()]) {
+      if (owned.descriptor.instanceId !== instanceId) {
+        continue;
+      }
+      try {
+        await closeOwnedSession(id, owned);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+
+    for (const cleanup of [...pendingSessionCleanups]) {
+      if (cleanup.instanceId !== instanceId) {
+        continue;
+      }
+      try {
+        await cleanup.session.close();
+        pendingSessionCleanups.delete(cleanup);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+
+    const remainingSessions = [...sessions.values()].filter(
+      ({ descriptor }) => descriptor.instanceId === instanceId,
+    ).length;
+    const remainingIntents = intentService?.connectionNamesForInstance(instanceId).length ?? 0;
+    const remainingCleanups = [...pendingSessionCleanups].filter(
+      (cleanup) => cleanup.instanceId === instanceId,
+    ).length;
+    if (remainingSessions > 0 || remainingIntents > 0 || remainingCleanups > 0) {
+      throw normalizedError(
+        "conflict",
+        `EasyServer connection cleanup remains for ${instanceId}; instance destroy was not dispatched`,
+        errors[0],
+      );
+    }
   };
 
   const server = createServer(async (request, response) => {
@@ -384,6 +577,40 @@ export async function startLocalConnectionDaemon(options: {
       }
 
       if (request.method === "GET" && request.url === "/health") {
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (request.method === "POST" && request.url === "/connection-drains") {
+        const instanceId = parseConnectionDrainRequest(await readJson(request));
+        sendJson(response, 201, await beginConnectionDrain(instanceId));
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        request.url?.startsWith("/connection-drains/") &&
+        request.url.endsWith("/close")
+      ) {
+        const token = decodeURIComponent(
+          request.url.slice(
+            "/connection-drains/".length,
+            -"/close".length,
+          ),
+        );
+        await closeInstanceConnectionsForDrain(token);
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (
+        request.method === "DELETE" &&
+        request.url?.startsWith("/connection-drains/")
+      ) {
+        const token = decodeURIComponent(
+          request.url.slice("/connection-drains/".length),
+        );
+        releaseConnectionDrain(token);
         sendJson(response, 200, { ok: true });
         return;
       }
@@ -418,36 +645,88 @@ export async function startLocalConnectionDaemon(options: {
         if (intentService === undefined) {
           throw normalizedError("unsupported-operation", "Endpoint intents are not configured");
         }
-        const status = await intentService.create(
-          parseCreateIntentRequest(await readJson(request)),
+        const input = parseCreateIntentRequest(await readJson(request));
+        assertConnectionsAllowed(input.instanceId);
+        const operation = (async () => {
+          const status = await intentService.create(input);
+          if (drainedInstances.has(input.instanceId)) {
+            await intentService.drainInstance(input.instanceId);
+            throw normalizedError(
+              "conflict",
+              `Compute Instance ${input.instanceId} began draining while Endpoint intent ${status.name} was being created`,
+            );
+          }
+          return status;
+        })();
+        sendJson(
+          response,
+          201,
+          await trackConnectionOperation(input.instanceId, operation),
         );
-        sendJson(response, 201, status);
         return;
       }
 
       const intentRoute = parseIntentRoute(request.url);
       if (intentRoute !== undefined && intentService !== undefined) {
         if (request.method === "DELETE" && intentRoute.action === undefined) {
-          await intentService.remove(intentRoute.name);
+          const intent = intentService
+            .list()
+            .find((candidate) => candidate.name === intentRoute.name);
+          const operation = intentService.remove(intentRoute.name);
+          if (intent === undefined) {
+            await operation;
+          } else {
+            await trackConnectionOperation(intent.instanceId, operation);
+          }
           sendJson(response, 200, { ok: true });
           return;
         }
         if (request.method === "POST" && intentRoute.action === "retry") {
-          sendJson(response, 200, intentService.retry(intentRoute.name));
+          const intent = intentService
+            .list()
+            .find((candidate) => candidate.name === intentRoute.name);
+          if (intent !== undefined) {
+            assertConnectionsAllowed(intent.instanceId);
+          }
+          const status = intentService.retry(intentRoute.name);
+          if (drainedInstances.has(status.instanceId)) {
+            await intentService.drainInstance(status.instanceId);
+            throw normalizedError(
+              "conflict",
+              `Compute Instance ${status.instanceId} began draining while Endpoint intent ${status.name} was being retried`,
+            );
+          }
+          sendJson(response, 200, status);
           return;
         }
         if (
           request.method === "POST" &&
           (intentRoute.action === "enable" || intentRoute.action === "disable")
         ) {
-          sendJson(
-            response,
-            200,
-            await intentService.setEnabled(
-              intentRoute.name,
-              intentRoute.action === "enable",
-            ),
-          );
+          if (intentRoute.action === "enable") {
+            const intent = intentService
+              .list()
+              .find((candidate) => candidate.name === intentRoute.name);
+            if (intent !== undefined) {
+              assertConnectionsAllowed(intent.instanceId);
+            }
+          }
+          const enabled = intentRoute.action === "enable";
+          const existing = intentService
+            .list()
+            .find((candidate) => candidate.name === intentRoute.name);
+          const operation = intentService.setEnabled(intentRoute.name, enabled);
+          const status = existing === undefined
+            ? await operation
+            : await trackConnectionOperation(existing.instanceId, operation);
+          if (enabled && drainedInstances.has(status.instanceId)) {
+            await intentService.drainInstance(status.instanceId);
+            throw normalizedError(
+              "conflict",
+              `Compute Instance ${status.instanceId} began draining while Endpoint intent ${status.name} was being enabled`,
+            );
+          }
+          sendJson(response, 200, status);
           return;
         }
       }
@@ -534,24 +813,7 @@ export async function startLocalConnectionDaemon(options: {
           throw normalizedError("not-found", `Connection Session not found: ${id}`);
         }
 
-        markClosing(owned);
-        try {
-          await owned.session.close();
-        } catch (error) {
-          const failure = markFailed(id, owned, error);
-          throw normalizedError("plugin-failure", failure.message);
-        }
-
-        if (owned.descriptor.state === "failed") {
-          throw normalizedError(
-            "plugin-failure",
-            owned.descriptor.failure.message,
-          );
-        }
-        if (sessions.get(id) === owned) {
-          sessions.delete(id);
-          releaseIdempotencyKey(id, owned.descriptor);
-        }
+        await closeOwnedSession(id, owned);
         sendJson(response, 200, { ok: true });
         return;
       }
@@ -628,6 +890,20 @@ export async function startLocalConnectionDaemon(options: {
         }
         sessions.clear();
 
+        const cleanupSessions = [...pendingSessionCleanups];
+        const cleanupResults = await Promise.allSettled(
+          cleanupSessions.map(({ session }) => session.close()),
+        );
+        for (let index = 0; index < cleanupResults.length; index += 1) {
+          const result = cleanupResults[index];
+          const cleanup = cleanupSessions[index];
+          if (result.status === "rejected") {
+            errors.push(result.reason);
+          } else {
+            pendingSessionCleanups.delete(cleanup);
+          }
+        }
+
         if (errors.length === 1) {
           throw errors[0];
         }
@@ -671,6 +947,26 @@ export class LocalDaemonClient {
 
   async requestShutdown(): Promise<DaemonShutdownSummary> {
     return this.#request("POST", "/shutdown");
+  }
+
+  async beginInstanceConnectionDrain(
+    instanceId: string,
+  ): Promise<InstanceConnectionDrain> {
+    return this.#request("POST", "/connection-drains", { instanceId });
+  }
+
+  async closeInstanceConnectionsForDrain(token: string): Promise<void> {
+    await this.#request(
+      "POST",
+      `/connection-drains/${encodeURIComponent(token)}/close`,
+    );
+  }
+
+  async releaseInstanceConnectionDrain(token: string): Promise<void> {
+    await this.#request(
+      "DELETE",
+      `/connection-drains/${encodeURIComponent(token)}`,
+    );
   }
 
   async listEndpointIntents(): Promise<readonly EndpointIntentStatus[]> {
@@ -773,6 +1069,17 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   }
 
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function parseConnectionDrainRequest(value: unknown): string {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError("Invalid connection-drain request");
+  }
+  const instanceId = (value as Record<string, unknown>).instanceId;
+  if (typeof instanceId !== "string" || instanceId.trim().length === 0) {
+    throw new TypeError("connection-drain instanceId must be non-empty");
+  }
+  return instanceId;
 }
 
 function parseCreateIntentRequest(value: unknown): CreateEndpointIntentRequest {

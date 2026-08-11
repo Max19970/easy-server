@@ -21,7 +21,10 @@ import {
 } from "./connect-command.js";
 import { ConnectionGateway } from "./connection-gateway.js";
 import { collectDiagnostics } from "./diagnostics.js";
-import { acquireFilesystemLock } from "./filesystem-lock.js";
+import {
+  acquireFilesystemLock,
+  type FilesystemLockLease,
+} from "./filesystem-lock.js";
 import {
   requireMutationConfirmation,
   type MutationConfirmationPrompt,
@@ -89,7 +92,7 @@ Usage:
   easyserver instances start <instance-id>
   easyserver instances stop <instance-id>
   easyserver instances restart <instance-id>
-  easyserver instances destroy <instance-id> [--yes]
+  easyserver instances destroy <instance-id> [--close-sessions] [--yes]
   easyserver instances wait <instance-id> --state <state|absent> [--timeout <seconds>]
   easyserver connect <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>] [--access-method <id>]
   easyserver daemon run
@@ -1085,7 +1088,7 @@ async function runInstances(args: readonly string[]): Promise<void> {
 
     const action = instanceAction(command);
     if (action !== undefined && instanceId !== undefined) {
-      const assumeYes = parseInstanceActionOptIn(action, commandOptions);
+      const actionOptions = parseInstanceActionOptions(action, commandOptions);
       if (action === "instance.destroy") {
         const binding = state.instances?.find((candidate) => candidate.id === instanceId);
         if (binding === undefined) {
@@ -1097,20 +1100,44 @@ async function runInstances(args: readonly string[]): Promise<void> {
             `Compute Instance ${instanceId} is discovered; adopt it before destroy`,
           );
         }
-        const interactive = isInteractiveTerminal();
-        await requireMutationConfirmation(
-          `Destroy Compute Instance ${instanceId} (provider=${binding.providerId})`,
-          ["destructive"],
-          context,
-          {
-            assumeYes,
-            interactive,
-            ...(interactive ? { confirm: confirmRiskyMutationInteractively } : {}),
-          },
-        );
+
+        const guard = await acquireInstanceDestroyConnectionGuard(instanceId, store);
+        try {
+          const affected = formatDestroyConnectionImpact(guard);
+          if (guard.affectedCount > 0 && !actionOptions.closeSessions) {
+            throw normalizedError(
+              "conflict",
+              `Compute Instance ${instanceId} has EasyServer connections (${affected}); close them first or rerun with --close-sessions`,
+            );
+          }
+
+          const interactive = isInteractiveTerminal();
+          await requireMutationConfirmation(
+            `Destroy Compute Instance ${instanceId} (provider=${binding.providerId})${guard.affectedCount > 0 ? ` after closing ${affected}` : ""}`,
+            ["destructive"],
+            context,
+            {
+              assumeYes: actionOptions.assumeYes,
+              interactive,
+              ...(interactive ? { confirm: confirmRiskyMutationInteractively } : {}),
+            },
+          );
+
+          if (actionOptions.closeSessions) {
+            await guard.closeAffectedConnections();
+          }
+          await manager.performAction(instanceId, action, context);
+        } finally {
+          await guard.release().catch(() => {
+            process.stderr.write(
+              "Warning: failed to release the daemon connection-drain guard; restart the daemon before creating new connections for this instance.\n",
+            );
+          });
+        }
+      } else {
+        await manager.performAction(instanceId, action, context);
       }
 
-      await manager.performAction(instanceId, action, context);
       process.stdout.write(`Requested ${action} for ${escapeTerminalText(instanceId)}\n`);
       return;
     }
@@ -1665,24 +1692,209 @@ function parseInstanceWaitArgs(options: readonly string[]): {
   return { target, timeoutMs };
 }
 
-function parseInstanceActionOptIn(
+interface InstanceDestroyConnectionGuard {
+  readonly sessionIds: readonly string[];
+  readonly endpointIntentNames: readonly string[];
+  readonly pendingCleanupCount: number;
+  readonly affectedCount: number;
+  closeAffectedConnections(): Promise<void>;
+  release(): Promise<void>;
+}
+
+async function acquireInstanceDestroyConnectionGuard(
+  instanceId: string,
+  store: JsonStateStore,
+): Promise<InstanceDestroyConnectionGuard> {
+  let managedLock: FilesystemLockLease | undefined;
+  let lifecycleLock: FilesystemLockLease | undefined;
+  let client: LocalDaemonClient | undefined;
+  let drainToken: string | undefined;
+  let released = false;
+
+  const releaseLocks = async (): Promise<void> => {
+    try {
+      await lifecycleLock?.release();
+    } finally {
+      await managedLock?.release();
+    }
+  };
+
+  try {
+    managedLock = await acquireFilesystemLock(
+      `${daemonFilePath()}.managed.lock`,
+      { timeoutMs: 35_000 },
+    );
+    lifecycleLock = await acquireFilesystemLock(
+      `${daemonFilePath()}.lifecycle.lock`,
+      { timeoutMs: 35_000 },
+    );
+
+    const daemon = await inspectManagedDaemon();
+    if (daemon.status === "stale") {
+      throw normalizedError(
+        "conflict",
+        `EasyServer daemon is stale/unreachable (${daemon.reason}); cannot safely determine active connections before destroy`,
+      );
+    }
+
+    if (daemon.status === "running") {
+      client = new LocalDaemonClient(
+        daemon.descriptor.address,
+        daemon.descriptor.authToken,
+      );
+      const drain = await client.beginInstanceConnectionDrain(instanceId);
+      drainToken = drain.token;
+      const sessionIds = [...drain.sessionIds];
+      const endpointIntentNames = [...drain.endpointIntentNames];
+      const pendingCleanupCount = drain.pendingCleanupCount;
+
+      return {
+        sessionIds,
+        endpointIntentNames,
+        pendingCleanupCount,
+        affectedCount:
+          sessionIds.length + endpointIntentNames.length + pendingCleanupCount,
+        async closeAffectedConnections() {
+          try {
+            await client!.closeInstanceConnectionsForDrain(drainToken!);
+          } catch (error) {
+            throw normalizedError(
+              "conflict",
+              `Failed to close all EasyServer connections for ${instanceId}; instance destroy was not dispatched`,
+              error,
+            );
+          }
+        },
+        async release() {
+          if (released) {
+            return;
+          }
+          released = true;
+          try {
+            if (drainToken !== undefined) {
+              await client!.releaseInstanceConnectionDrain(drainToken);
+            }
+          } finally {
+            await releaseLocks();
+          }
+        },
+      };
+    }
+
+    const state = await store.read();
+    const endpointIntentNames = (state.endpointIntents ?? [])
+      .filter((intent) => intent.instanceId === instanceId && intent.enabled)
+      .map((intent) => intent.name);
+
+    return {
+      sessionIds: [],
+      endpointIntentNames,
+      pendingCleanupCount: 0,
+      affectedCount: endpointIntentNames.length,
+      async closeAffectedConnections() {
+        if (endpointIntentNames.length === 0) {
+          return;
+        }
+        await store.update((state) => ({
+          ...state,
+          endpointIntents: (state.endpointIntents ?? []).map((intent) =>
+            intent.instanceId === instanceId && intent.enabled
+              ? { ...intent, enabled: false }
+              : intent,
+          ),
+        }));
+        const fresh = await store.read();
+        if (
+          (fresh.endpointIntents ?? []).some(
+            (intent) => intent.instanceId === instanceId && intent.enabled,
+          )
+        ) {
+          throw normalizedError(
+            "conflict",
+            `Enabled Endpoint intents remain for ${instanceId}; instance destroy was not dispatched`,
+          );
+        }
+      },
+      async release() {
+        if (released) {
+          return;
+        }
+        released = true;
+        await releaseLocks();
+      },
+    };
+  } catch (error) {
+    try {
+      if (drainToken !== undefined && client !== undefined) {
+        await client.releaseInstanceConnectionDrain(drainToken).catch(() => undefined);
+      }
+    } finally {
+      await releaseLocks().catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+function formatDestroyConnectionImpact(
+  guard: InstanceDestroyConnectionGuard,
+): string {
+  const parts: string[] = [];
+  if (guard.sessionIds.length > 0) {
+    parts.push(
+      `sessions=${guard.sessionIds.length} [${guard.sessionIds.map(escapeTerminalText).join(", ")}]`,
+    );
+  }
+  if (guard.endpointIntentNames.length > 0) {
+    parts.push(
+      `endpoint-intents=${guard.endpointIntentNames.length} [${guard.endpointIntentNames.map(escapeTerminalText).join(", ")}]`,
+    );
+  }
+  if (guard.pendingCleanupCount > 0) {
+    parts.push(`pending-cleanups=${guard.pendingCleanupCount}`);
+  }
+  return parts.join("; ");
+}
+
+interface InstanceActionOptions {
+  readonly assumeYes: boolean;
+  readonly closeSessions: boolean;
+}
+
+function parseInstanceActionOptions(
   action: AvailableAction,
   options: readonly string[],
-): boolean {
+): InstanceActionOptions {
   if (action !== "instance.destroy") {
     if (options.length > 0) {
       throw new CliUsageError(`${action} does not accept options`);
     }
-    return false;
+    return { assumeYes: false, closeSessions: false };
   }
 
-  if (options.length === 0) {
-    return false;
+  let assumeYes = false;
+  let closeSessions = false;
+  for (const option of options) {
+    if (option === "--yes") {
+      if (assumeYes) {
+        throw new CliUsageError("instances destroy accepts --yes only once");
+      }
+      assumeYes = true;
+      continue;
+    }
+    if (option === "--close-sessions") {
+      if (closeSessions) {
+        throw new CliUsageError(
+          "instances destroy accepts --close-sessions only once",
+        );
+      }
+      closeSessions = true;
+      continue;
+    }
+    throw new CliUsageError(
+      "instances destroy accepts only --yes and --close-sessions",
+    );
   }
-  if (options.length === 1 && options[0] === "--yes") {
-    return true;
-  }
-  throw new CliUsageError("instances destroy accepts only optional --yes");
+  return { assumeYes, closeSessions };
 }
 
 function formatAccessMethods(

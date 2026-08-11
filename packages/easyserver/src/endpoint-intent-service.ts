@@ -60,9 +60,16 @@ interface RuntimeIntent {
   realization?: Promise<void>;
 }
 
+interface PendingIntentCleanup {
+  readonly instanceId: string;
+  readonly name: string;
+  readonly session: ConnectionSession;
+  readonly reserveName: boolean;
+}
+
 export class EndpointIntentService {
   readonly #intents = new Map<string, RuntimeIntent>();
-  readonly #removedCleanupSessions = new Map<string, ConnectionSession>();
+  readonly #pendingCleanupSessions = new Set<PendingIntentCleanup>();
   readonly #realizations = new Set<Promise<void>>();
   #closing = false;
 
@@ -95,7 +102,11 @@ export class EndpointIntentService {
 
   async create(request: CreateEndpointIntentRequest): Promise<EndpointIntentStatus> {
     const definition = normalizeIntent(request);
-    if (this.#removedCleanupSessions.has(definition.name)) {
+    if (
+      [...this.#pendingCleanupSessions].some(
+        (cleanup) => cleanup.reserveName && cleanup.name === definition.name,
+      )
+    ) {
       throw normalizedError(
         "conflict",
         `Endpoint intent ${definition.name} is awaiting cleanup; retry remove before reusing the name`,
@@ -123,7 +134,7 @@ export class EndpointIntentService {
     };
     this.#intents.set(definition.name, runtime);
     if (definition.enabled) {
-      void this.#startRealization(definition.name);
+      void this.#startRealization(definition.name).catch(() => undefined);
     }
     return runtime.status;
   }
@@ -167,7 +178,7 @@ export class EndpointIntentService {
     }
 
     runtime.status = { ...definition, state: "starting" };
-    void this.#startRealization(name);
+    void this.#startRealization(name).catch(() => undefined);
     return runtime.status;
   }
 
@@ -183,15 +194,17 @@ export class EndpointIntentService {
       return runtime.status;
     }
     runtime.status = { ...runtime.definition, state: "starting" };
-    void this.#startRealization(name);
+    void this.#startRealization(name).catch(() => undefined);
     return runtime.status;
   }
 
   async remove(name: string): Promise<void> {
-    const pendingCleanup = this.#removedCleanupSessions.get(name);
+    const pendingCleanup = [...this.#pendingCleanupSessions].find(
+      (cleanup) => cleanup.reserveName && cleanup.name === name,
+    );
     if (pendingCleanup !== undefined) {
-      await pendingCleanup.close();
-      this.#removedCleanupSessions.delete(name);
+      await pendingCleanup.session.close();
+      this.#pendingCleanupSessions.delete(pendingCleanup);
       return;
     }
 
@@ -225,9 +238,97 @@ export class EndpointIntentService {
       try {
         await runtime.session.close();
       } catch (error) {
-        this.#removedCleanupSessions.set(name, runtime.session);
+        this.#pendingCleanupSessions.add({
+          instanceId: runtime.definition.instanceId,
+          name,
+          session: runtime.session,
+          reserveName: true,
+        });
         throw error;
       }
+    }
+  }
+
+  connectionNamesForInstance(instanceId: string): readonly string[] {
+    const names = new Set<string>();
+    for (const [name, runtime] of this.#intents) {
+      if (
+        runtime.definition.instanceId === instanceId &&
+        (runtime.definition.enabled ||
+          runtime.session !== undefined ||
+          runtime.realization !== undefined)
+      ) {
+        names.add(name);
+      }
+    }
+    for (const cleanup of this.#pendingCleanupSessions) {
+      if (cleanup.instanceId === instanceId) {
+        names.add(cleanup.name);
+      }
+    }
+    return [...names];
+  }
+
+  async drainInstance(instanceId: string): Promise<void> {
+    await this.store.update((state) => {
+      let changed = false;
+      const endpointIntents = (state.endpointIntents ?? []).map((intent) => {
+        if (intent.instanceId !== instanceId || !intent.enabled) {
+          return intent;
+        }
+        changed = true;
+        return { ...intent, enabled: false };
+      });
+      return changed ? { ...state, endpointIntents } : state;
+    });
+
+    const targetRuntimes = [...this.#intents.values()].filter(
+      (runtime) => runtime.definition.instanceId === instanceId,
+    );
+    for (const runtime of targetRuntimes) {
+      runtime.definition = { ...runtime.definition, enabled: false };
+      runtime.generation += 1;
+      runtime.controller?.abort();
+      runtime.controller = undefined;
+      runtime.status = { ...runtime.definition, state: "disabled" };
+    }
+
+    await Promise.allSettled(
+      targetRuntimes
+        .map((runtime) => runtime.realization)
+        .filter((realization): realization is Promise<void> => realization !== undefined),
+    );
+
+    const errors: unknown[] = [];
+    for (const runtime of targetRuntimes) {
+      const session = runtime.session;
+      if (session === undefined) {
+        continue;
+      }
+      try {
+        await session.close();
+        if (runtime.session === session) {
+          runtime.session = undefined;
+        }
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+
+    for (const cleanup of [...this.#pendingCleanupSessions]) {
+      if (cleanup.instanceId !== instanceId) {
+        continue;
+      }
+      try {
+        await cleanup.session.close();
+        this.#pendingCleanupSessions.delete(cleanup);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+
+    if (this.connectionNamesForInstance(instanceId).length > 0) {
+      throw errors[0] ?? new Error(`Endpoint intent cleanup remains for ${instanceId}`);
     }
   }
 
@@ -243,7 +344,7 @@ export class EndpointIntentService {
     await Promise.allSettled([...this.#realizations]);
 
     const sessions = new Set<ConnectionSession>(
-      this.#removedCleanupSessions.values(),
+      [...this.#pendingCleanupSessions].map((cleanup) => cleanup.session),
     );
     for (const runtime of this.#intents.values()) {
       if (runtime.session !== undefined) {
@@ -365,7 +466,17 @@ export class EndpointIntentService {
       !current.definition.enabled ||
       this.#closing
     ) {
-      await opened.session.close();
+      try {
+        await opened.session.close();
+      } catch (error) {
+        this.#pendingCleanupSessions.add({
+          instanceId: runtime.definition.instanceId,
+          name,
+          session: opened.session,
+          reserveName: false,
+        });
+        throw error;
+      }
       return;
     }
 

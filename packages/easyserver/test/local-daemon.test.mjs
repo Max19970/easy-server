@@ -12,6 +12,7 @@ import {
   normalizedError,
 } from "@easyai101/easyserver-plugin-sdk";
 import { retryWithHostTrust } from "../dist/connect-command.js";
+import { acquireFilesystemLock } from "../dist/filesystem-lock.js";
 import { JsonStateStore } from "../dist/state-store.js";
 import {
   claimLocalDaemonDescriptor,
@@ -1109,6 +1110,281 @@ test("daemon close waits for late intent realization cleanup", async () => {
     assert.equal(baseGateway.sessions.size, 0);
   } finally {
     releaseOpen();
+    await daemon.close().catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("instance connection drain blocks new target connections and preserves unrelated instances", async () => {
+  const targetInstance = "instance:550e8400-e29b-41d4-a716-446655440000";
+  const siblingInstance = "instance:550e8400-e29b-41d4-a716-446655440001";
+  const directory = await mkdtemp(join(tmpdir(), "easyserver-instance-drain-"));
+  const store = new JsonStateStore(join(directory, "state.json"));
+  await store.write({ version: 1, plugins: [] });
+  const gateway = await createFakeGateway();
+  const daemon = await startLocalConnectionDaemon({
+    gateway,
+    authToken: "fixture-token",
+    stateStore: store,
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    const targetSession = await client.createSession({
+      instanceId: targetInstance,
+      remotePort: 8188,
+    });
+    const sibling = await client.createSession({
+      instanceId: siblingInstance,
+      remotePort: 8188,
+    });
+    await client.createEndpointIntent({
+      name: "target-intent",
+      instanceId: targetInstance,
+      remotePort: 8188,
+    });
+    await waitForIntentState(client, "target-intent", "live");
+
+    const drain = await client.beginInstanceConnectionDrain(targetInstance);
+    assert.deepEqual(drain.sessionIds, [targetSession.id]);
+    assert.deepEqual(drain.endpointIntentNames, ["target-intent"]);
+    assert.equal(drain.pendingCleanupCount, 0);
+
+    await assert.rejects(
+      client.createSession({ instanceId: targetInstance, remotePort: 22 }),
+      (error) => error?.code === "conflict" && /being drained/.test(error.message),
+    );
+    await assert.rejects(
+      client.createEndpointIntent({
+        name: "blocked-intent",
+        instanceId: targetInstance,
+        remotePort: 22,
+      }),
+      (error) => error?.code === "conflict" && /being drained/.test(error.message),
+    );
+
+    const unrelated = await client.createSession({
+      instanceId: siblingInstance,
+      remotePort: 22,
+    });
+    assert.notEqual(unrelated.id, sibling.id);
+
+    await client.releaseInstanceConnectionDrain(drain.token);
+    const allowedAgain = await client.createSession({
+      instanceId: targetInstance,
+      remotePort: 22,
+    });
+    assert.equal(allowedAgain.instanceId, targetInstance);
+  } finally {
+    await daemon.close().catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("instance connection drain closes a late setup before publication", async () => {
+  const baseGateway = await createFakeGateway();
+  let releaseOpen;
+  const gate = new Promise((resolve) => {
+    releaseOpen = resolve;
+  });
+  let openStarted;
+  const started = new Promise((resolve) => {
+    openStarted = resolve;
+  });
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint(...args) {
+        if (args[0] === "instance:target") {
+          openStarted();
+          await gate;
+        }
+        return baseGateway.openEndpoint(...args);
+      },
+    },
+    authToken: "fixture-token",
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    const creating = client.createSession({
+      instanceId: "instance:target",
+      remotePort: 8188,
+    });
+    const creatingRejected = assert.rejects(
+      creating,
+      (error) => error?.code === "conflict" && /began draining/.test(error.message),
+    );
+    await started;
+    const draining = client.beginInstanceConnectionDrain("instance:target");
+    await delay(50);
+    releaseOpen();
+    const drain = await draining;
+    assert.equal(drain.pendingCleanupCount, 0);
+
+    await creatingRejected;
+    assert.equal(
+      (await client.listSessions()).some(
+        (session) => session.instanceId === "instance:target",
+      ),
+      false,
+    );
+    assert.equal(baseGateway.sessions.size, 0);
+    await client.releaseInstanceConnectionDrain(drain.token);
+  } finally {
+    releaseOpen();
+    await daemon.close().catch(() => undefined);
+  }
+});
+
+test("connection drain retains failed cleanup from an intent create racing the drain", async () => {
+  const instanceId = "instance:550e8400-e29b-41d4-a716-446655440000";
+  const directory = await mkdtemp(join(tmpdir(), "easyserver-intent-drain-race-"));
+  const store = new JsonStateStore(join(directory, "state.json"));
+  await store.write({ version: 1, plugins: [] });
+
+  let releaseUpdate;
+  const updateGate = new Promise((resolve) => {
+    releaseUpdate = resolve;
+  });
+  let updateStarted;
+  const updateStartedPromise = new Promise((resolve) => {
+    updateStarted = resolve;
+  });
+  let blockFirstUpdate = true;
+  const gatedStore = {
+    read: (...args) => store.read(...args),
+    update: async (...args) => {
+      if (blockFirstUpdate) {
+        blockFirstUpdate = false;
+        updateStarted();
+        await updateGate;
+      }
+      return store.update(...args);
+    },
+  };
+
+  let closeCalls = 0;
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint() {
+        return {
+          endpoint: { host: "127.0.0.1", port: 54321 },
+          accessMethod: DEFAULT_ACCESS_METHOD,
+          session: {
+            closed: new Promise(() => {}),
+            async close() {
+              closeCalls += 1;
+              throw new Error("fixture cleanup failure");
+            },
+          },
+        };
+      },
+    },
+    authToken: "fixture-token",
+    stateStore: gatedStore,
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    const creating = client.createEndpointIntent({
+      name: "racy-intent",
+      instanceId,
+      remotePort: 8188,
+    });
+    const creatingRejected = assert.rejects(creating);
+    await updateStartedPromise;
+
+    const draining = client.beginInstanceConnectionDrain(instanceId);
+    releaseUpdate();
+    const drain = await draining;
+
+    await creatingRejected;
+    assert.deepEqual(drain.endpointIntentNames, ["racy-intent"]);
+    assert.ok(closeCalls >= 1);
+    await assert.rejects(
+      client.closeInstanceConnectionsForDrain(drain.token),
+      (error) =>
+        error?.code === "conflict" && /cleanup remains/.test(error.message),
+    );
+    assert.ok(closeCalls >= 2);
+    await client.releaseInstanceConnectionDrain(drain.token);
+  } finally {
+    releaseUpdate();
+    await daemon.close().catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("connection drain waits for an in-flight intent removal and retains failed cleanup", async () => {
+  const instanceId = "instance:550e8400-e29b-41d4-a716-446655440000";
+  const directory = await mkdtemp(join(tmpdir(), "easyserver-intent-remove-drain-"));
+  const store = new JsonStateStore(join(directory, "state.json"));
+  await store.write({ version: 1, plugins: [] });
+
+  let closeStarted;
+  const closeStartedPromise = new Promise((resolve) => {
+    closeStarted = resolve;
+  });
+  let releaseFirstClose;
+  const firstCloseGate = new Promise((resolve) => {
+    releaseFirstClose = resolve;
+  });
+  let closeCalls = 0;
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint() {
+        return {
+          endpoint: { host: "127.0.0.1", port: 54321 },
+          accessMethod: DEFAULT_ACCESS_METHOD,
+          session: {
+            closed: new Promise(() => {}),
+            async close() {
+              closeCalls += 1;
+              if (closeCalls === 1) {
+                closeStarted();
+                await firstCloseGate;
+                throw new Error("fixture first cleanup failure");
+              }
+            },
+          },
+        };
+      },
+    },
+    authToken: "fixture-token",
+    stateStore: store,
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    await client.createEndpointIntent({
+      name: "remove-race",
+      instanceId,
+      remotePort: 8188,
+    });
+    await waitForIntentState(client, "remove-race", "live");
+
+    const removing = client.removeEndpointIntent("remove-race");
+    const removingRejected = assert.rejects(removing);
+    await closeStartedPromise;
+
+    let drainSettled = false;
+    const draining = client.beginInstanceConnectionDrain(instanceId).then((drain) => {
+      drainSettled = true;
+      return drain;
+    });
+    await delay(50);
+    assert.equal(drainSettled, false);
+
+    releaseFirstClose();
+    await removingRejected;
+    const drain = await draining;
+    assert.deepEqual(drain.endpointIntentNames, ["remove-race"]);
+
+    await client.closeInstanceConnectionsForDrain(drain.token);
+    assert.equal(closeCalls, 2);
+    await client.releaseInstanceConnectionDrain(drain.token);
+  } finally {
+    releaseFirstClose();
     await daemon.close().catch(() => undefined);
     await rm(directory, { recursive: true, force: true });
   }

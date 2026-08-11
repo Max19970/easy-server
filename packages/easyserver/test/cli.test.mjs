@@ -28,6 +28,9 @@ const providerCliPlugin = fileURLToPath(
 const daemonPlugin = fileURLToPath(
   new URL("./fixtures/daemon-plugin.mjs", import.meta.url),
 );
+const destroySessionPlugin = fileURLToPath(
+  new URL("./fixtures/destroy-session-plugin.mjs", import.meta.url),
+);
 const intelionPlugin = fileURLToPath(
   new URL("../../../plugins/intelion/dist/index.js", import.meta.url),
 );
@@ -1064,6 +1067,199 @@ export default {
     `Requested instance.destroy for ${instanceId}\n`,
   );
   assert.equal(await readFile(markerPath, "utf8"), "remote-1");
+});
+
+test("instance destroy refuses active daemon connections unless coordinated teardown is explicit", async () => {
+  const stateFile = join(testDirectory, "destroy-session-state.json");
+  const daemonFile = join(testDirectory, "destroy-session-control.json");
+  const markerPath = join(testDirectory, "destroy-session-marker.txt");
+  const instanceId = "instance:550e8400-e29b-41d4-a716-446655440000";
+  await new JsonStateStore(stateFile).write({
+    version: 1,
+    plugins: [{ source: destroySessionPlugin, enabled: true }],
+    instances: [
+      {
+        id: instanceId,
+        providerId: "destroy-session",
+        providerExternalId: "remote-1",
+        management: "managed",
+      },
+    ],
+  });
+
+  const echo = createServer((socket) => socket.pipe(socket));
+  echo.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+  await once(echo, "listening");
+  const echoAddress = echo.address();
+  assert.ok(echoAddress && typeof echoAddress !== "string");
+  const env = { EASYSERVER_TEST_DESTROY_MARKER: markerPath };
+
+  try {
+    const start = runWithDaemonEnv(
+      stateFile,
+      daemonFile,
+      env,
+      "daemon",
+      "start",
+    );
+    assert.equal(start.status, 0, start.stderr);
+
+    const create = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "create",
+      instanceId,
+      "--port",
+      String(echoAddress.port),
+    );
+    assert.equal(create.status, 0, create.stderr);
+    const sessionId = create.stdout.match(/^(\S+)/m)?.[1];
+    const endpointMatch = create.stdout.match(/endpoint=(127\.0\.0\.1):(\d+)/);
+    assert.ok(sessionId && endpointMatch, create.stdout);
+    const endpoint = { host: endpointMatch[1], port: Number(endpointMatch[2]) };
+
+    const intent = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "intents",
+      "create",
+      "destroy-intent",
+      instanceId,
+      "--port",
+      String(echoAddress.port),
+    );
+    assert.equal(intent.status, 0, intent.stderr);
+
+    const blocked = runWithDaemonEnv(
+      stateFile,
+      daemonFile,
+      env,
+      "instances",
+      "destroy",
+      instanceId,
+      "--yes",
+    );
+    assert.equal(blocked.status, 1);
+    assert.match(blocked.stderr, /has EasyServer connections/);
+    assert.match(blocked.stderr, new RegExp(sessionId));
+    assert.match(blocked.stderr, /destroy-intent/);
+    assert.match(blocked.stderr, /--close-sessions/);
+    await assert.rejects(
+      readFile(markerPath, "utf8"),
+      (error) => error?.code === "ENOENT",
+    );
+    assert.equal(await roundTrip(endpoint, "still-live"), "still-live");
+
+    const coordinated = runWithDaemonEnv(
+      stateFile,
+      daemonFile,
+      env,
+      "instances",
+      "destroy",
+      instanceId,
+      "--close-sessions",
+      "--yes",
+    );
+    assert.equal(coordinated.status, 0, coordinated.stderr);
+    assert.equal(await readFile(markerPath, "utf8"), "destroyed");
+    await waitForConnectionRefused(endpoint);
+
+    const sessions = runWithDaemon(stateFile, daemonFile, "sessions", "list");
+    assert.equal(sessions.status, 0, sessions.stderr);
+    assert.doesNotMatch(sessions.stdout, new RegExp(sessionId));
+    const intents = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "intents",
+      "list",
+    );
+    assert.equal(intents.status, 0, intents.stderr);
+    assert.match(intents.stdout, /destroy-intent state=disabled enabled=false/);
+  } finally {
+    runWithDaemon(stateFile, daemonFile, "daemon", "stop");
+    await new Promise((resolve, reject) =>
+      echo.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test("coordinated destroy never dispatches provider mutation when session cleanup fails", async () => {
+  const stateFile = join(testDirectory, "destroy-session-failure-state.json");
+  const daemonFile = join(testDirectory, "destroy-session-failure-control.json");
+  const markerPath = join(testDirectory, "destroy-session-failure-marker.txt");
+  const closeFailFile = join(testDirectory, "destroy-session-close-fail.txt");
+  const instanceId = "instance:550e8400-e29b-41d4-a716-446655440000";
+  await writeFile(closeFailFile, "fail", "utf8");
+  await new JsonStateStore(stateFile).write({
+    version: 1,
+    plugins: [{ source: destroySessionPlugin, enabled: true }],
+    instances: [
+      {
+        id: instanceId,
+        providerId: "destroy-session",
+        providerExternalId: "remote-1",
+        management: "managed",
+      },
+    ],
+  });
+  const env = {
+    EASYSERVER_TEST_DESTROY_MARKER: markerPath,
+    EASYSERVER_TEST_SESSION_CLOSE_FAIL_FILE: closeFailFile,
+  };
+
+  const echo = createServer((socket) => socket.pipe(socket));
+  echo.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+  await once(echo, "listening");
+  const echoAddress = echo.address();
+  assert.ok(echoAddress && typeof echoAddress !== "string");
+
+  try {
+    const start = runWithDaemonEnv(
+      stateFile,
+      daemonFile,
+      env,
+      "daemon",
+      "start",
+    );
+    assert.equal(start.status, 0, start.stderr);
+    const create = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "create",
+      instanceId,
+      "--port",
+      String(echoAddress.port),
+    );
+    assert.equal(create.status, 0, create.stderr);
+
+    const destroy = runWithDaemonEnv(
+      stateFile,
+      daemonFile,
+      env,
+      "instances",
+      "destroy",
+      instanceId,
+      "--close-sessions",
+      "--yes",
+    );
+    assert.equal(destroy.status, 1);
+    assert.match(destroy.stderr, /Failed to close all EasyServer connections/);
+    assert.match(destroy.stderr, /destroy was not dispatched/);
+    await assert.rejects(
+      readFile(markerPath, "utf8"),
+      (error) => error?.code === "ENOENT",
+    );
+  } finally {
+    await rm(closeFailFile, { force: true });
+    runWithDaemon(stateFile, daemonFile, "daemon", "stop");
+    await new Promise((resolve, reject) =>
+      echo.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
 });
 
 test("instances list returns useful partial inventory with explicit degraded status", async () => {
