@@ -2,7 +2,7 @@ import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, open, readFile, rm, type FileHandle } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { Duplex } from "node:stream";
@@ -19,6 +19,11 @@ import {
   type OperationContext,
   type TcpForwardTarget,
 } from "@easyai101/easyserver-plugin-sdk";
+import {
+  acquireFilesystemLock,
+  FilesystemLockCancelledError,
+  FilesystemLockTimeoutError,
+} from "./filesystem-lock.js";
 
 interface CommandSpec {
   readonly executable: string;
@@ -142,7 +147,7 @@ export class OpenSshAccessAdapter implements AccessAdapter {
     }
 
     const label = knownHostsLabel(trust.host, trust.port);
-    await withKnownHostsEnrollmentLock(this.#knownHostsPath, signal, async () => {
+    await withKnownHostsEnrollmentLock(this.#knownHostsPath, signal, async (assertOwned) => {
       const known = await readKnownHostKeys(this.#knownHostsPath, label);
       if (known.some((candidate) => sameHostKey(candidate, selected))) {
         return;
@@ -154,6 +159,7 @@ export class OpenSshAccessAdapter implements AccessAdapter {
         );
       }
 
+      await assertOwned();
       const file = await open(this.#knownHostsPath, "a", 0o600);
       try {
         await file.write(`${label} ${selected.keyType} ${selected.key}\n`, undefined, "utf8");
@@ -547,46 +553,36 @@ function parseKeyscanOutput(output: string): readonly HostKey[] {
 async function withKnownHostsEnrollmentLock<T>(
   path: string,
   signal: AbortSignal | undefined,
-  run: () => Promise<T>,
+  run: (assertOwned: () => Promise<void>) => Promise<T>,
 ): Promise<T> {
   await mkdir(dirname(path), { recursive: true });
   const lockPath = `${path}.enroll.lock`;
-  const deadline = Date.now() + 5_000;
+  let lease: Awaited<ReturnType<typeof acquireFilesystemLock>>;
+  try {
+    lease = await acquireFilesystemLock(lockPath, {
+      timeoutMs: 5_000,
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof FilesystemLockCancelledError) {
+      throw normalizedError("cancelled", "SSH host-key enrollment was cancelled");
+    }
+    if (error instanceof FilesystemLockTimeoutError) {
+      throw normalizedError(
+        "plugin-failure",
+        "Timed out waiting for SSH host-key enrollment lock",
+      );
+    }
+    throw error;
+  }
 
-  for (;;) {
+  try {
     if (signal?.aborted) {
       throw normalizedError("cancelled", "SSH host-key enrollment was cancelled");
     }
-
-    let lock: FileHandle;
-    try {
-      lock = await open(lockPath, "wx", 0o600);
-    } catch (error) {
-      if (!isErrno(error, "EEXIST")) {
-        throw error;
-      }
-      if (Date.now() >= deadline) {
-        throw normalizedError(
-          "plugin-failure",
-          "Timed out waiting for SSH host-key enrollment lock",
-        );
-      }
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
-      continue;
-    }
-
-    try {
-      if (signal?.aborted) {
-        throw normalizedError("cancelled", "SSH host-key enrollment was cancelled");
-      }
-      return await run();
-    } finally {
-      try {
-        await lock.close();
-      } finally {
-        await rm(lockPath, { force: true });
-      }
-    }
+    return await run(() => lease.assertOwned());
+  } finally {
+    await lease.release();
   }
 }
 

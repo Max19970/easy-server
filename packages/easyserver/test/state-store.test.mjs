@@ -86,6 +86,72 @@ test("concurrent state updates re-read under an exclusive lock instead of losing
   });
 });
 
+test("competing updates preserve unrelated plugin, credential, and instance changes", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    const first = new JsonStateStore(path);
+    const second = new JsonStateStore(path);
+    const third = new JsonStateStore(path);
+    const initialSecretRef = parseSecretReference(
+      "secret:550e8400-e29b-41d4-a716-446655440000",
+    );
+    const replacementSecretRef = parseSecretReference(
+      "secret:9d832a32-2b45-4d1c-8f21-286b3a2aecee",
+    );
+    const instance = {
+      id: "instance:f3e4bc3a-b59c-43db-b218-6bc77bb06acd",
+      providerId: "fixture",
+      providerExternalId: "remote-2",
+    };
+
+    await first.write({
+      version: 1,
+      plugins: [
+        {
+          source: "fixture:provider",
+          enabled: true,
+          credentials: [{ name: "apiToken", secretRef: initialSecretRef }],
+        },
+      ],
+    });
+
+    await Promise.all([
+      first.update((state) => ({
+        ...state,
+        plugins: [...state.plugins, { source: "fixture:extra", enabled: false }],
+      })),
+      second.update((state) => ({
+        ...state,
+        plugins: state.plugins.map((plugin) =>
+          plugin.source === "fixture:provider"
+            ? {
+                ...plugin,
+                credentials: [{ name: "apiToken", secretRef: replacementSecretRef }],
+              }
+            : plugin,
+        ),
+      })),
+      third.update((state) => ({
+        ...state,
+        instances: [...(state.instances ?? []), instance],
+      })),
+    ]);
+
+    assert.deepEqual(await new JsonStateStore(path).read(), {
+      version: 1,
+      plugins: [
+        {
+          source: "fixture:provider",
+          enabled: true,
+          credentials: [{ name: "apiToken", secretRef: replacementSecretRef }],
+        },
+        { source: "fixture:extra", enabled: false },
+      ],
+      instances: [instance],
+    });
+  });
+});
+
 test("compute instance bindings persist stable local and provider identities", async () => {
   await withTempDirectory(async (directory) => {
     const path = join(directory, "state.json");

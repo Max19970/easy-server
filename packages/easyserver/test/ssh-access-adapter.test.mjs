@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -382,6 +382,36 @@ test("concurrent SSH host-key enrollments never trust conflicting keys", async (
       ),
     );
     assert.equal(knownHosts.includes(loser.key), false);
+  });
+});
+
+test("SSH host-key enrollment recovers from a crash-stale lock generation", async () => {
+  await withTempDirectory(async (directory) => {
+    const keySpecPath = join(directory, "host-key.json");
+    const recordPath = join(directory, "ssh-args.json");
+    await writeFile(keySpecPath, JSON.stringify(key("host-key-one")), "utf8");
+    const access = adapter(directory, keySpecPath, recordPath);
+    const method = sshMethod();
+    const target = { host: "service.internal", port: 443 };
+    const trust = await captureTrustError(() =>
+      access.openTcpForward(
+        method,
+        "remote-1",
+        target,
+        setupContext().context,
+      ),
+    );
+
+    const lockPath = join(directory, "known_hosts.enroll.lock");
+    await mkdir(lockPath);
+    const staleOwner = join(lockPath, "crashed-generation.owner");
+    await writeFile(staleOwner, `${process.pid}\n`, "utf8");
+    const stale = new Date(Date.now() - 60_000);
+    await utimes(staleOwner, stale, stale);
+
+    await access.enrollHostKey(trust, context.signal);
+    const knownHosts = await readFile(join(directory, "known_hosts"), "utf8");
+    assert.match(knownHosts, /\[ssh\.example\.test\]:2222 ssh-ed25519 /u);
   });
 });
 
