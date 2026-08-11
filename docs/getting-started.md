@@ -210,6 +210,8 @@ easyserver daemon status
 
 `status` prints `running`, `stopped` or `stale`. Its exit status is `0` for a healthy authenticated daemon, `1` when stopped and `2` when a descriptor exists but is invalid/unreachable. `daemon start` is idempotent when the daemon is already healthy and recovers stale descriptors before starting a fresh daemon.
 
+The running daemon reloads Provider Plugin enablement and credential bindings for **new** connection setup. `plugins add`, `plugins enable`, `plugins disable`, and credential set/rotation/removal therefore do not require a daemon restart. A connection that was already established keeps its admitted runtime and is not torn down merely because configuration changed afterward. If the current configuration cannot load the Provider needed by a new setup, that setup fails explicitly while existing healthy sessions remain alive.
+
 Use foreground mode when debugging or when an external process manager should own the process directly:
 
 ```sh
