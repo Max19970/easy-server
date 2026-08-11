@@ -61,7 +61,7 @@ Package dependency ranges and manifest compatibility ranges serve different purp
 
 Within `0.1.x`, state-format changes must be additive or transparently backward-compatible. A patch release must preserve existing valid state and secret references.
 
-If a future `0.y.0` needs a breaking state change, the release must provide an explicit migration or a clearly documented safe transition. A release must never present deletion of user state as an invisible migration strategy.
+If a future `0.y.0` needs a breaking state change, the release must provide an explicit migration or a clearly documented safe transition. A release must never present deletion of user state as an invisible migration strategy. The concrete install/upgrade/uninstall expectations for the `0.1.x` line are defined in [Package lifecycle](package-lifecycle.md).
 
 ## Deprecation and release notes
 
