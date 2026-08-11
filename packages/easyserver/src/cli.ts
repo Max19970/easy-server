@@ -264,10 +264,17 @@ function formatPersistentSessions(
   }
 
   return `${sessions
-    .map(
-      (session) =>
-        `${session.id} endpoint=${session.endpoint.host}:${session.endpoint.port} instance=${session.instanceId} target=${session.remoteHost}:${session.remotePort}`,
-    )
+    .map((session) => {
+      const endpoint =
+        "endpoint" in session && session.endpoint !== undefined
+          ? ` endpoint=${session.endpoint.host}:${session.endpoint.port}`
+          : "";
+      const failure =
+        session.state === "failed"
+          ? ` error=${session.failure.code}:${session.failure.message}`
+          : "";
+      return `${session.id} state=${session.state}${endpoint} instance=${session.instanceId} target=${session.remoteHost}:${session.remotePort}${failure}`;
+    })
     .join("\n")}\n`;
 }
 

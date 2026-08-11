@@ -240,6 +240,159 @@ test("descriptor release does not delete a successor daemon descriptor", async (
   }
 });
 
+test("daemon retains cleanup-failed sessions without affecting healthy sessions", async () => {
+  const baseGateway = await createFakeGateway();
+  let openedCount = 0;
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint(...args) {
+        const opened = await baseGateway.openEndpoint(...args);
+        openedCount += 1;
+        if (openedCount === 1) {
+          const close = opened.session.close.bind(opened.session);
+          opened.session.close = async () => {
+            await close();
+            throw new Error("fixture cleanup leaked-token=secret");
+          };
+        }
+        return opened;
+      },
+    },
+    authToken: "fixture-token",
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  const failed = await client.createSession({
+    instanceId: "instance:failed",
+    remotePort: 8188,
+  });
+  const healthy = await client.createSession({
+    instanceId: "instance:healthy",
+    remotePort: 8188,
+  });
+
+  assert.equal(await roundTrip(healthy.endpoint, "before-failure"), "before-failure");
+  await assert.rejects(
+    client.closeSession(failed.id),
+    (error) =>
+      error?.code === "plugin-failure" &&
+      error?.message === "Connection Session cleanup failed",
+  );
+
+  const sessions = await client.listSessions();
+  const failedRecord = sessions.find((session) => session.id === failed.id);
+  const healthyRecord = sessions.find((session) => session.id === healthy.id);
+  assert.deepEqual(failedRecord, {
+    id: failed.id,
+    state: "failed",
+    instanceId: "instance:failed",
+    remoteHost: "127.0.0.1",
+    remotePort: 8188,
+    failure: {
+      code: "plugin-failure",
+      message: "Connection Session cleanup failed",
+    },
+  });
+  assert.equal(healthyRecord?.state, "live");
+  assert.deepEqual(healthyRecord?.endpoint, healthy.endpoint);
+  assert.equal(await roundTrip(healthy.endpoint, "after-failure"), "after-failure");
+
+  await assert.rejects(daemon.close(), new RegExp(failed.id));
+  assert.equal(baseGateway.sessions.size, 0);
+  await expectConnectionRefused(healthy.endpoint);
+});
+
+test("unexpected session closure failure remains observable and can be retried", async () => {
+  let rejectClosed;
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint() {
+        return {
+          endpoint: { host: "127.0.0.1", port: 1 },
+          session: {
+            closed: new Promise((_, reject) => {
+              rejectClosed = reject;
+            }),
+            async close() {},
+          },
+        };
+      },
+    },
+    authToken: "fixture-token",
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    const created = await client.createSession({
+      instanceId: "instance:fixture",
+      remotePort: 8188,
+    });
+    rejectClosed(new Error("provider-private-payload=secret"));
+    await delay(0);
+
+    assert.deepEqual(await client.listSessions(), [
+      {
+        id: created.id,
+        state: "failed",
+        instanceId: "instance:fixture",
+        remoteHost: "127.0.0.1",
+        remotePort: 8188,
+        failure: {
+          code: "plugin-failure",
+          message: "Connection Session cleanup failed",
+        },
+      },
+    ]);
+
+    await client.closeSession(created.id);
+    assert.deepEqual(await client.listSessions(), []);
+  } finally {
+    await daemon.close().catch(() => undefined);
+  }
+});
+
+test("failed session retention is bounded", async () => {
+  const rejectors = [];
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint() {
+        return {
+          endpoint: { host: "127.0.0.1", port: 1 },
+          session: {
+            closed: new Promise((_, reject) => rejectors.push(reject)),
+            async close() {},
+          },
+        };
+      },
+    },
+    authToken: "fixture-token",
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    const created = [];
+    for (let index = 0; index < 101; index += 1) {
+      created.push(
+        await client.createSession({
+          instanceId: `instance:${index}`,
+          remotePort: 8188,
+        }),
+      );
+    }
+    for (const reject of rejectors) {
+      reject(new Error("fixture private failure"));
+    }
+    await delay(0);
+
+    const retained = await client.listSessions();
+    assert.equal(retained.length, 100);
+    assert.equal(retained.some((session) => session.id === created[0].id), false);
+    assert.equal(retained.every((session) => session.state === "failed"), true);
+  } finally {
+    await daemon.close().catch(() => undefined);
+  }
+});
+
 test("authenticated daemon control owns sessions beyond one client call", async () => {
   const gateway = await createFakeGateway();
   const daemon = await startLocalConnectionDaemon({

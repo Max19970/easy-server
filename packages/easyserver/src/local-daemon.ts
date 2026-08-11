@@ -17,14 +17,42 @@ import type {
 
 const MAX_REQUEST_BYTES = 64 * 1024;
 const DEFAULT_HEALTH_TIMEOUT_MS = 1_000;
+const MAX_RETAINED_FAILED_SESSIONS = 100;
 
-export interface PersistentConnectionSession {
+interface PersistentConnectionSessionBase {
   readonly id: string;
-  readonly endpoint: Endpoint;
   readonly instanceId: string;
   readonly remoteHost: string;
   readonly remotePort: number;
 }
+
+export interface PersistentSessionFailure {
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface LivePersistentConnectionSession
+  extends PersistentConnectionSessionBase {
+  readonly state: "live";
+  readonly endpoint: Endpoint;
+}
+
+export interface ClosingPersistentConnectionSession
+  extends PersistentConnectionSessionBase {
+  readonly state: "closing";
+  readonly endpoint?: Endpoint;
+}
+
+export interface FailedPersistentConnectionSession
+  extends PersistentConnectionSessionBase {
+  readonly state: "failed";
+  readonly failure: PersistentSessionFailure;
+}
+
+export type PersistentConnectionSession =
+  | LivePersistentConnectionSession
+  | ClosingPersistentConnectionSession
+  | FailedPersistentConnectionSession;
 
 export interface CreatePersistentSessionRequest {
   readonly instanceId: string;
@@ -47,8 +75,9 @@ interface EndpointOpener {
 }
 
 interface OwnedSession {
-  readonly descriptor: PersistentConnectionSession;
+  descriptor: PersistentConnectionSession;
   readonly session: ConnectionSession;
+  failedAt?: number;
 }
 
 export interface LocalConnectionDaemon {
@@ -147,6 +176,57 @@ export async function startLocalConnectionDaemon(options: {
   const pendingSetups = new Set<AbortController>();
   let closing = false;
   let closePromise: Promise<void> | undefined;
+  let failedSequence = 0;
+
+  const markFailed = (
+    id: string,
+    owned: OwnedSession,
+    error: unknown,
+  ): PersistentSessionFailure => {
+    const failure = sessionFailure(error);
+    if (sessions.get(id) !== owned) {
+      return failure;
+    }
+
+    const { instanceId, remoteHost, remotePort } = owned.descriptor;
+    owned.descriptor = {
+      id,
+      state: "failed",
+      instanceId,
+      remoteHost,
+      remotePort,
+      failure,
+    };
+    owned.failedAt = ++failedSequence;
+
+    const failed = [...sessions.entries()]
+      .filter(([, candidate]) => candidate.descriptor.state === "failed")
+      .sort((left, right) => (left[1].failedAt ?? 0) - (right[1].failedAt ?? 0));
+    while (failed.length > MAX_RETAINED_FAILED_SESSIONS) {
+      const [expiredId, expired] = failed.shift()!;
+      if (sessions.get(expiredId) === expired) {
+        sessions.delete(expiredId);
+        void expired.session.close().catch(() => {});
+      }
+    }
+
+    return failure;
+  };
+
+  const markClosing = (owned: OwnedSession): void => {
+    const descriptor = owned.descriptor;
+    owned.descriptor = {
+      id: descriptor.id,
+      state: "closing",
+      ...(descriptor.state !== "failed" && "endpoint" in descriptor
+        ? { endpoint: descriptor.endpoint }
+        : {}),
+      instanceId: descriptor.instanceId,
+      remoteHost: descriptor.remoteHost,
+      remotePort: descriptor.remotePort,
+    };
+    owned.failedAt = undefined;
+  };
 
   const server = createServer(async (request, response) => {
     try {
@@ -194,17 +274,28 @@ export async function startLocalConnectionDaemon(options: {
           return;
         }
         const id = randomUUID();
-        const descriptor: PersistentConnectionSession = {
+        const descriptor: LivePersistentConnectionSession = {
           id,
+          state: "live",
           endpoint: opened.endpoint,
           instanceId: input.instanceId,
           remoteHost: input.remoteHost,
           remotePort: input.remotePort,
         };
-        sessions.set(id, { descriptor, session: opened.session });
+        const owned: OwnedSession = { descriptor, session: opened.session };
+        sessions.set(id, owned);
         void opened.session.closed.then(
-          () => sessions.delete(id),
-          () => sessions.delete(id),
+          () => {
+            if (
+              sessions.get(id) === owned &&
+              owned.descriptor.state === "live"
+            ) {
+              sessions.delete(id);
+            }
+          },
+          (error) => {
+            markFailed(id, owned, error);
+          },
         );
         sendJson(response, 201, descriptor);
         return;
@@ -217,9 +308,21 @@ export async function startLocalConnectionDaemon(options: {
           throw normalizedError("not-found", `Connection Session not found: ${id}`);
         }
 
+        markClosing(owned);
         try {
           await owned.session.close();
-        } finally {
+        } catch (error) {
+          const failure = markFailed(id, owned, error);
+          throw normalizedError("plugin-failure", failure.message);
+        }
+
+        if (owned.descriptor.state === "failed") {
+          throw normalizedError(
+            "plugin-failure",
+            owned.descriptor.failure.message,
+          );
+        }
+        if (sessions.get(id) === owned) {
           sessions.delete(id);
         }
         sendJson(response, 200, { ok: true });
@@ -268,16 +371,21 @@ export async function startLocalConnectionDaemon(options: {
           errors.push(error);
         }
 
-        const ownedSessions = [...sessions.values()];
-        sessions.clear();
+        const ownedSessions = [...sessions.entries()];
         const results = await Promise.allSettled(
-          ownedSessions.map(({ session }) => session.close()),
+          ownedSessions.map(([, { session }]) => session.close()),
         );
-        for (const result of results) {
+        for (let index = 0; index < results.length; index += 1) {
+          const result = results[index];
+          const [id, owned] = ownedSessions[index];
           if (result.status === "rejected") {
-            errors.push(result.reason);
+            const failure = markFailed(id, owned, result.reason);
+            errors.push(new Error(`${id}: ${failure.message}`));
+          } else if (sessions.get(id) === owned) {
+            sessions.delete(id);
           }
         }
+        sessions.clear();
 
         if (errors.length === 1) {
           throw errors[0];
@@ -308,7 +416,7 @@ export class LocalDaemonClient {
 
   async createSession(
     request: CreatePersistentSessionRequest,
-  ): Promise<PersistentConnectionSession> {
+  ): Promise<LivePersistentConnectionSession> {
     return this.#request("POST", "/sessions", request);
   }
 
@@ -354,6 +462,17 @@ export class LocalDaemonClient {
 
     return payload as T;
   }
+}
+
+function sessionFailure(error: unknown): PersistentSessionFailure {
+  if (isNormalizedError(error)) {
+    return { code: error.code, message: error.message };
+  }
+
+  return {
+    code: "plugin-failure",
+    message: "Connection Session cleanup failed",
+  };
 }
 
 function authorized(request: IncomingMessage, expectedToken: string): boolean {

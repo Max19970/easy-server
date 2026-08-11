@@ -164,7 +164,7 @@ easyserver sessions close <session-id>
 
 The daemon's connection setup is non-interactive and never auto-trusts an unknown SSH host. For a new SSH host, first use foreground `easyserver connect ...` to review/enroll the fingerprint, stop that foreground connection, then create the persistent session.
 
-Connection Sessions are live daemon-owned resources. Restarting the daemon does not pretend old dead sessions are still active.
+Connection Sessions are daemon-owned resources with explicit `live`, `closing` and `failed` states. A failed terminal record keeps the same Session ID and a normalized cleanup reason, but no longer advertises its old Endpoint as reachable. Running `easyserver sessions close <session-id>` again retries cleanup and removes the record on success. Failed records are intentionally ephemeral and bounded to the 100 most recent failures; older failures are pruned with one final best-effort cleanup attempt. Restarting the daemon does not pretend old dead sessions are still active.
 
 ## SSH and SCP through an EasyServer Endpoint
 
