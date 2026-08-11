@@ -168,7 +168,19 @@ On success EasyServer prints a local address such as:
 
 By default the local port is allocated dynamically. For a stable localhost address, request one explicitly with `--local-port`, for example `easyserver connect <instance-id> --port 8188 --local-port 54321`. If that local port is occupied, EasyServer reports a conflict instead of choosing another port. Without `--local-port`, dynamic allocation is unchanged. EasyServer provides raw TCP forwarding and keeps the local bind on `127.0.0.1`.
 
-The foreground command owns the Endpoint until it is cancelled. Press Ctrl+C when finished.
+A Provider may expose more than one TCP-forward Access Method. Discover the applicable methods without exposing their credential sources:
+
+```sh
+easyserver instances access-methods <instance-id>
+```
+
+When no method is requested, EasyServer deterministically selects the supported method with the lexicographically smallest stable ID. To choose a specific path, use `--access-method`; an unavailable requested ID fails instead of silently falling back:
+
+```sh
+easyserver connect <instance-id> --port 8188 --access-method direct-ssh
+```
+
+The foreground output includes the selected Access Method ID and kind. The foreground command owns the Endpoint until it is cancelled. Press Ctrl+C when finished.
 
 ### First SSH connection and host trust
 
@@ -190,13 +202,13 @@ Then create a daemon-owned Connection Session from another terminal:
 easyserver sessions create <instance-id> --port 8188
 ```
 
-Persistent sessions accept the same optional stable local port:
+Persistent sessions accept the same optional stable local port and explicit Access Method selection:
 
 ```sh
-easyserver sessions create <instance-id> --port 8188 --local-port 54321
+easyserver sessions create <instance-id> --port 8188 --local-port 54321 --access-method direct-ssh
 ```
 
-The command reports whether the requested local port was dynamic or fixed and prints the actual loopback Endpoint. `sessions list` preserves the requested local port alongside that realized Endpoint. Inspect and close sessions with:
+The command reports whether the requested local port was dynamic or fixed, the actual loopback Endpoint, and the selected Access Method ID/kind. `sessions list` preserves both the requested local port and selected method alongside that realized Endpoint. Inspect and close sessions with:
 
 ```sh
 easyserver sessions list

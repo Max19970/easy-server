@@ -422,14 +422,16 @@ If a Provider must retrieve a short-lived password only after an Access Method h
 
 An Access Adapter turns one supported Access Method kind into transport. Generic transports such as SSH are EasyServer-owned; a Provider-specific tunnel kind should be contributed by that Provider Plugin in `accessAdapters[]`.
 
-The caller does not consume the Access Method directly. The Connection Gateway publishes an EasyServer-owned loopback Endpoint:
+Callers may discover a sanitized Access Method descriptor containing only `id`, `kind` and `mode`; credential sources and Secret References remain inside the connection boundary. Only methods with a resolvable TCP-forward Access Adapter are advertised. If no ID is requested, the Connection Gateway deterministically selects the lexicographically smallest supported Access Method ID rather than depending on provider array order. An explicitly requested unavailable ID fails without fallback.
+
+The Connection Gateway then publishes an EasyServer-owned loopback Endpoint and records the selected descriptor:
 
 ```text
-openEndpoint(instanceId, remotePort, remoteHost = "127.0.0.1")
-  -> Endpoint + ConnectionSession
+openEndpoint(instanceId, remotePort, remoteHost = "127.0.0.1", ..., accessMethodId?)
+  -> Endpoint + selected Access Method + ConnectionSession
 ```
 
-The Endpoint is the caller-facing local address. The Connection Session owns the live transport and its cleanup.
+The Endpoint is the caller-facing local address. The Connection Session owns the live transport and its cleanup. Provider Plugins continue to own the actual Access Method semantics and adapter contributions; core only performs generic discovery/selection.
 
 Foreground use:
 
