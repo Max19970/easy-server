@@ -229,6 +229,46 @@ The daemon's connection setup is non-interactive and never auto-trusts an unknow
 
 Connection Sessions are daemon-owned resources with explicit `live`, `closing` and `failed` states. A failed terminal record keeps the same Session ID and a normalized cleanup reason, but no longer advertises its old Endpoint as reachable. Running `easyserver sessions close <session-id>` again retries cleanup and removes the record on success. Failed records are intentionally ephemeral and bounded to the 100 most recent failures; older failures are pruned with one final best-effort cleanup attempt. Restarting the daemon does not pretend old dead sessions are still active.
 
+### Persisted Endpoint intents
+
+For a tunnel that should be recreated after daemon or machine restart, persist the **desired Endpoint intent** instead of the live Connection Session:
+
+```sh
+easyserver sessions intents create comfyui-main <instance-id> \
+  --port 8188 \
+  --local-port 54321 \
+  --access-method direct-ssh
+```
+
+Inspect desired/runtime state separately from ephemeral sessions:
+
+```sh
+easyserver sessions intents list
+```
+
+An intent has a stable user-visible name and runtime state `starting`, `live`, `error` or `disabled`. Local State stores only its desired instance/target/local-port/Access-Method settings and `enabled` flag; it never stores an old session ID, actual live transport, resolved Endpoint or stale `live` claim. On daemon startup every enabled intent is realized again from current provider state. A failed intent becomes `error` without blocking healthy sibling intents or daemon startup.
+
+After fixing a recoverable cause such as credentials, host trust, provider availability or a local-port conflict, retry only that intent:
+
+```sh
+easyserver sessions intents retry comfyui-main
+```
+
+Disable or re-enable desired restoration without deleting the definition:
+
+```sh
+easyserver sessions intents disable comfyui-main
+easyserver sessions intents enable comfyui-main
+```
+
+Remove the desired intent entirely with:
+
+```sh
+easyserver sessions intents remove comfyui-main
+```
+
+Disable/remove closes only that intent's local transport and does not mutate or destroy the underlying compute resource. Ordinary `sessions create` remains purely ephemeral and receives no persistence overhead.
+
 ## SSH and SCP through an EasyServer Endpoint
 
 An Endpoint can forward any TCP port, including an SSH service. First establish host trust for the provider access path if needed, then create a persistent Endpoint to the compute resource's SSH port:
