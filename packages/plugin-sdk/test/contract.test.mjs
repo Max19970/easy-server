@@ -350,6 +350,67 @@ test("validates provider CLI contributions without interpreting command argument
   );
 });
 
+test("validates provider mutation risk metadata", () => {
+  const run = async () => {};
+  const plugin = parseProviderPlugin({
+    manifest: validManifest,
+    provider: provider(),
+    features: [
+      {
+        id: "marketplace",
+        displayName: "Marketplace",
+        cli: {
+          commands: [
+            {
+              name: "rent",
+              description: "Rent one offer",
+              operation: "mutation",
+              risks: ["billable", "destructive"],
+              run,
+            },
+          ],
+        },
+      },
+    ],
+  });
+  assert.deepEqual(plugin.features?.[0].cli?.commands[0].risks, [
+    "billable",
+    "destructive",
+  ]);
+
+  for (const [operation, risks, pattern] of [
+    ["read", ["billable"], /only for mutation commands/],
+    ["mutation", ["billable", "billable"], /must not contain duplicates/],
+    ["mutation", ["expensive"], /must be billable or destructive/],
+  ]) {
+    assert.throws(
+      () =>
+        parseProviderPlugin({
+          manifest: validManifest,
+          provider: provider(),
+          features: [
+            {
+              id: "marketplace",
+              displayName: "Marketplace",
+              cli: {
+                commands: [
+                  {
+                    name: "rent",
+                    description: "Rent one offer",
+                    operation,
+                    risks,
+                    run,
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      pattern,
+    );
+  }
+});
+
 test("validates provider CLI affected identities for host reconciliation", () => {
   assert.deepEqual(
     parseProviderCliCommandResult({

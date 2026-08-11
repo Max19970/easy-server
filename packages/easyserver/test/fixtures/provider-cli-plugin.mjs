@@ -54,6 +54,7 @@ export default {
             name: "create",
             description: "Create a provider-owned resource",
             operation: "mutation",
+            risks: ["billable"],
             help: {
               arguments: [
                 {

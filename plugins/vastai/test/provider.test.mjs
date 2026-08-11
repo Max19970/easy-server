@@ -767,6 +767,7 @@ test("marketplace feature exposes rental through the provider-scoped CLI seam", 
   const marketplace = plugin.features[0];
   const rent = marketplace.cli?.commands.find((command) => command.name === "rent");
   assert.ok(rent);
+  assert.deepEqual(rent.risks, ["billable"]);
   assert.deepEqual(rent.help?.arguments, [
     {
       name: "offer-id",

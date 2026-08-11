@@ -465,9 +465,11 @@ test("first-party provider command help needs no configured credentials or provi
   assert.equal(vastHelp.status, 0, vastHelp.stderr);
   assert.match(
     vastHelp.stdout,
-    /easyserver provider vastai marketplace rent <offer-id> --image <image>/,
+    /easyserver provider vastai marketplace rent \[--yes\] <offer-id> --image <image>/,
   );
   assert.match(vastHelp.stdout, /--image <image> \(required\)/);
+  assert.match(vastHelp.stdout, /Risks: billable/);
+  assert.match(vastHelp.stdout, /non-interactive calls require --yes/);
   assert.doesNotMatch(vastHelp.stderr, /credential|authentication/i);
 
   const intelionHelp = runWithState(
@@ -481,9 +483,10 @@ test("first-party provider command help needs no configured credentials or provi
   assert.equal(intelionHelp.status, 0, intelionHelp.stderr);
   assert.match(
     intelionHelp.stdout,
-    /easyserver provider intelion server-configurator create --name <name> --flavor <id> --disk <gb> --os <id>/,
+    /easyserver provider intelion server-configurator create \[--yes\] --name <name> --flavor <id> --disk <gb> --os <id>/,
   );
   assert.match(intelionHelp.stdout, /--addon <id> \(optional, repeatable\)/);
+  assert.match(intelionHelp.stdout, /Risks: billable/);
   assert.doesNotMatch(intelionHelp.stderr, /credential|authentication/i);
 });
 
@@ -922,6 +925,81 @@ test("lists and inspects compute instances through configured providers", () => 
   assert.match(start.stderr, /conflict: instance\.start is not available/);
 });
 
+test("non-interactive destroy requires --yes before provider dispatch", async () => {
+  const stateFile = join(testDirectory, "destroy-confirmation-state.json");
+  const pluginPath = join(testDirectory, "destroy-confirmation-plugin.mjs");
+  const markerPath = join(testDirectory, "destroy-confirmation-marker.txt");
+  const instanceId = "instance:550e8400-e29b-41d4-a716-446655440000";
+  await writeFile(
+    pluginPath,
+    `import { writeFileSync } from "node:fs";
+const markerPath = ${JSON.stringify(markerPath)};
+const snapshot = {
+  providerExternalId: "remote-1",
+  state: "stopped",
+  rawState: "STOPPED",
+  availableActions: ["instance.destroy"],
+};
+export default {
+  manifest: {
+    id: "fixture.destroy-confirmation",
+    displayName: "Destroy Confirmation Fixture",
+    version: "1.0.0",
+    compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+    provider: {
+      id: "destructive-cli",
+      displayName: "Destructive CLI Fixture",
+      capabilities: ["instance.destroy"],
+    },
+  },
+  provider: {
+    providerId: "destructive-cli",
+    async listInstances() { return [snapshot]; },
+    async getInstance() { return snapshot; },
+    async destroy(providerExternalId, context) {
+      context.markMutationDispatched();
+      writeFileSync(markerPath, providerExternalId, "utf8");
+    },
+  },
+};\n`,
+    "utf8",
+  );
+  await new JsonStateStore(stateFile).write({
+    version: 1,
+    plugins: [{ source: pluginPath, enabled: true }],
+    instances: [
+      {
+        id: instanceId,
+        providerId: "destructive-cli",
+        providerExternalId: "remote-1",
+        management: "managed",
+      },
+    ],
+  });
+
+  const blocked = runWithState(stateFile, "instances", "destroy", instanceId);
+  assert.equal(blocked.status, 1);
+  assert.match(blocked.stderr, /requires explicit --yes because it is destructive/);
+  await assert.rejects(
+    readFile(markerPath, "utf8"),
+    (error) => error?.code === "ENOENT",
+  );
+
+  const allowed = runWithState(
+    stateFile,
+    "instances",
+    "destroy",
+    instanceId,
+    "--yes",
+  );
+  assert.equal(allowed.status, 0, allowed.stderr);
+  assert.equal(
+    allowed.stdout,
+    `Requested instance.destroy for ${instanceId}\n`,
+  );
+  assert.equal(await readFile(markerPath, "utf8"), "remote-1");
+});
+
 test("instances list returns useful partial inventory with explicit degraded status", async () => {
   const stateFile = join(testDirectory, "partial-inventory-state.json");
   const staleId = "instance:550e8400-e29b-41d4-a716-446655440000";
@@ -1064,7 +1142,7 @@ test("mounts provider feature commands and reconciles requested inventory change
   assert.match(mutationHelp.stdout, /^Operation: mutation$/m);
   assert.match(
     mutationHelp.stdout,
-    /Usage:\n  easyserver provider provider-cli marketplace create <resource-name> \[--tag <value>\.\.\.\]/,
+    /Usage:\n  easyserver provider provider-cli marketplace create \[--yes\] <resource-name> \[--tag <value>\.\.\.\]/,
   );
   assert.match(
     mutationHelp.stdout,
@@ -1078,6 +1156,8 @@ test("mounts provider feature commands and reconciles requested inventory change
     mutationHelp.stdout,
     /easyserver provider provider-cli marketplace create gpu-box --tag team --tag demo/,
   );
+  assert.match(mutationHelp.stdout, /Risks: billable/);
+  assert.match(mutationHelp.stdout, /non-interactive calls require --yes/);
   const stateAfterHelp = JSON.parse(await readFile(stateFile, "utf8"));
   assert.equal(stateAfterHelp.instances, undefined);
 
@@ -1093,12 +1173,29 @@ test("mounts provider feature commands and reconciles requested inventory change
   assert.equal(execute.status, 0);
   assert.equal(execute.stdout, "provider-owned:alpha|beta\n");
 
+  const blockedCreate = runWithState(
+    stateFile,
+    "provider",
+    "provider-cli",
+    "marketplace",
+    "create",
+    "fixture-name",
+  );
+  assert.equal(blockedCreate.status, 1);
+  assert.match(blockedCreate.stderr, /requires explicit --yes because it is billable/);
+  assert.equal(
+    JSON.parse(await readFile(stateFile, "utf8")).instances,
+    undefined,
+  );
+
   const create = runWithState(
     stateFile,
     "provider",
     "provider-cli",
     "marketplace",
     "create",
+    "--yes",
+    "fixture-name",
   );
   assert.equal(create.status, 0);
   const createLines = create.stdout.trim().split("\n");

@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
   isNormalizedError,
+  normalizedError,
   type AvailableAction,
   type HostTrustRequiredError,
   type PluginCredentialDescriptor,
@@ -17,6 +18,10 @@ import {
 } from "./connect-command.js";
 import { ConnectionGateway } from "./connection-gateway.js";
 import { collectDiagnostics } from "./diagnostics.js";
+import {
+  requireMutationConfirmation,
+  type MutationConfirmationPrompt,
+} from "./mutation-safety.js";
 import {
   ComputeManager,
   type InventoryInstance,
@@ -76,13 +81,13 @@ Usage:
   easyserver instances start <instance-id>
   easyserver instances stop <instance-id>
   easyserver instances restart <instance-id>
-  easyserver instances destroy <instance-id>
+  easyserver instances destroy <instance-id> [--yes]
   easyserver connect <instance-id> --port <remote-port> [--host <remote-host>]
   easyserver daemon run
   easyserver sessions create <instance-id> --port <remote-port> [--host <remote-host>]
   easyserver sessions list
   easyserver sessions close <session-id>
-  easyserver provider <provider-id> <feature-id> <command> [args...]
+  easyserver provider <provider-id> <feature-id> <command> [--yes] [args...]
 `;
 
 await run(process.argv.slice(2));
@@ -353,7 +358,7 @@ async function runConnect(args: readonly string[]): Promise<void> {
       remotePort,
       remoteHost,
       context: { signal: controller.signal },
-      ...(process.stdin.isTTY && process.stdout.isTTY
+      ...(isInteractiveTerminal()
         ? { confirmHostTrust: confirmHostTrustInteractively }
         : {}),
       onEndpoint(endpoint) {
@@ -363,6 +368,35 @@ async function runConnect(args: readonly string[]): Promise<void> {
   } finally {
     process.removeListener("SIGINT", cancel);
     process.removeListener("SIGTERM", cancel);
+  }
+}
+
+function isInteractiveTerminal(): boolean {
+  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+async function confirmRiskyMutationInteractively(
+  prompt: MutationConfirmationPrompt,
+  context: { readonly signal: AbortSignal },
+): Promise<boolean> {
+  process.stdout.write(
+    `${escapeTerminalText(prompt.summary)}\nRisk: ${prompt.risks.join(", ")}\nConsequence: ${escapeTerminalText(prompt.consequence)}\n`,
+  );
+  const readline = createInterface({ input: process.stdin, output: process.stdout });
+
+  try {
+    const answer = await readline.question(
+      'Continue? Type "yes" to confirm: ',
+      { signal: context.signal },
+    );
+    return answer.trim().toLowerCase() === "yes";
+  } catch (error) {
+    if (context.signal.aborted) {
+      return false;
+    }
+    throw error;
+  } finally {
+    readline.close();
   }
 }
 
@@ -494,9 +528,13 @@ async function runProvider(args: readonly string[]): Promise<void> {
       );
     }
 
+    const risks = command.risks ?? [];
+    const assumeYes = risks.length > 0 && commandArgs[0] === "--yes";
+    const providerCommandArgs = assumeYes ? commandArgs.slice(1) : commandArgs;
+
     if (
-      commandArgs.length === 1 &&
-      (commandArgs[0] === "--help" || commandArgs[0] === "-h")
+      providerCommandArgs.length === 1 &&
+      (providerCommandArgs[0] === "--help" || providerCommandArgs[0] === "-h")
     ) {
       process.stdout.write(
         formatProviderCommandHelp(providerId, featureId, command),
@@ -509,14 +547,27 @@ async function runProvider(args: readonly string[]): Promise<void> {
     process.once("SIGINT", cancel);
     process.once("SIGTERM", cancel);
     try {
+      const context = { signal: controller.signal };
+      const interactive = isInteractiveTerminal();
+      await requireMutationConfirmation(
+        `Provider command ${providerId}/${featureId}/${commandName} (provider=${providerId})`,
+        risks,
+        context,
+        {
+          assumeYes,
+          interactive,
+          ...(interactive ? { confirm: confirmRiskyMutationInteractively } : {}),
+        },
+      );
+
       const execution = await new ProviderCommandRunner().run({
         providerId,
         featureId,
         command,
-        args: commandArgs,
+        args: providerCommandArgs,
         admission,
         inventory: new ComputeManager(registry, store),
-        context: { signal: controller.signal },
+        context,
         write(text) {
           process.stdout.write(text);
         },
@@ -540,7 +591,7 @@ async function runProvider(args: readonly string[]): Promise<void> {
 }
 
 async function runInstances(args: readonly string[]): Promise<void> {
-  const [command, instanceId] = args;
+  const [command, instanceId, ...commandOptions] = args;
   const store = new JsonStateStore(stateFilePath());
   const state = await store.read();
   const registry = new ProviderRegistry();
@@ -589,7 +640,32 @@ async function runInstances(args: readonly string[]): Promise<void> {
     }
 
     const action = instanceAction(command);
-    if (action !== undefined && instanceId !== undefined && args.length === 2) {
+    if (action !== undefined && instanceId !== undefined) {
+      const assumeYes = parseInstanceActionOptIn(action, commandOptions);
+      if (action === "instance.destroy") {
+        const binding = state.instances?.find((candidate) => candidate.id === instanceId);
+        if (binding === undefined) {
+          throw normalizedError("not-found", `Compute Instance not found: ${instanceId}`);
+        }
+        if (binding.management !== "managed") {
+          throw normalizedError(
+            "conflict",
+            `Compute Instance ${instanceId} is discovered; adopt it before destroy`,
+          );
+        }
+        const interactive = isInteractiveTerminal();
+        await requireMutationConfirmation(
+          `Destroy Compute Instance ${instanceId} (provider=${binding.providerId})`,
+          ["destructive"],
+          context,
+          {
+            assumeYes,
+            interactive,
+            ...(interactive ? { confirm: confirmRiskyMutationInteractively } : {}),
+          },
+        );
+      }
+
       await manager.performAction(instanceId, action, context);
       process.stdout.write(`Requested ${action} for ${escapeTerminalText(instanceId)}\n`);
       return;
@@ -941,14 +1017,20 @@ function formatProviderCommandHelp(
   command: ProviderCliCommand,
 ): string {
   const commandPath = `easyserver provider ${escapeTerminalText(providerId)} ${escapeTerminalText(featureId)} ${escapeTerminalText(command.name)}`;
+  const risks = command.risks ?? [];
+  const safetyUsage = risks.length > 0 ? " [--yes]" : "";
   const help = command.help;
   if (help === undefined) {
-    return `${escapeTerminalText(command.description)}\n\nUsage:\n  ${commandPath} [provider-args...]\n\nThis Provider Plugin does not declare structured argument help for this command.\n`;
+    const safetyNote = risks.length === 0
+      ? ""
+      : `\n\nSafety:\n  Risks: ${risks.join(", ")}\n  Interactive terminals require confirmation; non-interactive calls require --yes.`;
+    return `${escapeTerminalText(command.description)}\n\nUsage:\n  ${commandPath}${safetyUsage} [provider-args...]\n\nThis Provider Plugin does not declare structured argument help for this command.${safetyNote}\n`;
   }
 
   const argumentsHelp = help.arguments ?? [];
   const optionsHelp = help.options ?? [];
   const usageParts = [
+    ...(risks.length > 0 ? ["[--yes]"] : []),
     ...argumentsHelp.map((argument) => {
       const token = `<${escapeTerminalText(argument.name)}>${argument.repeatable ? "..." : ""}`;
       return argument.required ? token : `[${token}]`;
@@ -998,6 +1080,15 @@ function formatProviderCommandHelp(
     for (const example of help.examples ?? []) {
       lines.push(`  ${commandPath} ${escapeTerminalText(example)}`);
     }
+  }
+
+  if (risks.length > 0) {
+    lines.push(
+      "",
+      "Safety:",
+      `  Risks: ${risks.join(", ")}`,
+      "  Interactive terminals require confirmation; non-interactive calls require --yes.",
+    );
   }
 
   return `${lines.join("\n")}\n`;
@@ -1075,6 +1166,26 @@ function instanceAction(command: string | undefined): AvailableAction | undefine
     default:
       return undefined;
   }
+}
+
+function parseInstanceActionOptIn(
+  action: AvailableAction,
+  options: readonly string[],
+): boolean {
+  if (action !== "instance.destroy") {
+    if (options.length > 0) {
+      throw new CliUsageError(`${action} does not accept options`);
+    }
+    return false;
+  }
+
+  if (options.length === 0) {
+    return false;
+  }
+  if (options.length === 1 && options[0] === "--yes") {
+    return true;
+  }
+  throw new CliUsageError("instances destroy accepts only optional --yes");
 }
 
 function formatInventory(instances: readonly InventoryInstance[]): string {

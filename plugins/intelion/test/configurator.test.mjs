@@ -477,7 +477,12 @@ test("server configurator is usable through the provider-scoped CLI seam", async
   const validate = feature.cli?.commands.find(
     (command) => command.name === "validate",
   );
+  const create = feature.cli?.commands.find(
+    (command) => command.name === "create",
+  );
   assert.ok(validate);
+  assert.ok(create);
+  assert.deepEqual(create.risks, ["billable"]);
   assert.deepEqual(
     validate.help?.options?.map(({ name, required, repeatable }) => ({
       name,

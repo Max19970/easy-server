@@ -208,6 +208,7 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
         name: "create",
         description: "Create an Intelion cloud-server configuration",
         operation: "mutation",
+        risks: ["billable"],
         help: SERVER_CONFIGURATION_HELP,
         run: (args, context) => this.#runCreate(args, context),
       },

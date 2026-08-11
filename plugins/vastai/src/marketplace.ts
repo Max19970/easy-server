@@ -123,6 +123,7 @@ class MarketplaceFeature implements VastMarketplaceFeature {
         name: "rent",
         description: "Rent a Vast.ai marketplace offer",
         operation: "mutation",
+        risks: ["billable"],
         help: {
           arguments: [
             {

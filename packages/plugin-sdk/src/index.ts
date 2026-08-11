@@ -262,6 +262,9 @@ export function parseProviderCliCommandResult(
 
 export type ProviderCliOperation = "read" | "mutation";
 
+export const PROVIDER_MUTATION_RISKS = ["billable", "destructive"] as const;
+export type ProviderMutationRisk = (typeof PROVIDER_MUTATION_RISKS)[number];
+
 export interface ProviderCliArgumentHelp {
   /** Stable provider-owned positional argument name, rendered as <name>. */
   readonly name: string;
@@ -291,6 +294,8 @@ export interface ProviderCliCommand {
   readonly name: string;
   readonly description: string;
   readonly operation: ProviderCliOperation;
+  /** Host-owned safety classification for mutations that need explicit consent. */
+  readonly risks?: readonly ProviderMutationRisk[];
   readonly help?: ProviderCliCommandHelp;
   run(
     args: readonly string[],
@@ -848,6 +853,13 @@ function parseProviderCliContribution(value: unknown, path: string): void {
         `${path}.commands[${index}].operation must be read or mutation`,
       );
     }
+    if (command.risks !== undefined) {
+      parseProviderMutationRisks(
+        command.risks,
+        `${path}.commands[${index}].risks`,
+        command.operation,
+      );
+    }
     if (command.help !== undefined) {
       parseProviderCliCommandHelp(
         command.help,
@@ -862,6 +874,32 @@ function parseProviderCliContribution(value: unknown, path: string): void {
       );
     }
     seen.add(name);
+  }
+}
+
+function parseProviderMutationRisks(
+  value: unknown,
+  path: string,
+  operation: ProviderCliOperation,
+): void {
+  if (!Array.isArray(value)) {
+    throw new PluginContractError(`${path} must be an array`);
+  }
+  if (value.length > 0 && operation !== "mutation") {
+    throw new PluginContractError(`${path} may be declared only for mutation commands`);
+  }
+
+  const seen = new Set<string>();
+  for (const [index, risk] of value.entries()) {
+    if (!PROVIDER_MUTATION_RISK_SET.has(risk as string)) {
+      throw new PluginContractError(
+        `${path}[${index}] must be billable or destructive`,
+      );
+    }
+    if (seen.has(risk as string)) {
+      throw new PluginContractError(`${path} must not contain duplicates`);
+    }
+    seen.add(risk as string);
   }
 }
 
@@ -950,6 +988,7 @@ const PROVIDER_CAPABILITY_SET = new Set<string>(PROVIDER_CAPABILITIES);
 const POWER_ACTION_SET = new Set<string>(POWER_ACTIONS);
 const INSTANCE_STATE_SET = new Set<string>(INSTANCE_STATES);
 const NORMALIZED_ERROR_CODE_SET = new Set<string>(NORMALIZED_ERROR_CODES);
+const PROVIDER_MUTATION_RISK_SET = new Set<string>(PROVIDER_MUTATION_RISKS);
 
 function expectRecord(value: unknown, path: string): Record<string, unknown> {
   if (!isRecord(value)) {
