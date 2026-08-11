@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { open, mkdir, readFile, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
+  INSTANCE_STATES,
   parseSecretReference,
+  type InstanceState,
   type SecretReference,
 } from "@easyai101/easyserver-plugin-sdk";
 import {
@@ -22,10 +24,17 @@ export interface PluginRegistration {
   readonly credentials?: readonly ProviderCredentialBinding[];
 }
 
+export interface InstanceObservation {
+  readonly state: InstanceState;
+  readonly observedAt: string;
+  readonly name?: string;
+}
+
 export interface InstanceBinding {
   readonly id: string;
   readonly providerId: string;
   readonly providerExternalId: string;
+  readonly observation?: InstanceObservation;
 }
 
 export interface EasyServerState {
@@ -283,12 +292,52 @@ function parseInstanceBindings(
       );
     }
 
+    const observation = parseInstanceObservation(
+      binding.observation,
+      `${path}[${index}].observation`,
+    );
+
     seenIds.add(id);
     seenProviderKeys.add(providerKey);
-    bindings.push({ id, providerId, providerExternalId });
+    bindings.push(
+      observation === undefined
+        ? { id, providerId, providerExternalId }
+        : { id, providerId, providerExternalId, observation },
+    );
   }
 
   return bindings;
+}
+
+function parseInstanceObservation(
+  value: unknown,
+  path: string,
+): InstanceObservation | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const observation = expectRecord(value, path);
+  const state = expectNonEmptyString(observation.state, `${path}.state`);
+  if (!INSTANCE_STATES.includes(state as InstanceState)) {
+    throw new TypeError(`${path}.state must be a normalized instance state`);
+  }
+  const observedAt = expectNonEmptyString(
+    observation.observedAt,
+    `${path}.observedAt`,
+  );
+  if (Number.isNaN(Date.parse(observedAt))) {
+    throw new TypeError(`${path}.observedAt must be an ISO-compatible timestamp`);
+  }
+
+  if (observation.name === undefined) {
+    return { state: state as InstanceState, observedAt };
+  }
+  return {
+    state: state as InstanceState,
+    observedAt,
+    name: expectNonEmptyString(observation.name, `${path}.name`),
+  };
 }
 
 function parseCredentialBindings(

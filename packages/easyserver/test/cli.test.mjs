@@ -28,6 +28,61 @@ const daemonPlugin = fileURLToPath(
 const intelionPlugin = fileURLToPath(
   new URL("../../../plugins/intelion/dist/index.js", import.meta.url),
 );
+const partialHealthyPlugin = `data:text/javascript,${encodeURIComponent(`
+  export default {
+    manifest: {
+      id: "fixture.partial-healthy",
+      displayName: "Partial Healthy Fixture",
+      version: "1.0.0",
+      compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+      provider: {
+        id: "partial-healthy",
+        displayName: "Partial Healthy",
+        capabilities: ["instance.stop"],
+      },
+    },
+    provider: {
+      providerId: "partial-healthy",
+      async listInstances() {
+        return [{
+          providerExternalId: "healthy-remote",
+          name: "Healthy GPU",
+          state: "running",
+          rawState: "READY",
+          availableActions: ["instance.stop"],
+        }];
+      },
+      async getInstance() { return undefined; },
+      async performPowerAction() {},
+    },
+  };
+`)}`;
+const partialFailingPlugin = `data:text/javascript,${encodeURIComponent(`
+  export default {
+    manifest: {
+      id: "fixture.partial-failing",
+      displayName: "Partial Failing Fixture",
+      version: "1.0.0",
+      compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+      provider: {
+        id: "partial-failing",
+        displayName: "Partial Failing",
+        capabilities: [],
+      },
+    },
+    provider: {
+      providerId: "partial-failing",
+      async listInstances() {
+        throw {
+          kind: "easyserver-error",
+          code: "provider-unavailable",
+          message: "provider-private-payload=must-not-escape",
+        };
+      },
+      async getInstance() { return undefined; },
+    },
+  };
+`)}`;
 const providerCollisionPlugin = `data:text/javascript,${encodeURIComponent(`
   export default {
     manifest: {
@@ -550,7 +605,10 @@ test("lists and inspects compute instances through configured providers", () => 
 
   const firstList = runWithState(stateFile, "instances", "list");
   assert.equal(firstList.status, 0);
-  assert.match(firstList.stdout, /provider=inventory external=remote-1 state=running/);
+  assert.match(
+    firstList.stdout,
+    /provider=inventory external=remote-1 freshness=fresh state=running/,
+  );
   assert.match(firstList.stdout, /actions=instance\.stop/);
   const [instanceId] = firstList.stdout.match(/instance:[0-9a-f-]+/i) ?? [];
   assert.ok(instanceId);
@@ -578,6 +636,61 @@ test("lists and inspects compute instances through configured providers", () => 
   const start = runWithState(stateFile, "instances", "start", instanceId);
   assert.equal(start.status, 1);
   assert.match(start.stderr, /conflict: instance\.start is not available/);
+});
+
+test("instances list returns useful partial inventory with explicit degraded status", async () => {
+  const stateFile = join(testDirectory, "partial-inventory-state.json");
+  const staleId = "instance:550e8400-e29b-41d4-a716-446655440000";
+  await new JsonStateStore(stateFile).write({
+    version: 1,
+    plugins: [
+      { source: partialHealthyPlugin, enabled: true },
+      { source: partialFailingPlugin, enabled: true },
+    ],
+    instances: [
+      {
+        id: staleId,
+        providerId: "partial-failing",
+        providerExternalId: "stale-remote",
+        observation: {
+          state: "stopped",
+          name: "Last known GPU",
+          observedAt: "2026-08-11T12:00:00.000Z",
+        },
+      },
+    ],
+  });
+
+  const result = runWithState(stateFile, "instances", "list");
+
+  assert.equal(result.status, 2);
+  assert.match(
+    result.stdout,
+    /provider=partial-healthy external=healthy-remote freshness=fresh state=running actions=instance\.stop/,
+  );
+  assert.match(
+    result.stdout,
+    new RegExp(`${staleId} provider=partial-failing external=stale-remote freshness=stale state=stopped actions=-`),
+  );
+  assert.match(
+    result.stderr,
+    /Provider partial-failing inventory failed \(provider-unavailable\): Provider partial-failing inventory refresh failed/,
+  );
+  assert.doesNotMatch(result.stderr, /provider-private-payload=must-not-escape/);
+});
+
+test("instances list reports total inventory failure when no useful state exists", async () => {
+  const stateFile = join(testDirectory, "failed-inventory-state.json");
+  await new JsonStateStore(stateFile).write({
+    version: 1,
+    plugins: [{ source: partialFailingPlugin, enabled: true }],
+  });
+
+  const result = runWithState(stateFile, "instances", "list");
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "No compute instances found.\n");
+  assert.match(result.stderr, /Provider partial-failing inventory failed/);
 });
 
 test("mounts provider feature commands and reconciles requested inventory changes", async () => {

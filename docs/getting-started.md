@@ -98,6 +98,8 @@ easyserver instances inspect <instance-id>
 
 Use the EasyServer `instance-id` shown by these commands for lifecycle and connectivity commands. Provider-specific external IDs remain plugin-owned reconciliation identity.
 
+`instances list` refreshes Providers independently. If one Provider is unavailable while another succeeds, EasyServer still prints the useful inventory and marks each entry as `fresh`, `stale` or `unobserved`. `stale` means the last privacy-safe normalized observation is being shown; `unobserved` means EasyServer knows the canonical identity but has no prior usable observation. Stale/unobserved entries never advertise lifecycle actions. A useful partial listing exits with status `2`; a complete listing exits with `0`, while a total failure with nothing useful to show exits with `1`.
+
 ## Lifecycle
 
 A provider advertises which normalized lifecycle operations it supports, and each instance snapshot reports which of those operations are currently available.

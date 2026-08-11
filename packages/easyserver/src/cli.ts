@@ -11,7 +11,10 @@ import {
 import { AccessAdapterRegistry } from "./access-adapter-registry.js";
 import { runForegroundConnect } from "./connect-command.js";
 import { ConnectionGateway } from "./connection-gateway.js";
-import { ComputeManager } from "./compute-manager.js";
+import {
+  ComputeManager,
+  type InventoryInstance,
+} from "./compute-manager.js";
 import { HostOperationRunner } from "./host-operation.js";
 import { ProviderFeatureHost } from "./provider-feature-host.js";
 import {
@@ -517,8 +520,18 @@ async function runInstances(args: readonly string[]): Promise<void> {
     const context = { signal: controller.signal };
 
     if (command === "list" && args.length === 1) {
-      const instances = await manager.listInstances(context);
-      process.stdout.write(formatInstances(instances));
+      const inventory = await manager.listInventory(context);
+      process.stdout.write(formatInventory(inventory.instances));
+      for (const provider of inventory.providers) {
+        if (provider.status === "failed") {
+          process.stderr.write(
+            `Provider ${provider.providerId} inventory failed (${provider.error.code}): ${provider.error.message}\n`,
+          );
+        }
+      }
+      if (!inventory.complete) {
+        process.exitCode = inventory.instances.length > 0 ? 2 : 1;
+      }
       return;
     }
 
@@ -850,18 +863,24 @@ function instanceAction(command: string | undefined): AvailableAction | undefine
   }
 }
 
-function formatInstances(instances: readonly import("./compute-manager.js").ComputeInstance[]): string {
+function formatInventory(instances: readonly InventoryInstance[]): string {
   if (instances.length === 0) {
     return "No compute instances found.\n";
   }
 
   return `${instances
     .map((instance) => {
-      const name = instance.name === undefined ? "" : ` name=${JSON.stringify(instance.name)}`;
+      const state = "state" in instance ? instance.state : "unavailable";
+      const name = "name" in instance && instance.name !== undefined
+        ? ` name=${JSON.stringify(instance.name)}`
+        : "";
+      const observedAt = "observedAt" in instance
+        ? ` observed=${instance.observedAt}`
+        : "";
       const actions = instance.availableActions.length === 0
         ? "-"
         : instance.availableActions.join(",");
-      return `${instance.id} provider=${instance.providerId} external=${instance.providerExternalId} state=${instance.state} actions=${actions}${name}`;
+      return `${instance.id} provider=${instance.providerId} external=${instance.providerExternalId} freshness=${instance.freshness} state=${state} actions=${actions}${observedAt}${name}`;
     })
     .join("\n")}\n`;
 }

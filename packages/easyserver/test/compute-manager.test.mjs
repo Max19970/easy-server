@@ -77,6 +77,206 @@ test("zero providers returns an empty inventory", async () => {
   });
 });
 
+test("global inventory keeps healthy providers and stale last-known state during a partial outage", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const alpha = {
+      providerExternalId: "alpha-live",
+      state: "running",
+      rawState: "READY",
+      availableActions: ["instance.stop"],
+    };
+    const beta = {
+      providerExternalId: "beta-last-known",
+      state: "stopped",
+      rawState: "OFFLINE",
+      availableActions: ["instance.start"],
+    };
+    let betaUnavailable = false;
+    registerProvider(registry, {
+      providerId: "alpha-partial",
+      capabilities: ["instance.stop"],
+      list: async () => [alpha],
+      get: async () => alpha,
+    });
+    registerProvider(registry, {
+      providerId: "beta-partial",
+      capabilities: ["instance.start"],
+      list: async () => {
+        if (betaUnavailable) {
+          throw normalizedError("provider-unavailable", "fixture beta outage");
+        }
+        return [beta];
+      },
+      get: async () => beta,
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const initial = await manager.listInventory(context);
+    assert.equal(initial.complete, true);
+    const betaBefore = initial.instances.find(
+      (instance) => instance.providerId === "beta-partial",
+    );
+    assert.equal(betaBefore.freshness, "fresh");
+
+    betaUnavailable = true;
+    const degraded = await new ComputeManager(
+      registry,
+      new JsonStateStore(store.path),
+    ).listInventory(context);
+
+    assert.equal(degraded.complete, false);
+    assert.equal(
+      degraded.providers.find((provider) => provider.providerId === "beta-partial")
+        .status,
+      "failed",
+    );
+    assert.equal(
+      degraded.instances.find((instance) => instance.providerId === "alpha-partial")
+        .freshness,
+      "fresh",
+    );
+    const betaAfter = degraded.instances.find(
+      (instance) => instance.providerId === "beta-partial",
+    );
+    assert.equal(betaAfter.id, betaBefore.id);
+    assert.equal(betaAfter.freshness, "stale");
+    assert.equal(betaAfter.state, beta.state);
+    assert.deepEqual(betaAfter.availableActions, []);
+    assert.equal("rawState" in betaAfter, false);
+
+    betaUnavailable = false;
+    const recovered = await new ComputeManager(
+      registry,
+      new JsonStateStore(store.path),
+    ).listInventory(context);
+    const betaRecovered = recovered.instances.find(
+      (instance) => instance.providerId === "beta-partial",
+    );
+    assert.equal(betaRecovered.id, betaBefore.id);
+    assert.equal(betaRecovered.freshness, "fresh");
+    assert.deepEqual(betaRecovered.availableActions, ["instance.start"]);
+  });
+});
+
+test("global inventory exposes a known identity without prior observation as unobserved", async () => {
+  await withStore(async (store) => {
+    const binding = {
+      id: "instance:550e8400-e29b-41d4-a716-446655440000",
+      providerId: "legacy-provider",
+      providerExternalId: "legacy-remote",
+    };
+    await store.write({ version: 1, plugins: [], instances: [binding] });
+
+    const registry = new ProviderRegistry();
+    registerProvider(registry, {
+      providerId: "legacy-provider",
+      capabilities: [],
+      list: async () => {
+        throw normalizedError("provider-unavailable", "fixture provider outage");
+      },
+      get: async () => undefined,
+    });
+
+    const result = await new ComputeManager(registry, store).listInventory(context);
+    assert.equal(result.complete, false);
+    assert.deepEqual(result.instances, [
+      {
+        ...binding,
+        freshness: "unobserved",
+        availableActions: [],
+      },
+    ]);
+  });
+});
+
+test("global inventory fans out provider reads while preserving provider order", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const alphaStarted = deferred();
+    const betaStarted = deferred();
+    const alphaResult = deferred();
+    const betaResult = deferred();
+    const alpha = {
+      providerExternalId: "alpha-global",
+      state: "running",
+      rawState: "alpha-raw",
+      availableActions: [],
+    };
+    const beta = {
+      providerExternalId: "beta-global",
+      state: "stopped",
+      rawState: "beta-raw",
+      availableActions: [],
+    };
+
+    registerProvider(registry, {
+      providerId: "alpha-global-provider",
+      capabilities: [],
+      list: async () => {
+        alphaStarted.resolve();
+        return alphaResult.promise;
+      },
+      get: async () => alpha,
+    });
+    registerProvider(registry, {
+      providerId: "beta-global-provider",
+      capabilities: [],
+      list: async () => {
+        betaStarted.resolve();
+        return betaResult.promise;
+      },
+      get: async () => beta,
+    });
+
+    const listing = new ComputeManager(registry, store).listInventory(context);
+    await Promise.all([alphaStarted.promise, betaStarted.promise]);
+    betaResult.resolve([beta]);
+    alphaResult.resolve([alpha]);
+
+    const result = await listing;
+    assert.deepEqual(
+      result.providers.map((provider) => provider.providerId),
+      ["alpha-global-provider", "beta-global-provider"],
+    );
+    assert.deepEqual(
+      result.instances.map((instance) => instance.providerExternalId),
+      ["alpha-global", "beta-global"],
+    );
+  });
+});
+
+test("global inventory preserves root cancellation instead of returning partial failure", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const alphaStarted = deferred();
+    const betaStarted = deferred();
+    for (const [providerId, started] of [
+      ["alpha-cancelled", alphaStarted],
+      ["beta-cancelled", betaStarted],
+    ]) {
+      registerProvider(registry, {
+        providerId,
+        capabilities: [],
+        list: async () => {
+          started.resolve();
+          return new Promise(() => {});
+        },
+        get: async () => undefined,
+      });
+    }
+
+    const controller = new AbortController();
+    const listing = new ComputeManager(registry, store).listInventory({
+      signal: controller.signal,
+    });
+    await Promise.all([alphaStarted.promise, betaStarted.promise]);
+    controller.abort();
+
+    await assert.rejects(listing, (error) => error?.code === "cancelled");
+  });
+});
+
 test("host deadline bounds a non-cooperative provider inventory read", async () => {
   await withStore(async (store) => {
     const registry = new ProviderRegistry();

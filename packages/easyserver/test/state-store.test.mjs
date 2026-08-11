@@ -185,6 +185,46 @@ test("compute instance bindings persist stable local and provider identities", a
   });
 });
 
+test("last-known instance observations persist only normalized privacy-safe fields", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    const store = new JsonStateStore(path);
+    await store.write({
+      version: 1,
+      plugins: [],
+      instances: [
+        {
+          id: "instance:550e8400-e29b-41d4-a716-446655440000",
+          providerId: "fixture",
+          providerExternalId: "remote-safe",
+          observation: {
+            state: "running",
+            name: "Safe display name",
+            observedAt: "2026-08-11T12:00:00.000Z",
+            rawState: "provider-secret-ish-payload",
+            availableActions: ["instance.destroy"],
+            credential: "must-not-persist",
+          },
+        },
+      ],
+    });
+
+    const expectedObservation = {
+      state: "running",
+      name: "Safe display name",
+      observedAt: "2026-08-11T12:00:00.000Z",
+    };
+    assert.deepEqual((await store.read()).instances[0].observation, expectedObservation);
+    const primary = await readFile(path, "utf8");
+    const recovery = await readFile(`${path}.recovery`, "utf8");
+    for (const serialized of [primary, recovery]) {
+      assert.doesNotMatch(serialized, /provider-secret-ish-payload/);
+      assert.doesNotMatch(serialized, /instance\.destroy/);
+      assert.doesNotMatch(serialized, /must-not-persist/);
+    }
+  });
+});
+
 test("provider credential configuration persists only opaque secret references", async () => {
   await withTempDirectory(async (directory) => {
     const path = join(directory, "state.json");
