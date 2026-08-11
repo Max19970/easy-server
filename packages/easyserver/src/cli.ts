@@ -80,15 +80,16 @@ Usage:
   easyserver plugins credential remove <module> <name>
   easyserver instances list
   easyserver instances inspect <instance-id>
+  easyserver instances access-methods <instance-id>
   easyserver instances adopt <instance-id>
   easyserver instances start <instance-id>
   easyserver instances stop <instance-id>
   easyserver instances restart <instance-id>
   easyserver instances destroy <instance-id> [--yes]
   easyserver instances wait <instance-id> --state <state|absent> [--timeout <seconds>]
-  easyserver connect <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>]
+  easyserver connect <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>] [--access-method <id>]
   easyserver daemon run
-  easyserver sessions create <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>]
+  easyserver sessions create <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>] [--access-method <id>]
   easyserver sessions list
   easyserver sessions close <session-id>
   easyserver provider <provider-id> <feature-id> <command> [--yes] [args...]
@@ -267,16 +268,20 @@ async function runSessions(args: readonly string[]): Promise<void> {
   }
 
   if (command === "create") {
-    const { instanceId, remotePort, remoteHost, localPort } = parseConnectArgs(
-      args.slice(1),
-      "sessions create",
-    );
+    const {
+      instanceId,
+      remotePort,
+      remoteHost,
+      localPort,
+      accessMethodId,
+    } = parseConnectArgs(args.slice(1), "sessions create");
     const client = await localDaemonClient();
     const request = {
       instanceId,
       remotePort,
       ...(remoteHost === undefined ? {} : { remoteHost }),
       ...(localPort === undefined ? {} : { localPort }),
+      ...(accessMethodId === undefined ? {} : { accessMethodId }),
     };
     const session = await retryWithHostTrust(
       () => client.createSession(request),
@@ -288,7 +293,7 @@ async function runSessions(args: readonly string[]): Promise<void> {
       },
     );
     process.stdout.write(
-      `${session.id} requested-local-port=${session.requestedLocalPort ?? "dynamic"} endpoint=${session.endpoint.host}:${session.endpoint.port}\n`,
+      `${session.id} requested-local-port=${session.requestedLocalPort ?? "dynamic"} endpoint=${session.endpoint.host}:${session.endpoint.port} access-method=${escapeTerminalText(session.accessMethod.id)} kind=${escapeTerminalText(session.accessMethod.kind)}\n`,
     );
     return;
   }
@@ -328,13 +333,19 @@ function formatPersistentSessions(
         session.state === "failed"
           ? ` error=${session.failure.code}:${escapeTerminalText(session.failure.message)}`
           : "";
-      return `${session.id} state=${session.state}${endpoint} requested-local-port=${session.requestedLocalPort ?? "dynamic"} instance=${session.instanceId} target=${escapeTerminalText(session.remoteHost)}:${session.remotePort}${failure}`;
+      return `${session.id} state=${session.state}${endpoint} requested-local-port=${session.requestedLocalPort ?? "dynamic"} access-method=${escapeTerminalText(session.accessMethod.id)} kind=${escapeTerminalText(session.accessMethod.kind)} instance=${session.instanceId} target=${escapeTerminalText(session.remoteHost)}:${session.remotePort}${failure}`;
     })
     .join("\n")}\n`;
 }
 
 async function runConnect(args: readonly string[]): Promise<void> {
-  const { instanceId, remotePort, remoteHost, localPort } = parseConnectArgs(args);
+  const {
+    instanceId,
+    remotePort,
+    remoteHost,
+    localPort,
+    accessMethodId,
+  } = parseConnectArgs(args);
   const store = new JsonStateStore(stateFilePath());
   const state = await store.read();
   const registry = new ProviderRegistry();
@@ -363,12 +374,15 @@ async function runConnect(args: readonly string[]): Promise<void> {
       remotePort,
       remoteHost,
       localPort,
+      accessMethodId,
       context: { signal: controller.signal },
       ...(isInteractiveTerminal()
         ? { confirmHostTrust: confirmHostTrustInteractively }
         : {}),
-      onEndpoint(endpoint) {
-        process.stdout.write(`${endpoint.host}:${endpoint.port}\n`);
+      onEndpoint(endpoint, accessMethod) {
+        process.stdout.write(
+          `${endpoint.host}:${endpoint.port} access-method=${escapeTerminalText(accessMethod.id)} kind=${escapeTerminalText(accessMethod.kind)}\n`,
+        );
       },
     });
   } finally {
@@ -439,6 +453,7 @@ function parseConnectArgs(
   readonly remotePort: number;
   readonly remoteHost?: string;
   readonly localPort?: number;
+  readonly accessMethodId?: string;
 } {
   const [instanceId, ...options] = args;
   if (instanceId === undefined || instanceId.trim().length === 0) {
@@ -448,6 +463,7 @@ function parseConnectArgs(
   let remotePort: number | undefined;
   let remoteHost: string | undefined;
   let localPort: number | undefined;
+  let accessMethodId: string | undefined;
 
   for (let index = 0; index < options.length; index += 2) {
     const option = options[index];
@@ -493,6 +509,17 @@ function parseConnectArgs(
       continue;
     }
 
+    if (option === "--access-method") {
+      if (accessMethodId !== undefined) {
+        throw new CliUsageError(`${commandName} accepts --access-method only once`);
+      }
+      if (value.trim().length === 0) {
+        throw new CliUsageError(`${commandName} --access-method must be non-empty`);
+      }
+      accessMethodId = value;
+      continue;
+    }
+
     throw new CliUsageError(`Unknown ${commandName} option: ${option}`);
   }
 
@@ -505,6 +532,7 @@ function parseConnectArgs(
     remotePort,
     ...(remoteHost === undefined ? {} : { remoteHost }),
     ...(localPort === undefined ? {} : { localPort }),
+    ...(accessMethodId === undefined ? {} : { accessMethodId }),
   };
 }
 
@@ -655,6 +683,23 @@ async function runInstances(args: readonly string[]): Promise<void> {
       }
 
       process.stdout.write(`${JSON.stringify(instance, null, 2)}\n`);
+      return;
+    }
+
+    if (
+      command === "access-methods" &&
+      instanceId !== undefined &&
+      args.length === 2
+    ) {
+      const gateway = new ConnectionGateway(
+        registry,
+        new AccessAdapterRegistry([new OpenSshAccessAdapter()]),
+        store,
+        secretStore,
+      );
+      process.stdout.write(
+        formatAccessMethods(await gateway.listAccessMethods(instanceId, context)),
+      );
       return;
     }
 
@@ -1278,6 +1323,20 @@ function parseInstanceActionOptIn(
     return true;
   }
   throw new CliUsageError("instances destroy accepts only optional --yes");
+}
+
+function formatAccessMethods(
+  methods: readonly import("./connection-gateway.js").AccessMethodDescriptor[],
+): string {
+  if (methods.length === 0) {
+    return "No TCP-forward Access Methods available.\n";
+  }
+  return `${methods
+    .map(
+      (method) =>
+        `${escapeTerminalText(method.id)} kind=${escapeTerminalText(method.kind)} mode=${method.mode}`,
+    )
+    .join("\n")}\n`;
 }
 
 function formatInventory(instances: readonly InventoryInstance[]): string {

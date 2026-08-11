@@ -23,6 +23,12 @@ export interface Endpoint {
   readonly port: number;
 }
 
+export interface AccessMethodDescriptor {
+  readonly id: string;
+  readonly kind: string;
+  readonly mode: AccessMethod["mode"];
+}
+
 export interface ConnectionSession {
   readonly closed: Promise<void>;
   close(): Promise<void>;
@@ -30,6 +36,7 @@ export interface ConnectionSession {
 
 export interface OpenEndpointResult {
   readonly endpoint: Endpoint;
+  readonly accessMethod: AccessMethodDescriptor;
   readonly session: ConnectionSession;
 }
 
@@ -44,12 +51,63 @@ export class ConnectionGateway {
     private readonly operations = new HostOperationRunner(),
   ) {}
 
+  async listAccessMethods(
+    instanceId: string,
+    context: OperationContext,
+  ): Promise<readonly AccessMethodDescriptor[]> {
+    if (context.signal.aborted) {
+      throw normalizedError("cancelled", "Access Method discovery was cancelled");
+    }
+
+    const state = await this.stateStore.read();
+    const binding = state.instances?.find((candidate) => candidate.id === instanceId);
+    if (binding === undefined) {
+      throw normalizedError("not-found", `Compute Instance not found: ${instanceId}`);
+    }
+
+    const admission = this.providers.acquire(binding.providerId);
+    if (admission === undefined) {
+      throw normalizedError(
+        "provider-unavailable",
+        `Provider is not available: ${binding.providerId}`,
+      );
+    }
+
+    try {
+      if (admission.provider.getAccessMethods === undefined) {
+        return [];
+      }
+      const methods = parseAccessMethods(
+        await this.operations.run(
+          "read",
+          `Provider ${binding.providerId} getAccessMethods`,
+          context,
+          (operationContext) =>
+            admission.provider.getAccessMethods!(
+              binding.providerExternalId,
+              providerOperationContext(admission, operationContext),
+            ),
+        ),
+      );
+      return methods
+        .filter(
+          (method) =>
+            this.accessAdapters.resolveTcpForward(method, admission) !== undefined,
+        )
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map(toAccessMethodDescriptor);
+    } finally {
+      admission.release();
+    }
+  }
+
   async openEndpoint(
     instanceId: string,
     remotePort: number,
     remoteHost?: string,
     context?: OperationContext,
     localPort?: number,
+    accessMethodId?: string,
   ): Promise<OpenEndpointResult>;
   async openEndpoint(
     instanceId: string,
@@ -57,6 +115,7 @@ export class ConnectionGateway {
     context: OperationContext,
     remoteHost?: string,
     localPort?: number,
+    accessMethodId?: string,
   ): Promise<OpenEndpointResult>;
   async openEndpoint(
     instanceId: string,
@@ -64,6 +123,7 @@ export class ConnectionGateway {
     remoteHostOrContext: string | OperationContext = "127.0.0.1",
     contextOrRemoteHost?: OperationContext | string,
     localPort?: number,
+    accessMethodId?: string,
   ): Promise<OpenEndpointResult> {
     const remoteHost =
       typeof remoteHostOrContext === "string"
@@ -80,6 +140,7 @@ export class ConnectionGateway {
 
     validateTarget(remoteHost, remotePort);
     validateLocalPort(localPort);
+    validateAccessMethodId(accessMethodId);
     if (context.signal.aborted) {
       throw normalizedError("cancelled", "Connection setup was cancelled");
     }
@@ -123,21 +184,28 @@ export class ConnectionGateway {
             ),
         ),
       );
-      const selected = methods
+      const supported = methods
         .map((method) => ({
           method,
           adapter: this.accessAdapters.resolveTcpForward(method, admission),
         }))
-        .find(
+        .filter(
           (candidate): candidate is typeof candidate & {
             adapter: NonNullable<typeof candidate.adapter>;
           } => candidate.adapter !== undefined,
-        );
+        )
+        .sort((left, right) => left.method.id.localeCompare(right.method.id));
+      const selected =
+        accessMethodId === undefined
+          ? supported[0]
+          : supported.find((candidate) => candidate.method.id === accessMethodId);
 
       if (selected === undefined) {
         throw normalizedError(
           "unsupported-operation",
-          `No TCP-forward Access Method is available for ${instanceId}`,
+          accessMethodId === undefined
+            ? `No TCP-forward Access Method is available for ${instanceId}`
+            : `Access Method ${accessMethodId} is not available for ${instanceId}`,
         );
       }
 
@@ -252,6 +320,7 @@ export class ConnectionGateway {
 
       return {
         endpoint: { host: "127.0.0.1", port: address.port },
+        accessMethod: toAccessMethodDescriptor(selected.method),
         session,
       };
     } catch (error) {
@@ -543,6 +612,16 @@ function accessMethodDeferredCredentialIds(method: AccessMethod): Set<string> {
     }
   }
   return ids;
+}
+
+function toAccessMethodDescriptor(method: AccessMethod): AccessMethodDescriptor {
+  return { id: method.id, kind: method.kind, mode: method.mode };
+}
+
+function validateAccessMethodId(id: string | undefined): void {
+  if (id !== undefined && id.trim().length === 0) {
+    throw new TypeError("accessMethodId must be non-empty");
+  }
 }
 
 function validateLocalPort(port: number | undefined): void {

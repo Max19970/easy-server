@@ -5,6 +5,7 @@ import {
   type OperationContext,
 } from "@easyai101/easyserver-plugin-sdk";
 import {
+  type AccessMethodDescriptor,
   type ConnectionGateway,
   type Endpoint,
   type OpenEndpointResult,
@@ -29,9 +30,13 @@ export interface ForegroundConnectOptions {
   readonly remotePort: number;
   readonly remoteHost?: string;
   readonly localPort?: number;
+  readonly accessMethodId?: string;
   readonly context: OperationContext;
   readonly confirmHostTrust?: ConfirmHostTrust;
-  readonly onEndpoint: (endpoint: Endpoint) => void;
+  readonly onEndpoint: (
+    endpoint: Endpoint,
+    accessMethod: AccessMethodDescriptor,
+  ) => void;
 }
 
 export async function runForegroundConnect(
@@ -40,7 +45,7 @@ export async function runForegroundConnect(
   const result = await openWithTrust(options);
 
   try {
-    options.onEndpoint(result.endpoint);
+    options.onEndpoint(result.endpoint, result.accessMethod);
     await result.session.closed;
   } catch (error) {
     try {
@@ -68,6 +73,7 @@ async function openWithTrust(
         options.remoteHost ?? "127.0.0.1",
         options.context,
         options.localPort,
+        options.accessMethodId,
       ),
     {
       sshAdapter: options.sshAdapter,

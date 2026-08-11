@@ -9,6 +9,7 @@ import {
   type OperationContext,
 } from "@easyai101/easyserver-plugin-sdk";
 import type {
+  AccessMethodDescriptor,
   ConnectionGateway,
   ConnectionSession,
   Endpoint,
@@ -25,6 +26,7 @@ interface PersistentConnectionSessionBase {
   readonly remoteHost: string;
   readonly remotePort: number;
   readonly requestedLocalPort?: number;
+  readonly accessMethod: AccessMethodDescriptor;
 }
 
 export interface PersistentSessionFailure {
@@ -60,6 +62,7 @@ export interface CreatePersistentSessionRequest {
   readonly remotePort: number;
   readonly remoteHost?: string;
   readonly localPort?: number;
+  readonly accessMethodId?: string;
 }
 
 export interface LocalDaemonAddress {
@@ -74,6 +77,7 @@ interface EndpointOpener {
     remoteHost: string,
     context: OperationContext,
     localPort?: number,
+    accessMethodId?: string,
   ): Promise<OpenEndpointResult>;
 }
 
@@ -191,8 +195,13 @@ export async function startLocalConnectionDaemon(options: {
       return failure;
     }
 
-    const { instanceId, remoteHost, remotePort, requestedLocalPort } =
-      owned.descriptor;
+    const {
+      instanceId,
+      remoteHost,
+      remotePort,
+      requestedLocalPort,
+      accessMethod,
+    } = owned.descriptor;
     owned.descriptor = {
       id,
       state: "failed",
@@ -200,6 +209,7 @@ export async function startLocalConnectionDaemon(options: {
       remoteHost,
       remotePort,
       ...(requestedLocalPort === undefined ? {} : { requestedLocalPort }),
+      accessMethod,
       failure,
     };
     owned.failedAt = ++failedSequence;
@@ -232,6 +242,7 @@ export async function startLocalConnectionDaemon(options: {
       ...(descriptor.requestedLocalPort === undefined
         ? {}
         : { requestedLocalPort: descriptor.requestedLocalPort }),
+      accessMethod: descriptor.accessMethod,
     };
     owned.failedAt = undefined;
   };
@@ -273,6 +284,7 @@ export async function startLocalConnectionDaemon(options: {
             input.remoteHost,
             { signal: setupController.signal },
             input.localPort,
+            input.accessMethodId,
           );
         } finally {
           pendingSetups.delete(setupController);
@@ -293,6 +305,7 @@ export async function startLocalConnectionDaemon(options: {
           ...(input.localPort === undefined
             ? {}
             : { requestedLocalPort: input.localPort }),
+          accessMethod: opened.accessMethod,
         };
         const owned: OwnedSession = { descriptor, session: opened.session };
         sessions.set(id, owned);
@@ -519,6 +532,7 @@ function parseCreateRequest(value: unknown): {
   readonly remotePort: number;
   readonly remoteHost: string;
   readonly localPort?: number;
+  readonly accessMethodId?: string;
 } {
   if (typeof value !== "object" || value === null) {
     throw new TypeError("Invalid create-session request");
@@ -551,12 +565,22 @@ function parseCreateRequest(value: unknown): {
   ) {
     throw new TypeError("localPort must be an integer between 1 and 65535");
   }
+  if (
+    input.accessMethodId !== undefined &&
+    (typeof input.accessMethodId !== "string" ||
+      input.accessMethodId.trim().length === 0)
+  ) {
+    throw new TypeError("accessMethodId must be non-empty");
+  }
 
   return {
     instanceId: input.instanceId,
     remotePort: input.remotePort,
     remoteHost: input.remoteHost ?? "127.0.0.1",
     ...(input.localPort === undefined ? {} : { localPort: input.localPort }),
+    ...(input.accessMethodId === undefined
+      ? {}
+      : { accessMethodId: input.accessMethodId }),
   };
 }
 

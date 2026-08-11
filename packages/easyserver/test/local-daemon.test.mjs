@@ -20,6 +20,12 @@ import {
   startLocalConnectionDaemon,
 } from "../dist/local-daemon.js";
 
+const DEFAULT_ACCESS_METHOD = {
+  id: "fixture-default",
+  kind: "fixture:direct",
+  mode: "tcp-forward",
+};
+
 async function createFakeGateway() {
   const sessions = new Set();
 
@@ -31,6 +37,7 @@ async function createFakeGateway() {
       _remoteHost,
       _context,
       localPort,
+      accessMethodId,
     ) {
       const server = createServer((socket) => socket.pipe(socket));
       server.listen({
@@ -68,6 +75,11 @@ async function createFakeGateway() {
 
       return {
         endpoint: { host: "127.0.0.1", port: address.port },
+        accessMethod: {
+          id: accessMethodId ?? "fixture-default",
+          kind: accessMethodId === "fixture-bastion" ? "fixture:bastion" : "fixture:direct",
+          mode: "tcp-forward",
+        },
         session,
       };
     },
@@ -174,6 +186,7 @@ test("caller-side SSH trust enrollment retries daemon session creation once", as
         }
         return {
           endpoint: { host: "127.0.0.1", port: 41000 },
+          accessMethod: DEFAULT_ACCESS_METHOD,
           session: {
             closed,
             async close() {
@@ -326,6 +339,7 @@ test("daemon shutdown aborts pending session setup", async () => {
           releaseSetup = () =>
             resolve({
               endpoint: { host: "127.0.0.1", port: 1 },
+              accessMethod: DEFAULT_ACCESS_METHOD,
               session: {
                 closed: Promise.resolve(),
                 async close() {},
@@ -483,6 +497,7 @@ test("daemon retains cleanup-failed sessions without affecting healthy sessions"
     instanceId: "instance:failed",
     remoteHost: "127.0.0.1",
     remotePort: 8188,
+    accessMethod: DEFAULT_ACCESS_METHOD,
     failure: {
       code: "plugin-failure",
       message: "Connection Session cleanup failed",
@@ -504,6 +519,7 @@ test("unexpected session closure failure remains observable and can be retried",
       async openEndpoint() {
         return {
           endpoint: { host: "127.0.0.1", port: 1 },
+          accessMethod: DEFAULT_ACCESS_METHOD,
           session: {
             closed: new Promise((_, reject) => {
               rejectClosed = reject;
@@ -534,6 +550,7 @@ test("unexpected session closure failure remains observable and can be retried",
         instanceId: "instance:fixture",
         remoteHost: "127.0.0.1",
         remotePort: 8188,
+        accessMethod: DEFAULT_ACCESS_METHOD,
         failure: {
           code: "plugin-failure",
           message: "Connection Session cleanup failed",
@@ -555,6 +572,7 @@ test("failed session retention is bounded", async () => {
       async openEndpoint() {
         return {
           endpoint: { host: "127.0.0.1", port: 1 },
+          accessMethod: DEFAULT_ACCESS_METHOD,
           session: {
             closed: new Promise((_, reject) => rejectors.push(reject)),
             async close() {},
@@ -604,16 +622,27 @@ test("daemon session creation preserves requested and actual local ports", async
       instanceId: "instance:fixed",
       remotePort: 8188,
       localPort: requestedLocalPort,
+      accessMethodId: "fixture-bastion",
     });
     assert.equal(fixed.requestedLocalPort, requestedLocalPort);
     assert.equal(fixed.endpoint.port, requestedLocalPort);
     assert.equal(fixed.endpoint.host, "127.0.0.1");
+    assert.deepEqual(fixed.accessMethod, {
+      id: "fixture-bastion",
+      kind: "fixture:bastion",
+      mode: "tcp-forward",
+    });
 
     const dynamic = await client.createSession({
       instanceId: "instance:dynamic",
       remotePort: 8188,
     });
     assert.equal(dynamic.requestedLocalPort, undefined);
+    assert.deepEqual(dynamic.accessMethod, {
+      id: "fixture-default",
+      kind: "fixture:direct",
+      mode: "tcp-forward",
+    });
     assert.ok(dynamic.endpoint.port > 0);
     assert.deepEqual(await client.listSessions(), [fixed, dynamic]);
   } finally {

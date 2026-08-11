@@ -1425,6 +1425,18 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
     "utf8",
   );
 
+  const methods = runWithState(
+    stateFile,
+    "instances",
+    "access-methods",
+    instanceId,
+  );
+  assert.equal(methods.status, 0, methods.stderr);
+  assert.equal(
+    methods.stdout,
+    "fixture-loopback kind=daemon-fixture:loopback mode=tcp-forward\n",
+  );
+
   const echo = createServer((socket) => socket.pipe(socket));
   echo.listen({ host: "127.0.0.1", port: 0, exclusive: true });
   await once(echo, "listening");
@@ -1450,10 +1462,12 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
       String(echoAddress.port),
       "--local-port",
       String(requestedLocalPort),
+      "--access-method",
+      "fixture-loopback",
     );
     assert.equal(create.status, 0, create.stderr);
     const match = create.stdout.match(
-      /^(\S+) requested-local-port=(\d+) endpoint=(127\.0\.0\.1):(\d+)$/m,
+      /^(\S+) requested-local-port=(\d+) endpoint=(127\.0\.0\.1):(\d+) access-method=fixture-loopback kind=daemon-fixture:loopback$/m,
     );
     assert.ok(match, create.stdout);
     const [, sessionId, requestedPortText, host, portText] = match;
@@ -1467,6 +1481,10 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
     assert.equal(list.status, 0, list.stderr);
     assert.match(list.stdout, new RegExp(sessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(list.stdout, new RegExp(`requested-local-port=${requestedLocalPort}`));
+    assert.match(
+      list.stdout,
+      /access-method=fixture-loopback kind=daemon-fixture:loopback/,
+    );
 
     const close = runWithDaemon(
       stateFile,
@@ -1489,7 +1507,7 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
     );
     assert.equal(second.status, 0, second.stderr);
     const secondMatch = second.stdout.match(
-      /requested-local-port=dynamic endpoint=(127\.0\.0\.1):(\d+)/,
+      /requested-local-port=dynamic endpoint=(127\.0\.0\.1):(\d+) access-method=fixture-loopback kind=daemon-fixture:loopback/,
     );
     assert.ok(secondMatch, second.stdout);
     const secondEndpoint = {

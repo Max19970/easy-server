@@ -123,8 +123,16 @@ test("foreground connect exposes a reachable EasyServer endpoint until cancellat
       instanceId: INSTANCE_ID,
       remotePort: 8080,
       localPort: requestedLocalPort,
+      accessMethodId: "echo",
       context: { signal: controller.signal },
-      onEndpoint: endpoint.resolve,
+      onEndpoint(publishedEndpoint, accessMethod) {
+        assert.deepEqual(accessMethod, {
+          id: "echo",
+          kind: "fake:echo",
+          mode: "tcp-forward",
+        });
+        endpoint.resolve(publishedEndpoint);
+      },
     });
 
     const published = await endpoint.promise;

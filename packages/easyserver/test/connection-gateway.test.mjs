@@ -76,17 +76,20 @@ function registerProvider(
 }
 
 function loopbackAdapter({
+  kind = "loopback",
   failSetup = false,
   failChannel = false,
   failFirstChannelStream = false,
   failChannelClose = false,
+  onOpen = () => {},
   onSetupCleanup,
   onTransportClose = () => {},
 } = {}) {
   let channelCount = 0;
   return {
-    kind: "loopback",
+    kind,
     async openTcpForward(_method, _providerExternalId, target, setupContext) {
+      onOpen();
       if (onSetupCleanup !== undefined) {
         setupContext.registerCleanup(onSetupCleanup);
       }
@@ -218,6 +221,91 @@ test("local Endpoint forwards TCP bytes and close releases listener and admissio
     await result.session.closed;
     assert.equal(releases, 1);
     await expectConnectionRefused(result.endpoint);
+    await echo.close();
+  });
+});
+
+test("Access Method discovery is secret-free and default selection is stable by id", async () => {
+  await withState(async (store) => {
+    const echo = await startEchoServer();
+    const providers = new ProviderRegistry();
+    const access = new AccessAdapterRegistry();
+    const selected = [];
+    const secretRef = "secret:550e8400-e29b-41d4-a716-446655440000";
+    registerProvider(providers, {
+      getAccessMethods: async () => [
+        {
+          id: "z-direct",
+          kind: "z-direct",
+          mode: "tcp-forward",
+          credentialSources: [{ kind: "secret-ref", secretRef }],
+        },
+        {
+          id: "a-bastion",
+          kind: "a-bastion",
+          mode: "tcp-forward",
+          credentialSources: [{ kind: "provider-deferred", id: "private-token" }],
+        },
+        {
+          id: "interactive-shell",
+          kind: "shell",
+          mode: "interactive",
+        },
+      ],
+      accessAdapters: [
+        loopbackAdapter({ kind: "z-direct", onOpen: () => selected.push("z-direct") }),
+        loopbackAdapter({ kind: "a-bastion", onOpen: () => selected.push("a-bastion") }),
+      ],
+    });
+    const gateway = new ConnectionGateway(providers, access, store);
+
+    assert.deepEqual(await gateway.listAccessMethods(INSTANCE_ID, operationContext()), [
+      { id: "a-bastion", kind: "a-bastion", mode: "tcp-forward" },
+      { id: "z-direct", kind: "z-direct", mode: "tcp-forward" },
+    ]);
+
+    const automatic = await gateway.openEndpoint(
+      INSTANCE_ID,
+      echo.port,
+      operationContext(),
+    );
+    assert.deepEqual(automatic.accessMethod, {
+      id: "a-bastion",
+      kind: "a-bastion",
+      mode: "tcp-forward",
+    });
+    await automatic.session.close();
+
+    const explicit = await gateway.openEndpoint(
+      INSTANCE_ID,
+      echo.port,
+      "127.0.0.1",
+      operationContext(),
+      undefined,
+      "z-direct",
+    );
+    assert.deepEqual(explicit.accessMethod, {
+      id: "z-direct",
+      kind: "z-direct",
+      mode: "tcp-forward",
+    });
+    await explicit.session.close();
+    assert.deepEqual(selected, ["a-bastion", "z-direct"]);
+
+    await assert.rejects(
+      gateway.openEndpoint(
+        INSTANCE_ID,
+        echo.port,
+        "127.0.0.1",
+        operationContext(),
+        undefined,
+        "missing-method",
+      ),
+      (error) =>
+        error?.code === "unsupported-operation" &&
+        /missing-method is not available/.test(error.message),
+    );
+    assert.deepEqual(selected, ["a-bastion", "z-direct"]);
     await echo.close();
   });
 });
