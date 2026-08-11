@@ -26,7 +26,9 @@ interface PersistentConnectionSessionBase {
   readonly remoteHost: string;
   readonly remotePort: number;
   readonly requestedLocalPort?: number;
+  readonly requestedAccessMethodId?: string;
   readonly accessMethod: AccessMethodDescriptor;
+  readonly idempotencyKey?: string;
 }
 
 export interface PersistentSessionFailure {
@@ -63,6 +65,7 @@ export interface CreatePersistentSessionRequest {
   readonly remoteHost?: string;
   readonly localPort?: number;
   readonly accessMethodId?: string;
+  readonly idempotencyKey?: string;
 }
 
 export interface LocalDaemonAddress {
@@ -85,6 +88,20 @@ interface OwnedSession {
   descriptor: PersistentConnectionSession;
   readonly session: ConnectionSession;
   failedAt?: number;
+}
+
+interface ParsedCreateSessionRequest {
+  readonly instanceId: string;
+  readonly remotePort: number;
+  readonly remoteHost: string;
+  readonly localPort?: number;
+  readonly accessMethodId?: string;
+  readonly idempotencyKey?: string;
+}
+
+interface PendingIdempotentSession {
+  readonly request: ParsedCreateSessionRequest;
+  readonly result: Promise<LivePersistentConnectionSession | undefined>;
 }
 
 export interface LocalConnectionDaemon {
@@ -180,10 +197,22 @@ export async function startLocalConnectionDaemon(options: {
   }
 
   const sessions = new Map<string, OwnedSession>();
+  const sessionIdsByIdempotencyKey = new Map<string, string>();
+  const pendingIdempotentSessions = new Map<string, PendingIdempotentSession>();
   const pendingSetups = new Set<AbortController>();
   let closing = false;
   let closePromise: Promise<void> | undefined;
   let failedSequence = 0;
+
+  const releaseIdempotencyKey = (
+    id: string,
+    descriptor: PersistentConnectionSession,
+  ): void => {
+    const key = descriptor.idempotencyKey;
+    if (key !== undefined && sessionIdsByIdempotencyKey.get(key) === id) {
+      sessionIdsByIdempotencyKey.delete(key);
+    }
+  };
 
   const markFailed = (
     id: string,
@@ -200,7 +229,9 @@ export async function startLocalConnectionDaemon(options: {
       remoteHost,
       remotePort,
       requestedLocalPort,
+      requestedAccessMethodId,
       accessMethod,
+      idempotencyKey,
     } = owned.descriptor;
     owned.descriptor = {
       id,
@@ -209,7 +240,11 @@ export async function startLocalConnectionDaemon(options: {
       remoteHost,
       remotePort,
       ...(requestedLocalPort === undefined ? {} : { requestedLocalPort }),
+      ...(requestedAccessMethodId === undefined
+        ? {}
+        : { requestedAccessMethodId }),
       accessMethod,
+      ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
       failure,
     };
     owned.failedAt = ++failedSequence;
@@ -221,6 +256,7 @@ export async function startLocalConnectionDaemon(options: {
       const [expiredId, expired] = failed.shift()!;
       if (sessions.get(expiredId) === expired) {
         sessions.delete(expiredId);
+        releaseIdempotencyKey(expiredId, expired.descriptor);
         void expired.session.close().catch(() => {});
       }
     }
@@ -242,9 +278,76 @@ export async function startLocalConnectionDaemon(options: {
       ...(descriptor.requestedLocalPort === undefined
         ? {}
         : { requestedLocalPort: descriptor.requestedLocalPort }),
+      ...(descriptor.requestedAccessMethodId === undefined
+        ? {}
+        : { requestedAccessMethodId: descriptor.requestedAccessMethodId }),
       accessMethod: descriptor.accessMethod,
+      ...(descriptor.idempotencyKey === undefined
+        ? {}
+        : { idempotencyKey: descriptor.idempotencyKey }),
     };
     owned.failedAt = undefined;
+  };
+
+  const createSession = async (
+    input: ParsedCreateSessionRequest,
+  ): Promise<LivePersistentConnectionSession | undefined> => {
+    const setupController = new AbortController();
+    pendingSetups.add(setupController);
+    let opened: OpenEndpointResult;
+    try {
+      opened = await options.gateway.openEndpoint(
+        input.instanceId,
+        input.remotePort,
+        input.remoteHost,
+        { signal: setupController.signal },
+        input.localPort,
+        input.accessMethodId,
+      );
+    } finally {
+      pendingSetups.delete(setupController);
+    }
+    if (closing) {
+      await opened.session.close();
+      return undefined;
+    }
+
+    const id = randomUUID();
+    const descriptor: LivePersistentConnectionSession = {
+      id,
+      state: "live",
+      endpoint: opened.endpoint,
+      instanceId: input.instanceId,
+      remoteHost: input.remoteHost,
+      remotePort: input.remotePort,
+      ...(input.localPort === undefined
+        ? {}
+        : { requestedLocalPort: input.localPort }),
+      ...(input.accessMethodId === undefined
+        ? {}
+        : { requestedAccessMethodId: input.accessMethodId }),
+      accessMethod: opened.accessMethod,
+      ...(input.idempotencyKey === undefined
+        ? {}
+        : { idempotencyKey: input.idempotencyKey }),
+    };
+    const owned: OwnedSession = { descriptor, session: opened.session };
+    sessions.set(id, owned);
+    if (input.idempotencyKey !== undefined) {
+      sessionIdsByIdempotencyKey.set(input.idempotencyKey, id);
+    }
+    void opened.session.closed.then(
+      () => {
+        if (sessions.get(id) === owned && owned.descriptor.state === "live") {
+          sessions.delete(id);
+          releaseIdempotencyKey(id, owned.descriptor);
+        }
+      },
+      (error) => {
+        markFailed(id, owned, error);
+      },
+    );
+    return descriptor;
   };
 
   const server = createServer(async (request, response) => {
@@ -274,55 +377,67 @@ export async function startLocalConnectionDaemon(options: {
 
       if (request.method === "POST" && request.url === "/sessions") {
         const input = parseCreateRequest(await readJson(request));
-        const setupController = new AbortController();
-        pendingSetups.add(setupController);
-        let opened: OpenEndpointResult;
-        try {
-          opened = await options.gateway.openEndpoint(
-            input.instanceId,
-            input.remotePort,
-            input.remoteHost,
-            { signal: setupController.signal },
-            input.localPort,
-            input.accessMethodId,
-          );
-        } finally {
-          pendingSetups.delete(setupController);
-        }
-        if (closing) {
-          await opened.session.close();
-          sendJson(response, 503, { message: "Daemon is shutting down" });
+        const key = input.idempotencyKey;
+
+        if (key !== undefined) {
+          const existingId = sessionIdsByIdempotencyKey.get(key);
+          if (existingId !== undefined) {
+            const existing = sessions.get(existingId);
+            if (existing === undefined) {
+              sessionIdsByIdempotencyKey.delete(key);
+            } else {
+              assertSameSessionIntent(existing.descriptor, input, key);
+              if (existing.descriptor.state !== "live") {
+                throw normalizedError(
+                  "conflict",
+                  `Idempotent Connection Session ${key} is ${existing.descriptor.state}; close it before reusing the key`,
+                );
+              }
+              sendJson(response, 200, existing.descriptor);
+              return;
+            }
+          }
+
+          const pending = pendingIdempotentSessions.get(key);
+          if (pending !== undefined) {
+            if (!sameSessionIntent(pending.request, input)) {
+              throw normalizedError(
+                "conflict",
+                `Idempotency key ${key} is already in use for a different Connection Session specification`,
+              );
+            }
+            const descriptor = await pending.result;
+            if (descriptor === undefined) {
+              sendJson(response, 503, { message: "Daemon is shutting down" });
+            } else {
+              sendJson(response, 200, descriptor);
+            }
+            return;
+          }
+
+          const result = createSession(input);
+          pendingIdempotentSessions.set(key, { request: input, result });
+          try {
+            const descriptor = await result;
+            if (descriptor === undefined) {
+              sendJson(response, 503, { message: "Daemon is shutting down" });
+            } else {
+              sendJson(response, 201, descriptor);
+            }
+          } finally {
+            if (pendingIdempotentSessions.get(key)?.result === result) {
+              pendingIdempotentSessions.delete(key);
+            }
+          }
           return;
         }
-        const id = randomUUID();
-        const descriptor: LivePersistentConnectionSession = {
-          id,
-          state: "live",
-          endpoint: opened.endpoint,
-          instanceId: input.instanceId,
-          remoteHost: input.remoteHost,
-          remotePort: input.remotePort,
-          ...(input.localPort === undefined
-            ? {}
-            : { requestedLocalPort: input.localPort }),
-          accessMethod: opened.accessMethod,
-        };
-        const owned: OwnedSession = { descriptor, session: opened.session };
-        sessions.set(id, owned);
-        void opened.session.closed.then(
-          () => {
-            if (
-              sessions.get(id) === owned &&
-              owned.descriptor.state === "live"
-            ) {
-              sessions.delete(id);
-            }
-          },
-          (error) => {
-            markFailed(id, owned, error);
-          },
-        );
-        sendJson(response, 201, descriptor);
+
+        const descriptor = await createSession(input);
+        if (descriptor === undefined) {
+          sendJson(response, 503, { message: "Daemon is shutting down" });
+        } else {
+          sendJson(response, 201, descriptor);
+        }
         return;
       }
 
@@ -349,6 +464,7 @@ export async function startLocalConnectionDaemon(options: {
         }
         if (sessions.get(id) === owned) {
           sessions.delete(id);
+          releaseIdempotencyKey(id, owned.descriptor);
         }
         sendJson(response, 200, { ok: true });
         return;
@@ -527,13 +643,39 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-function parseCreateRequest(value: unknown): {
-  readonly instanceId: string;
-  readonly remotePort: number;
-  readonly remoteHost: string;
-  readonly localPort?: number;
-  readonly accessMethodId?: string;
-} {
+function sameSessionIntent(
+  left: ParsedCreateSessionRequest,
+  right: ParsedCreateSessionRequest,
+): boolean {
+  return (
+    left.instanceId === right.instanceId &&
+    left.remoteHost === right.remoteHost &&
+    left.remotePort === right.remotePort &&
+    left.localPort === right.localPort &&
+    left.accessMethodId === right.accessMethodId
+  );
+}
+
+function assertSameSessionIntent(
+  descriptor: PersistentConnectionSession,
+  input: ParsedCreateSessionRequest,
+  key: string,
+): void {
+  if (
+    descriptor.instanceId !== input.instanceId ||
+    descriptor.remoteHost !== input.remoteHost ||
+    descriptor.remotePort !== input.remotePort ||
+    descriptor.requestedLocalPort !== input.localPort ||
+    descriptor.requestedAccessMethodId !== input.accessMethodId
+  ) {
+    throw normalizedError(
+      "conflict",
+      `Idempotency key ${key} is already in use for a different Connection Session specification`,
+    );
+  }
+}
+
+function parseCreateRequest(value: unknown): ParsedCreateSessionRequest {
   if (typeof value !== "object" || value === null) {
     throw new TypeError("Invalid create-session request");
   }
@@ -572,6 +714,14 @@ function parseCreateRequest(value: unknown): {
   ) {
     throw new TypeError("accessMethodId must be non-empty");
   }
+  if (
+    input.idempotencyKey !== undefined &&
+    (typeof input.idempotencyKey !== "string" ||
+      input.idempotencyKey.trim().length === 0 ||
+      input.idempotencyKey.length > 128)
+  ) {
+    throw new TypeError("idempotencyKey must be a non-empty string up to 128 characters");
+  }
 
   return {
     instanceId: input.instanceId,
@@ -581,6 +731,9 @@ function parseCreateRequest(value: unknown): {
     ...(input.accessMethodId === undefined
       ? {}
       : { accessMethodId: input.accessMethodId }),
+    ...(input.idempotencyKey === undefined
+      ? {}
+      : { idempotencyKey: input.idempotencyKey }),
   };
 }
 

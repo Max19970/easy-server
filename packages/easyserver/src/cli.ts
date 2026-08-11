@@ -89,7 +89,7 @@ Usage:
   easyserver instances wait <instance-id> --state <state|absent> [--timeout <seconds>]
   easyserver connect <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>] [--access-method <id>]
   easyserver daemon run
-  easyserver sessions create <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>] [--access-method <id>]
+  easyserver sessions create <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>] [--access-method <id>] [--idempotency-key <key>]
   easyserver sessions list
   easyserver sessions close <session-id>
   easyserver provider <provider-id> <feature-id> <command> [--yes] [args...]
@@ -274,7 +274,8 @@ async function runSessions(args: readonly string[]): Promise<void> {
       remoteHost,
       localPort,
       accessMethodId,
-    } = parseConnectArgs(args.slice(1), "sessions create");
+      idempotencyKey,
+    } = parseConnectArgs(args.slice(1), "sessions create", true);
     const client = await localDaemonClient();
     const request = {
       instanceId,
@@ -282,6 +283,7 @@ async function runSessions(args: readonly string[]): Promise<void> {
       ...(remoteHost === undefined ? {} : { remoteHost }),
       ...(localPort === undefined ? {} : { localPort }),
       ...(accessMethodId === undefined ? {} : { accessMethodId }),
+      ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
     };
     const session = await retryWithHostTrust(
       () => client.createSession(request),
@@ -293,7 +295,7 @@ async function runSessions(args: readonly string[]): Promise<void> {
       },
     );
     process.stdout.write(
-      `${session.id} requested-local-port=${session.requestedLocalPort ?? "dynamic"} endpoint=${session.endpoint.host}:${session.endpoint.port} access-method=${escapeTerminalText(session.accessMethod.id)} kind=${escapeTerminalText(session.accessMethod.kind)}\n`,
+      `${session.id}${session.idempotencyKey === undefined ? "" : ` idempotency-key=${escapeTerminalText(session.idempotencyKey)}`} requested-local-port=${session.requestedLocalPort ?? "dynamic"} endpoint=${session.endpoint.host}:${session.endpoint.port} access-method=${escapeTerminalText(session.accessMethod.id)} kind=${escapeTerminalText(session.accessMethod.kind)}\n`,
     );
     return;
   }
@@ -333,7 +335,7 @@ function formatPersistentSessions(
         session.state === "failed"
           ? ` error=${session.failure.code}:${escapeTerminalText(session.failure.message)}`
           : "";
-      return `${session.id} state=${session.state}${endpoint} requested-local-port=${session.requestedLocalPort ?? "dynamic"} access-method=${escapeTerminalText(session.accessMethod.id)} kind=${escapeTerminalText(session.accessMethod.kind)} instance=${session.instanceId} target=${escapeTerminalText(session.remoteHost)}:${session.remotePort}${failure}`;
+      return `${session.id} state=${session.state}${endpoint}${session.idempotencyKey === undefined ? "" : ` idempotency-key=${escapeTerminalText(session.idempotencyKey)}`} requested-local-port=${session.requestedLocalPort ?? "dynamic"} access-method=${escapeTerminalText(session.accessMethod.id)} kind=${escapeTerminalText(session.accessMethod.kind)} instance=${session.instanceId} target=${escapeTerminalText(session.remoteHost)}:${session.remotePort}${failure}`;
     })
     .join("\n")}\n`;
 }
@@ -448,12 +450,14 @@ async function confirmHostTrustInteractively(
 function parseConnectArgs(
   args: readonly string[],
   commandName = "connect",
+  allowIdempotencyKey = false,
 ): {
   readonly instanceId: string;
   readonly remotePort: number;
   readonly remoteHost?: string;
   readonly localPort?: number;
   readonly accessMethodId?: string;
+  readonly idempotencyKey?: string;
 } {
   const [instanceId, ...options] = args;
   if (instanceId === undefined || instanceId.trim().length === 0) {
@@ -464,6 +468,7 @@ function parseConnectArgs(
   let remoteHost: string | undefined;
   let localPort: number | undefined;
   let accessMethodId: string | undefined;
+  let idempotencyKey: string | undefined;
 
   for (let index = 0; index < options.length; index += 2) {
     const option = options[index];
@@ -520,6 +525,19 @@ function parseConnectArgs(
       continue;
     }
 
+    if (option === "--idempotency-key" && allowIdempotencyKey) {
+      if (idempotencyKey !== undefined) {
+        throw new CliUsageError(`${commandName} accepts --idempotency-key only once`);
+      }
+      if (value.trim().length === 0 || value.length > 128) {
+        throw new CliUsageError(
+          `${commandName} --idempotency-key must be a non-empty string up to 128 characters`,
+        );
+      }
+      idempotencyKey = value;
+      continue;
+    }
+
     throw new CliUsageError(`Unknown ${commandName} option: ${option}`);
   }
 
@@ -533,6 +551,7 @@ function parseConnectArgs(
     ...(remoteHost === undefined ? {} : { remoteHost }),
     ...(localPort === undefined ? {} : { localPort }),
     ...(accessMethodId === undefined ? {} : { accessMethodId }),
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
   };
 }
 

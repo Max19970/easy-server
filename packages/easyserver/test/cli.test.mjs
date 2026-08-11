@@ -1464,10 +1464,12 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
       String(requestedLocalPort),
       "--access-method",
       "fixture-loopback",
+      "--idempotency-key",
+      "cli-retry",
     );
     assert.equal(create.status, 0, create.stderr);
     const match = create.stdout.match(
-      /^(\S+) requested-local-port=(\d+) endpoint=(127\.0\.0\.1):(\d+) access-method=fixture-loopback kind=daemon-fixture:loopback$/m,
+      /^(\S+) idempotency-key=cli-retry requested-local-port=(\d+) endpoint=(127\.0\.0\.1):(\d+) access-method=fixture-loopback kind=daemon-fixture:loopback$/m,
     );
     assert.ok(match, create.stdout);
     const [, sessionId, requestedPortText, host, portText] = match;
@@ -1475,11 +1477,33 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
     assert.equal(Number(portText), requestedLocalPort);
     const endpoint = { host, port: Number(portText) };
 
+    const retry = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "create",
+      instanceId,
+      "--port",
+      String(echoAddress.port),
+      "--local-port",
+      String(requestedLocalPort),
+      "--access-method",
+      "fixture-loopback",
+      "--idempotency-key",
+      "cli-retry",
+    );
+    assert.equal(retry.status, 0, retry.stderr);
+    assert.match(
+      retry.stdout,
+      new RegExp(`^${sessionId} idempotency-key=cli-retry requested-local-port=${requestedLocalPort} endpoint=127\\.0\\.0\\.1:${requestedLocalPort} access-method=fixture-loopback kind=daemon-fixture:loopback$`, "m"),
+    );
+
     assert.equal(await roundTrip(endpoint, "after-cli-exit"), "after-cli-exit");
 
     const list = runWithDaemon(stateFile, daemonFile, "sessions", "list");
     assert.equal(list.status, 0, list.stderr);
     assert.match(list.stdout, new RegExp(sessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(list.stdout, /idempotency-key=cli-retry/);
     assert.match(list.stdout, new RegExp(`requested-local-port=${requestedLocalPort}`));
     assert.match(
       list.stdout,

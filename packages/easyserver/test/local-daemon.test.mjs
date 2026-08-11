@@ -650,6 +650,122 @@ test("daemon session creation preserves requested and actual local ports", async
   }
 });
 
+test("concurrent retries with one idempotency key share a single session setup", async () => {
+  const baseGateway = await createFakeGateway();
+  let openCalls = 0;
+  let markStarted;
+  const started = new Promise((resolve) => {
+    markStarted = resolve;
+  });
+  let releaseOpen;
+  const openGate = new Promise((resolve) => {
+    releaseOpen = resolve;
+  });
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint(...args) {
+        openCalls += 1;
+        markStarted();
+        await openGate;
+        return baseGateway.openEndpoint(...args);
+      },
+    },
+    authToken: "fixture-token",
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+  const request = {
+    instanceId: "instance:idempotent",
+    remotePort: 8188,
+    idempotencyKey: "retry-key",
+  };
+
+  try {
+    const firstPromise = client.createSession(request);
+    await started;
+    const secondPromise = client.createSession(request);
+    await delay(10);
+    assert.equal(openCalls, 1);
+
+    releaseOpen();
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    assert.equal(first.id, second.id);
+    assert.deepEqual(first.endpoint, second.endpoint);
+    assert.equal(first.idempotencyKey, "retry-key");
+    assert.deepEqual(await client.listSessions(), [first]);
+    assert.equal(baseGateway.sessions.size, 1);
+  } finally {
+    releaseOpen();
+    await daemon.close().catch(() => undefined);
+  }
+});
+
+test("idempotency key conflicts on a different specification", async () => {
+  const gateway = await createFakeGateway();
+  const daemon = await startLocalConnectionDaemon({
+    gateway,
+    authToken: "fixture-token",
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    const created = await client.createSession({
+      instanceId: "instance:idempotent",
+      remotePort: 8188,
+      idempotencyKey: "stable-key",
+    });
+
+    await assert.rejects(
+      client.createSession({
+        instanceId: "instance:idempotent",
+        remotePort: 22,
+        idempotencyKey: "stable-key",
+      }),
+      (error) => error?.code === "conflict",
+    );
+    assert.deepEqual(await client.listSessions(), [created]);
+    assert.equal(gateway.sessions.size, 1);
+  } finally {
+    await daemon.close().catch(() => undefined);
+  }
+});
+
+test("distinct idempotency keys allow duplicate targets and closed keys can be reused", async () => {
+  const gateway = await createFakeGateway();
+  const daemon = await startLocalConnectionDaemon({
+    gateway,
+    authToken: "fixture-token",
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+  const target = { instanceId: "instance:same-target", remotePort: 8188 };
+
+  try {
+    const first = await client.createSession({
+      ...target,
+      idempotencyKey: "first-key",
+    });
+    const second = await client.createSession({
+      ...target,
+      idempotencyKey: "second-key",
+    });
+    assert.notEqual(first.id, second.id);
+    assert.notDeepEqual(first.endpoint, second.endpoint);
+    assert.equal(gateway.sessions.size, 2);
+
+    await client.closeSession(first.id);
+    const reused = await client.createSession({
+      instanceId: "instance:changed-after-close",
+      remotePort: 22,
+      idempotencyKey: "first-key",
+    });
+    assert.notEqual(reused.id, first.id);
+    assert.equal(reused.idempotencyKey, "first-key");
+    assert.equal(gateway.sessions.size, 2);
+  } finally {
+    await daemon.close().catch(() => undefined);
+  }
+});
+
 test("authenticated daemon control owns sessions beyond one client call", async () => {
   const gateway = await createFakeGateway();
   const daemon = await startLocalConnectionDaemon({
