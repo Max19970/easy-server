@@ -4,10 +4,12 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
+  INSTANCE_STATES,
   isNormalizedError,
   normalizedError,
   type AvailableAction,
   type HostTrustRequiredError,
+  type InstanceState,
   type PluginCredentialDescriptor,
   type ProviderCliCommand,
 } from "@easyai101/easyserver-plugin-sdk";
@@ -24,6 +26,7 @@ import {
 } from "./mutation-safety.js";
 import {
   ComputeManager,
+  type InstanceWaitTarget,
   type InventoryInstance,
 } from "./compute-manager.js";
 import {
@@ -82,6 +85,7 @@ Usage:
   easyserver instances stop <instance-id>
   easyserver instances restart <instance-id>
   easyserver instances destroy <instance-id> [--yes]
+  easyserver instances wait <instance-id> --state <state|absent> [--timeout <seconds>]
   easyserver connect <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>]
   easyserver daemon run
   easyserver sessions create <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>]
@@ -660,6 +664,20 @@ async function runInstances(args: readonly string[]): Promise<void> {
       return;
     }
 
+    if (command === "wait" && instanceId !== undefined) {
+      const wait = parseInstanceWaitArgs(commandOptions);
+      const result = await manager.waitForInstance(
+        instanceId,
+        wait.target,
+        { timeoutMs: wait.timeoutMs },
+        context,
+      );
+      process.stdout.write(
+        `Reached state=${result.observedState} for ${escapeTerminalText(instanceId)}\n`,
+      );
+      return;
+    }
+
     const action = instanceAction(command);
     if (action !== undefined && instanceId !== undefined) {
       const assumeYes = parseInstanceActionOptIn(action, commandOptions);
@@ -1187,6 +1205,59 @@ function instanceAction(command: string | undefined): AvailableAction | undefine
     default:
       return undefined;
   }
+}
+
+function parseInstanceWaitArgs(options: readonly string[]): {
+  readonly target: InstanceWaitTarget;
+  readonly timeoutMs: number;
+} {
+  let target: InstanceWaitTarget | undefined;
+  let timeoutMs = 120_000;
+
+  for (let index = 0; index < options.length; index += 2) {
+    const option = options[index];
+    const value = options[index + 1];
+    if (value === undefined) {
+      throw new CliUsageError(`instances wait option requires a value: ${option}`);
+    }
+
+    if (option === "--state") {
+      if (target !== undefined) {
+        throw new CliUsageError("instances wait accepts --state only once");
+      }
+      if (
+        value !== "absent" &&
+        !INSTANCE_STATES.includes(value as InstanceState)
+      ) {
+        throw new CliUsageError(
+          `instances wait --state must be absent or a normalized state: ${INSTANCE_STATES.join(", ")}`,
+        );
+      }
+      target = value as InstanceWaitTarget;
+      continue;
+    }
+
+    if (option === "--timeout") {
+      if (timeoutMs !== 120_000) {
+        throw new CliUsageError("instances wait accepts --timeout only once");
+      }
+      const seconds = Number(value);
+      if (!Number.isInteger(seconds) || seconds < 1 || seconds > 86_400) {
+        throw new CliUsageError(
+          "instances wait --timeout must be an integer between 1 and 86400 seconds",
+        );
+      }
+      timeoutMs = seconds * 1_000;
+      continue;
+    }
+
+    throw new CliUsageError(`Unknown instances wait option: ${option}`);
+  }
+
+  if (target === undefined) {
+    throw new CliUsageError("instances wait requires --state <state|absent>");
+  }
+  return { target, timeoutMs };
 }
 
 function parseInstanceActionOptIn(

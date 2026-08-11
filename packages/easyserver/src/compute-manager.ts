@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import {
+  INSTANCE_STATES,
   isNormalizedError,
   normalizedError,
   parseProviderInstanceList,
@@ -91,6 +93,20 @@ export interface InventoryResult {
   readonly instances: readonly InventoryInstance[];
   readonly providers: readonly ProviderInventoryOutcome[];
   readonly complete: boolean;
+}
+
+export type InstanceWaitTarget = InstanceState | "absent";
+
+export interface InstanceWaitOptions {
+  readonly timeoutMs: number;
+  readonly initialPollMs?: number;
+}
+
+export interface InstanceWaitResult {
+  readonly instanceId: string;
+  readonly target: InstanceWaitTarget;
+  readonly observedState: InstanceState | "absent";
+  readonly instance?: ComputeInstance;
 }
 
 interface ProviderRefreshResult {
@@ -318,6 +334,89 @@ export class ComputeManager {
       return toComputeInstance(binding, snapshot);
     } finally {
       admission.release();
+    }
+  }
+
+  async waitForInstance(
+    id: string,
+    target: InstanceWaitTarget,
+    options: InstanceWaitOptions,
+    context: OperationContext,
+  ): Promise<InstanceWaitResult> {
+    assertWaitTarget(target);
+    if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1) {
+      throw new TypeError("wait timeoutMs must be a positive integer");
+    }
+    const initialPollMs = options.initialPollMs ?? 250;
+    if (!Number.isInteger(initialPollMs) || initialPollMs < 1) {
+      throw new TypeError("wait initialPollMs must be a positive integer");
+    }
+
+    const initialState = await this.stateStore.read();
+    const initialBinding = initialState.instances?.find(
+      (candidate) => candidate.id === id,
+    );
+    if (initialBinding === undefined) {
+      if (target === "absent") {
+        return { instanceId: id, target, observedState: "absent" };
+      }
+      throw normalizedError("not-found", `Compute Instance not found: ${id}`);
+    }
+
+    let lastObservedState: InstanceState | "unobserved" =
+      initialBinding.observation?.state ?? "unobserved";
+    let pollMs = initialPollMs;
+    const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
+    const signal = AbortSignal.any([context.signal, timeoutSignal]);
+
+    try {
+      for (;;) {
+        try {
+          const instance = await this.inspectInstance(id, { signal });
+          if (instance === undefined) {
+            if (target === "absent") {
+              return { instanceId: id, target, observedState: "absent" };
+            }
+            throw normalizedError(
+              "not-found",
+              `Compute Instance ${id} disappeared before reaching state ${target}`,
+            );
+          }
+
+          lastObservedState = instance.state;
+          if (target !== "absent" && instance.state === target) {
+            return {
+              instanceId: id,
+              target,
+              observedState: instance.state,
+              instance,
+            };
+          }
+        } catch (error) {
+          if (signal.aborted || !isRetryableWaitObservationError(error)) {
+            throw error;
+          }
+        }
+
+        await delay(pollMs, undefined, { signal });
+        pollMs = Math.min(pollMs * 2, 2_000);
+      }
+    } catch (error) {
+      if (context.signal.aborted) {
+        throw normalizedError(
+          "cancelled",
+          `Waiting for Compute Instance ${id} to reach ${target} was cancelled; last observed state=${lastObservedState}`,
+          error,
+        );
+      }
+      if (timeoutSignal.aborted) {
+        throw normalizedError(
+          "timeout",
+          `Timed out waiting for Compute Instance ${id} to reach ${target}; last observed state=${lastObservedState}`,
+          error,
+        );
+      }
+      throw error;
     }
   }
 
@@ -612,6 +711,24 @@ function reconcileProviderInventory(
       : state,
     instances,
   };
+}
+
+function assertWaitTarget(target: string): asserts target is InstanceWaitTarget {
+  if (target === "absent") {
+    return;
+  }
+  if (!INSTANCE_STATES.includes(target as InstanceState)) {
+    throw new TypeError(`Unsupported instance wait target: ${target}`);
+  }
+}
+
+function isRetryableWaitObservationError(error: unknown): boolean {
+  return (
+    isNormalizedError(error) &&
+    (error.code === "provider-unavailable" ||
+      error.code === "rate-limited" ||
+      error.code === "timeout")
+  );
 }
 
 function assertRequestedIdentity(

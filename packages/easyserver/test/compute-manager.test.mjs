@@ -381,6 +381,168 @@ test("local instance IDs survive a fresh manager and successful inventory refres
   });
 });
 
+test("wait converges on a normalized provider state by observation only", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const starting = {
+      providerExternalId: "wait-remote",
+      state: "starting",
+      rawState: "BOOTING",
+      availableActions: [],
+    };
+    const running = {
+      ...starting,
+      state: "running",
+      rawState: "READY",
+      availableActions: ["instance.stop"],
+    };
+    let getCalls = 0;
+    let mutationCalls = 0;
+    registerProvider(registry, {
+      providerId: "wait-provider",
+      capabilities: ["instance.stop"],
+      list: async () => [starting],
+      get: async () => (++getCalls < 2 ? starting : running),
+      powerAction: async () => {
+        mutationCalls += 1;
+      },
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const [instance] = await manager.listInstances(context);
+    const result = await manager.waitForInstance(
+      instance.id,
+      "running",
+      { timeoutMs: 250, initialPollMs: 5 },
+      context,
+    );
+
+    assert.equal(result.instanceId, instance.id);
+    assert.equal(result.observedState, "running");
+    assert.equal(result.instance?.state, "running");
+    assert.equal(getCalls, 2);
+    assert.equal(mutationCalls, 0);
+  });
+});
+
+test("wait reports timeout with the last observed normalized state", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const snapshot = {
+      providerExternalId: "wait-timeout",
+      state: "starting",
+      rawState: "BOOTING",
+      availableActions: [],
+    };
+    registerProvider(registry, {
+      providerId: "wait-timeout-provider",
+      capabilities: [],
+      list: async () => [snapshot],
+      get: async () => snapshot,
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const [instance] = await manager.listInstances(context);
+    await assert.rejects(
+      manager.waitForInstance(
+        instance.id,
+        "running",
+        { timeoutMs: 30, initialPollMs: 5 },
+        context,
+      ),
+      (error) =>
+        error?.code === "timeout" &&
+        /last observed state=starting/.test(error.message),
+    );
+  });
+});
+
+test("wait cancellation is explicit and does not dispatch a mutation", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const snapshot = {
+      providerExternalId: "wait-cancel",
+      state: "stopping",
+      rawState: "STOPPING",
+      availableActions: [],
+    };
+    let mutationCalls = 0;
+    registerProvider(registry, {
+      providerId: "wait-cancel-provider",
+      capabilities: ["instance.start"],
+      list: async () => [snapshot],
+      get: async () => snapshot,
+      powerAction: async () => {
+        mutationCalls += 1;
+      },
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const [instance] = await manager.listInstances(context);
+    const controller = new AbortController();
+    const waiting = manager.waitForInstance(
+      instance.id,
+      "stopped",
+      { timeoutMs: 500, initialPollMs: 50 },
+      { signal: controller.signal },
+    );
+    await delay(10);
+    controller.abort();
+
+    await assert.rejects(
+      waiting,
+      (error) =>
+        error?.code === "cancelled" &&
+        /last observed state=stopping/.test(error.message),
+    );
+    assert.equal(mutationCalls, 0);
+  });
+});
+
+test("wait can converge on confirmed absence without repeating destroy", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    const snapshot = {
+      providerExternalId: "wait-absent",
+      state: "terminating",
+      rawState: "DELETING",
+      availableActions: [],
+    };
+    let getCalls = 0;
+    let destroyCalls = 0;
+    registerProvider(registry, {
+      providerId: "wait-absent-provider",
+      capabilities: ["instance.destroy"],
+      list: async () => [snapshot],
+      get: async () => (++getCalls === 1 ? snapshot : undefined),
+      destroy: async () => {
+        destroyCalls += 1;
+      },
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const [instance] = await manager.listInstances(context);
+    const result = await manager.waitForInstance(
+      instance.id,
+      "absent",
+      { timeoutMs: 250, initialPollMs: 5 },
+      context,
+    );
+
+    assert.deepEqual(result, {
+      instanceId: instance.id,
+      target: "absent",
+      observedState: "absent",
+    });
+    assert.equal(getCalls, 2);
+    assert.equal(destroyCalls, 0);
+    assert.equal(
+      (await store.read()).instances?.some((binding) => binding.id === instance.id) ?? false,
+      false,
+    );
+  });
+});
+
 test("per-instance available actions gate lifecycle mutations without a core state table", async () => {
   await withStore(async (store) => {
     const registry = new ProviderRegistry();

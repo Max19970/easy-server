@@ -921,6 +921,30 @@ test("lists and inspects compute instances through configured providers", () => 
     name: "Fixture GPU",
   });
 
+  const waitRunning = runWithState(
+    stateFile,
+    "instances",
+    "wait",
+    instanceId,
+    "--state",
+    "running",
+    "--timeout",
+    "1",
+  );
+  assert.equal(waitRunning.status, 0, waitRunning.stderr);
+  assert.equal(waitRunning.stdout, `Reached state=running for ${instanceId}\n`);
+
+  const invalidWait = runWithState(
+    stateFile,
+    "instances",
+    "wait",
+    instanceId,
+    "--state",
+    "ready-ish",
+  );
+  assert.equal(invalidWait.status, 1);
+  assert.match(invalidWait.stderr, /normalized state/);
+
   const adopt = runWithState(stateFile, "instances", "adopt", instanceId);
   assert.equal(adopt.status, 0);
   assert.equal(adopt.stdout, `Adopted ${instanceId} for EasyServer management\n`);
