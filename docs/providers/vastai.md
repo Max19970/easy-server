@@ -43,11 +43,13 @@ easyserver plugins credential set @easyai101/easyserver-plugin-vastai api-key --
 Remove-Item Env:VAST_API_KEY
 ```
 
-Confirm the plugin is loaded:
+Confirm the plugin is loaded and credential-ready:
 
 ```sh
 easyserver plugins list
 ```
+
+The Vast.ai plugin declares `api-key` as its required credential name. Before configuration, the status reports `credentials=missing:api-key`; after the opaque Secret Reference is bound, it reports `credentials=ready` without reading or printing the API key.
 
 ## 3. Search the marketplace
 

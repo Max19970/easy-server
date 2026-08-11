@@ -6,7 +6,8 @@ Read `index.mjs` from top to bottom: it demonstrates the recommended minimum ext
 
 - manifest identity plus EasyServer/Plugin SDK compatibility ranges;
 - a normalized Provider Adapter with inventory and authoritative `getInstance()` behavior;
-- resolving a plugin-owned named credential (`api-key`) through `context.resolveCredential()` instead of storing raw secrets;
+- declaring `api-key` as a required credential in manifest metadata so the host can validate names and expose readiness without reading the secret;
+- resolving that plugin-owned named credential through `context.resolveCredential()` instead of storing raw secrets;
 - a secret-free SSH Access Method while leaving generic SSH transport to EasyServer's built-in Access Adapter;
 - a provider-owned `catalog/show` CLI command contributed through a Provider Feature;
 - no lifecycle capabilities or custom Access Adapter when the example does not actually need them.

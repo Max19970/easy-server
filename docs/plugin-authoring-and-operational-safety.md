@@ -69,6 +69,13 @@ const plugin: ProviderPlugin = {
       easyserver: "^0.1.0",
       pluginSdk: "^0.1.0",
     },
+    credentials: [
+      {
+        name: "api-key",
+        required: true,
+        description: "Example Provider API key",
+      },
+    ],
     provider: {
       id: "example",
       displayName: "Example Provider",
@@ -82,6 +89,8 @@ export default plugin;
 ```
 
 The manifest Provider ID and `provider.providerId` must agree. IDs are stable API identity, not display text.
+
+`manifest.credentials` is optional for backward compatibility, but new plugins should declare every plugin-owned name that may be passed to `context.resolveCredential(name)`. Names are stable machine identity; `required` describes setup readiness, and `description` is secret-free user guidance. Do not put example secret values, account-specific identifiers or transport/auth payloads in these descriptors.
 
 `ProviderAdapter.getInstance()` has one deletion boundary: return `undefined` only when the provider can authoritatively confirm that the requested resource no longer exists. Authentication failures, rate limits, transport failures, provider outages, eventual-consistency gaps and other inconclusive lookups must reject with an appropriate normalized error instead. EasyServer preserves the canonical `instance:<uuid>` binding across those uncertain failures; a definitive `undefined` may remove it. The same rule applies to inspect, lifecycle preflight and post-mutation reconciliation.
 
@@ -324,7 +333,11 @@ easyserver plugins credential set @example/easyserver-provider api-key --env EXA
 Remove-Item Env:EXAMPLE_API_KEY
 ```
 
-EasyServer persists only an opaque `secret:<uuid>` reference. The plugin resolves the configured credential by its plugin-owned stable name:
+EasyServer persists only an opaque `secret:<uuid>` reference. When a plugin declares `manifest.credentials`, `plugins credential set/remove` rejects unknown names before changing the Secret Store; this catches spelling mistakes such as `api-kye` before the first provider request. Plugins that omit credential metadata retain the `0.1.x` legacy behavior and may still use arbitrary non-empty names.
+
+`easyserver plugins list` derives readiness from configured **Secret References only**. A missing required binding appears as `credentials=missing:<name>`; when every required descriptor has a configured reference it appears as `credentials=ready`. Readiness does not resolve or display the secret value, and optional credentials do not make an otherwise configured plugin unready.
+
+The plugin resolves the configured credential by its plugin-owned stable name:
 
 ```ts
 const apiKey = await context.resolveCredential("api-key");

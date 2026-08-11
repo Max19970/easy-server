@@ -39,11 +39,13 @@ easyserver plugins credential set @easyai101/easyserver-plugin-intelion api-toke
 Remove-Item Env:INTELION_API_TOKEN
 ```
 
-Confirm the plugin is loaded:
+Confirm the plugin is loaded and credential-ready:
 
 ```sh
 easyserver plugins list
 ```
+
+The Intelion.cloud plugin declares `api-token` as its required credential name. Before configuration, the status reports `credentials=missing:api-token`; after the opaque Secret Reference is bound, it reports `credentials=ready` without reading or printing the API token.
 
 ## 3. Discover the provider catalog
 
