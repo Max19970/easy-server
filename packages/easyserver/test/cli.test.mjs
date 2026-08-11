@@ -16,6 +16,9 @@ const validPlugin = fileURLToPath(
 const brokenPlugin = fileURLToPath(
   new URL("./fixtures/broken-plugin.mjs", import.meta.url),
 );
+const credentialPlugin = fileURLToPath(
+  new URL("./fixtures/credential-plugin.mjs", import.meta.url),
+);
 const inventoryPlugin = fileURLToPath(
   new URL("./fixtures/inventory-plugin.mjs", import.meta.url),
 );
@@ -187,9 +190,13 @@ function run(...args) {
 }
 
 function runWithState(stateFile, ...args) {
+  return runWithStateEnv(stateFile, {}, ...args);
+}
+
+function runWithStateEnv(stateFile, extraEnv, ...args) {
   return spawnSync(process.execPath, [cli, ...args], {
     encoding: "utf8",
-    env: { ...process.env, EASYSERVER_STATE_FILE: stateFile },
+    env: { ...process.env, ...extraEnv, EASYSERVER_STATE_FILE: stateFile },
   });
 }
 
@@ -415,15 +422,18 @@ test("published CLI entrypoint is directly executable by Node-compatible shells"
 });
 
 test("loads first-party workspace packages as explicit provider plugins", () => {
-  for (const [source, providerId] of [
-    ["@easyai101/easyserver-plugin-vastai", "vastai"],
-    [intelionPlugin, "intelion"],
+  for (const [source, providerId, credentialName] of [
+    ["@easyai101/easyserver-plugin-vastai", "vastai", "api-key"],
+    [intelionPlugin, "intelion", "api-token"],
   ]) {
     const result = run("plugins", "list", "--plugin", source);
     assert.equal(result.status, 0);
     assert.match(
       result.stdout,
-      new RegExp(`^loaded\\s+${providerId} provider=${providerId}$`, "m"),
+      new RegExp(
+        `^loaded\\s+${providerId} provider=${providerId} credentials=missing:${credentialName}$`,
+        "m",
+      ),
     );
   }
 });
@@ -505,6 +515,68 @@ test("plugin credential command never requires the secret in argv", () => {
   );
   assert.equal(missingEnv.status, 1);
   assert.match(missingEnv.stderr, /Environment variable is empty or missing/);
+});
+
+test("plugins list exposes declared credential readiness without secret values", async () => {
+  const stateFile = join(testDirectory, "credential-readiness-state.json");
+  const secretRef = "secret:550e8400-e29b-41d4-a716-446655440000";
+  const store = new JsonStateStore(stateFile);
+  await store.write({
+    version: 1,
+    plugins: [{ source: credentialPlugin, enabled: true }],
+  });
+
+  const missing = runWithState(stateFile, "plugins", "list");
+  assert.equal(missing.status, 0, missing.stderr);
+  assert.match(
+    missing.stdout,
+    /^loaded\s+fixture\.credentials provider=credential-fixture credentials=missing:api-key$/m,
+  );
+
+  await store.write({
+    version: 1,
+    plugins: [
+      {
+        source: credentialPlugin,
+        enabled: true,
+        credentials: [{ name: "api-key", secretRef }],
+      },
+    ],
+  });
+  const ready = runWithState(stateFile, "plugins", "list");
+  assert.equal(ready.status, 0, ready.stderr);
+  assert.match(
+    ready.stdout,
+    /^loaded\s+fixture\.credentials provider=credential-fixture credentials=ready$/m,
+  );
+  assert.equal(ready.stdout.includes(secretRef), false);
+});
+
+test("credential set rejects undeclared names before touching the OS keyring", async () => {
+  const stateFile = join(testDirectory, "credential-typo-state.json");
+  assert.equal(
+    runWithState(stateFile, "plugins", "add", credentialPlugin).status,
+    0,
+  );
+
+  const result = runWithStateEnv(
+    stateFile,
+    { EASYSERVER_TEST_CREDENTIAL_VALUE: "never-store-this" },
+    "plugins",
+    "credential",
+    "set",
+    credentialPlugin,
+    "api-kye",
+    "--env",
+    "EASYSERVER_TEST_CREDENTIAL_VALUE",
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /does not declare credential api-kye/);
+  assert.match(result.stderr, /Allowed credentials: api-key, profile/);
+  assert.equal(result.stderr.includes("never-store-this"), false);
+  const persisted = JSON.parse(await readFile(stateFile, "utf8"));
+  assert.equal(persisted.plugins[0].credentials, undefined);
 });
 
 test("enable and disable preserve provider credential references", async () => {

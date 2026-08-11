@@ -57,6 +57,13 @@ export function createVastProviderPlugin(
         easyserver: "^0.1.0",
         pluginSdk: "^0.1.0",
       },
+      credentials: [
+        {
+          name: VAST_API_KEY_CREDENTIAL,
+          required: true,
+          description: "Vast.ai API key",
+        },
+      ],
       provider: {
         id: "vastai",
         displayName: "Vast.ai",

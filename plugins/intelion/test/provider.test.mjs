@@ -24,6 +24,16 @@ function json(body, status = 200) {
   });
 }
 
+test("declares the required Intelion API credential", () => {
+  assert.deepEqual(createIntelionProviderPlugin().manifest.credentials, [
+    {
+      name: INTELION_API_TOKEN_CREDENTIAL,
+      required: true,
+      description: "Intelion.cloud API token",
+    },
+  ]);
+});
+
 test("lists all Intelion cloud-server pages with Token authentication", async () => {
   const calls = [];
   const plugin = createIntelionProviderPlugin({

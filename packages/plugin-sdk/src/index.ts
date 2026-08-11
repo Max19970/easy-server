@@ -47,11 +47,21 @@ export interface PluginCompatibility {
   readonly pluginSdk: string;
 }
 
+export interface PluginCredentialDescriptor {
+  /** Stable plugin-owned name passed to context.resolveCredential(name). */
+  readonly name: string;
+  /** Whether normal plugin operation requires this credential to be configured. */
+  readonly required: boolean;
+  /** User-facing setup guidance; must never contain secret values. */
+  readonly description?: string;
+}
+
 export interface PluginManifest {
   readonly id: string;
   readonly displayName: string;
   readonly version: string;
   readonly compatibility: PluginCompatibility;
+  readonly credentials?: readonly PluginCredentialDescriptor[];
   readonly provider: ProviderIdentity & {
     readonly capabilities: readonly ProviderCapability[];
   };
@@ -448,6 +458,10 @@ export function parsePluginManifest(value: unknown): PluginManifest {
   );
   const provider = expectRecord(manifest.provider, "plugin manifest.provider");
 
+  const credentials = parsePluginCredentialDescriptors(
+    manifest.credentials,
+    "plugin manifest.credentials",
+  );
   const parsed: PluginManifest = {
     id: expectId(manifest.id, "plugin manifest.id"),
     displayName: expectNonEmptyString(
@@ -465,6 +479,7 @@ export function parsePluginManifest(value: unknown): PluginManifest {
         "plugin manifest.compatibility.pluginSdk",
       ),
     },
+    ...(credentials === undefined ? {} : { credentials }),
     provider: {
       id: expectId(provider.id, "plugin manifest.provider.id"),
       displayName: expectNonEmptyString(
@@ -479,6 +494,45 @@ export function parsePluginManifest(value: unknown): PluginManifest {
   };
 
   return parsed;
+}
+
+function parsePluginCredentialDescriptors(
+  value: unknown,
+  path: string,
+): readonly PluginCredentialDescriptor[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new PluginContractError(`${path} must be an array`);
+  }
+
+  const descriptors: PluginCredentialDescriptor[] = [];
+  const seen = new Set<string>();
+  for (const [index, candidate] of value.entries()) {
+    const descriptor = expectRecord(candidate, `${path}[${index}]`);
+    const name = expectId(descriptor.name, `${path}[${index}].name`);
+    if (seen.has(name)) {
+      throw new PluginContractError(`${path} contains duplicate name: ${name}`);
+    }
+    if (typeof descriptor.required !== "boolean") {
+      throw new PluginContractError(`${path}[${index}].required must be a boolean`);
+    }
+    const description =
+      descriptor.description === undefined
+        ? undefined
+        : expectNonEmptyString(
+            descriptor.description,
+            `${path}[${index}].description`,
+          );
+    seen.add(name);
+    descriptors.push({
+      name,
+      required: descriptor.required,
+      ...(description === undefined ? {} : { description }),
+    });
+  }
+  return descriptors;
 }
 
 export function parseProviderPlugin(value: unknown): ProviderPlugin {

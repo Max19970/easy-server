@@ -1,4 +1,7 @@
-import type { SecretReference } from "@easyai101/easyserver-plugin-sdk";
+import type {
+  PluginCredentialDescriptor,
+  SecretReference,
+} from "@easyai101/easyserver-plugin-sdk";
 import type { SecretStore } from "./secret-store.js";
 import {
   JsonStateStore,
@@ -16,8 +19,10 @@ export async function setPluginCredential(
   source: string,
   name: string,
   secret: string,
+  declaredCredentials?: readonly PluginCredentialDescriptor[],
 ): Promise<CredentialUpdateResult> {
   assertCredentialName(name);
+  assertDeclaredCredentialName(name, declaredCredentials);
   findPlugin((await stateStore.read()).plugins, source);
 
   const newSecretRef = await secretStore.create(secret);
@@ -71,8 +76,10 @@ export async function removePluginCredential(
   secretStore: SecretStore,
   source: string,
   name: string,
+  declaredCredentials?: readonly PluginCredentialDescriptor[],
 ): Promise<CredentialUpdateResult> {
   assertCredentialName(name);
+  assertDeclaredCredentialName(name, declaredCredentials);
   let previousSecretRef: SecretReference | undefined;
 
   await stateStore.update((state) => {
@@ -162,4 +169,22 @@ function assertCredentialName(name: string): void {
   if (name.trim().length === 0) {
     throw new TypeError("plugin credential name must be non-empty");
   }
+}
+
+function assertDeclaredCredentialName(
+  name: string,
+  declaredCredentials: readonly PluginCredentialDescriptor[] | undefined,
+): void {
+  if (declaredCredentials === undefined) {
+    return;
+  }
+  if (declaredCredentials.some((credential) => credential.name === name)) {
+    return;
+  }
+  const allowed = declaredCredentials.map((credential) => credential.name);
+  throw new Error(
+    allowed.length === 0
+      ? `Plugin declares no configurable credentials; rejected credential: ${name}`
+      : `Plugin does not declare credential ${name}. Allowed credentials: ${allowed.join(", ")}`,
+  );
 }

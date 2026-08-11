@@ -44,6 +44,86 @@ test("binds a plugin credential through an opaque secret reference only", async 
   );
 });
 
+test("declared credential names reject typos before creating a secret", async () => {
+  const { store } = await fixture();
+  let createCalls = 0;
+  const secrets = {
+    async create() {
+      createCalls += 1;
+      throw new Error("secret creation must not be reached");
+    },
+    async get() {
+      return undefined;
+    },
+    async delete() {
+      return true;
+    },
+  };
+
+  await assert.rejects(
+    setPluginCredential(
+      store,
+      secrets,
+      "@easyai101/easyserver-plugin-vastai",
+      "api-kye",
+      "top-secret-api-key",
+      [
+        {
+          name: "api-key",
+          required: true,
+          description: "Vast.ai API key",
+        },
+      ],
+    ),
+    /does not declare credential api-kye.*Allowed credentials: api-key/,
+  );
+  assert.equal(createCalls, 0);
+  assert.equal((await store.read()).plugins[0].credentials, undefined);
+});
+
+test("legacy plugins without credential metadata keep arbitrary credential names", async () => {
+  const { store, secrets } = await fixture();
+
+  await setPluginCredential(
+    store,
+    secrets,
+    "@easyai101/easyserver-plugin-vastai",
+    "legacy-custom-name",
+    "legacy-secret",
+  );
+
+  assert.equal(
+    (await store.read()).plugins[0].credentials[0].name,
+    "legacy-custom-name",
+  );
+});
+
+test("declared credential validation also protects remove from unknown names", async () => {
+  const { store, secrets } = await fixture();
+  await setPluginCredential(
+    store,
+    secrets,
+    "@easyai101/easyserver-plugin-vastai",
+    "legacy-custom-name",
+    "legacy-secret",
+  );
+
+  await assert.rejects(
+    removePluginCredential(
+      store,
+      secrets,
+      "@easyai101/easyserver-plugin-vastai",
+      "legacy-custom-name",
+      [{ name: "api-key", required: true }],
+    ),
+    /does not declare credential legacy-custom-name/,
+  );
+  assert.equal(
+    (await store.read()).plugins[0].credentials[0].name,
+    "legacy-custom-name",
+  );
+});
+
 test("concurrent credential updates preserve every binding and secret", async () => {
   const { store, secrets } = await fixture();
   const secondStore = new JsonStateStore(store.path);

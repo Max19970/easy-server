@@ -36,6 +36,7 @@ try {
     absentPackageName: "@easyai101/easyserver-plugin-intelion",
     sdkTarball,
     cliTarball,
+    requiredCredentialName: "api-key",
   });
   await verifyPluginInstall({
     packageName: "@easyai101/easyserver-plugin-intelion",
@@ -44,6 +45,7 @@ try {
     absentPackageName: "@easyai101/easyserver-plugin-vastai",
     sdkTarball,
     cliTarball,
+    requiredCredentialName: "api-token",
   });
   await verifyPluginInstall({
     packageName: "@easyai101/easyserver-example-provider",
@@ -55,6 +57,7 @@ try {
     cliTarball,
     providerCommand: ["provider", "example", "catalog", "show"],
     providerCommandOutput: "example-offer gpu=ExampleGPU price=0.00\n",
+    requiredCredentialName: "api-key",
   });
   await verifyPluginInstall({
     packageName: "@easyai101/easyserver-external-ts-provider",
@@ -366,6 +369,7 @@ async function verifyPluginInstall({
   cliTarball,
   providerCommand,
   providerCommandOutput,
+  requiredCredentialName,
 }) {
   const prefix = await createPrefix(providerId);
   installGlobally(prefix, sdkTarball, cliTarball);
@@ -380,7 +384,17 @@ async function verifyPluginInstall({
   assert.equal(add.stdout, `Added ${pluginId}\n`);
 
   const list = runCli(prefix, "plugins", "list");
-  assert.match(list.stdout, new RegExp(`^loaded\\s+${pluginId} provider=${providerId}$`, "m"));
+  const credentialStatus =
+    requiredCredentialName === undefined
+      ? ""
+      : ` credentials=missing:${requiredCredentialName}`;
+  assert.match(
+    list.stdout,
+    new RegExp(
+      `^loaded\\s+${pluginId} provider=${providerId}${credentialStatus}$`,
+      "m",
+    ),
+  );
 
   if (providerCommand !== undefined) {
     assert.equal(runCli(prefix, ...providerCommand).stdout, providerCommandOutput);
@@ -422,7 +436,7 @@ async function verifyPackageLifecycle(sdkTarball, cliTarball, pluginTarball) {
   );
   assert.match(
     runCli(prefix, "plugins", "list").stdout,
-    /^loaded\s+example\.provider-plugin provider=example$/m,
+    /^loaded\s+example\.provider-plugin provider=example credentials=ready$/m,
   );
 
   uninstallGlobally(prefix, pluginPackage);
@@ -438,7 +452,7 @@ async function verifyPackageLifecycle(sdkTarball, cliTarball, pluginTarball) {
   installGlobally(prefix, sdkTarball, pluginTarball);
   assert.match(
     runCli(prefix, "plugins", "list").stdout,
-    /^loaded\s+example\.provider-plugin provider=example$/m,
+    /^loaded\s+example\.provider-plugin provider=example credentials=ready$/m,
   );
   assert.equal(await readFile(statePath, "utf8"), expectedState);
 
@@ -453,7 +467,7 @@ async function verifyPackageLifecycle(sdkTarball, cliTarball, pluginTarball) {
   installGlobally(prefix, sdkTarball, cliTarball);
   assert.match(
     runCli(prefix, "plugins", "list").stdout,
-    /^loaded\s+example\.provider-plugin provider=example$/m,
+    /^loaded\s+example\.provider-plugin provider=example credentials=ready$/m,
   );
   assert.equal(await readFile(statePath, "utf8"), expectedState);
 }

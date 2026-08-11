@@ -63,6 +63,13 @@ export default {
       easyserver: "^0.1.0",
       pluginSdk: `^${PLUGIN_SDK_VERSION}`,
     },
+    credentials: [
+      {
+        name: API_KEY_CREDENTIAL,
+        required: true,
+        description: "Example Provider API key",
+      },
+    ],
     provider: {
       id: "example",
       displayName: "Example Provider",

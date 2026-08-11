@@ -7,6 +7,7 @@ import {
   isNormalizedError,
   type AvailableAction,
   type HostTrustRequiredError,
+  type PluginCredentialDescriptor,
 } from "@easyai101/easyserver-plugin-sdk";
 import { AccessAdapterRegistry } from "./access-adapter-registry.js";
 import {
@@ -630,6 +631,11 @@ async function runPluginCredential(
     variable !== undefined &&
     args.length === 5
   ) {
+    const source = persistedPluginSource(rawSource);
+    const declaredCredentials = await configuredPluginCredentialDescriptors(
+      store,
+      source,
+    );
     const secret = process.env[variable];
     if (secret === undefined || secret.length === 0) {
       throw new Error(`Environment variable is empty or missing: ${variable}`);
@@ -637,9 +643,10 @@ async function runPluginCredential(
     const result = await setPluginCredential(
       store,
       new OsKeyringSecretStore(),
-      persistedPluginSource(rawSource),
+      source,
       name,
       secret,
+      declaredCredentials,
     );
     process.stdout.write(
       `Configured credential ${escapeTerminalText(name)} for ${escapeTerminalText(rawSource)}\n`,
@@ -658,11 +665,17 @@ async function runPluginCredential(
     name !== undefined &&
     args.length === 3
   ) {
+    const source = persistedPluginSource(rawSource);
+    const declaredCredentials = await configuredPluginCredentialDescriptors(
+      store,
+      source,
+    );
     const result = await removePluginCredential(
       store,
       new OsKeyringSecretStore(),
-      persistedPluginSource(rawSource),
+      source,
       name,
+      declaredCredentials,
     );
     process.stdout.write(
       `Removed credential ${escapeTerminalText(name)} from ${escapeTerminalText(rawSource)}\n`,
@@ -677,6 +690,31 @@ async function runPluginCredential(
 
   throw new CliUsageError(
     "plugins credential expects set <module> <name> --env <variable> or remove <module> <name>",
+  );
+}
+
+async function configuredPluginCredentialDescriptors(
+  store: JsonStateStore,
+  source: string,
+): Promise<readonly PluginCredentialDescriptor[] | undefined> {
+  const state = await store.read();
+  const index = findConfiguredPlugin(state.plugins, source);
+  const registration = state.plugins[index];
+  const host = new PluginHost(new ProviderRegistry());
+  await host.load([
+    {
+      source,
+      ...(registration.credentials === undefined
+        ? {}
+        : { credentials: registration.credentials }),
+    },
+  ]);
+  const status = host.listPlugins()[0];
+  if (status?.state !== "loaded" || status.credentials === undefined) {
+    return undefined;
+  }
+  return status.credentials.map(({ configured: _configured, ...descriptor }) =>
+    descriptor,
   );
 }
 

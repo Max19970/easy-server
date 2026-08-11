@@ -27,6 +27,16 @@ function json(body, status = 200) {
   });
 }
 
+test("declares the required Vast.ai API credential", () => {
+  assert.deepEqual(createVastProviderPlugin().manifest.credentials, [
+    {
+      name: VAST_API_KEY_CREDENTIAL,
+      required: true,
+      description: "Vast.ai API key",
+    },
+  ]);
+});
+
 test("lists all Vast.ai instance pages with Bearer authentication", async () => {
   const calls = [];
   const plugin = createVastProviderPlugin({

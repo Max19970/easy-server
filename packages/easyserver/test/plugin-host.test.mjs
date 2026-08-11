@@ -378,6 +378,65 @@ test("provider collisions fail without replacing the healthy registration", asyn
   assert.equal(registry.acquire("fake")?.pluginId, "plugin.one");
 });
 
+test("credential readiness is derived from declared names and opaque bindings only", async () => {
+  const candidate = plugin();
+  candidate.manifest.credentials = [
+    {
+      name: "api-key",
+      required: true,
+      description: "Provider API key",
+    },
+    { name: "profile", required: false },
+  ];
+  let secretReads = 0;
+  const secretStore = {
+    async get() {
+      secretReads += 1;
+      throw new Error("readiness must not read secret values");
+    },
+  };
+
+  const configuredHost = new PluginHost(
+    new ProviderRegistry(),
+    async () => candidate,
+  );
+  await configuredHost.load(
+    [
+      {
+        source: "configured",
+        credentials: [
+          {
+            name: "api-key",
+            secretRef: "secret:550e8400-e29b-41d4-a716-446655440000",
+          },
+        ],
+      },
+    ],
+    secretStore,
+  );
+  assert.deepEqual(configuredHost.listPlugins()[0].credentials, [
+    {
+      name: "api-key",
+      required: true,
+      description: "Provider API key",
+      configured: true,
+    },
+    { name: "profile", required: false, configured: false },
+  ]);
+  assert.match(
+    formatPluginStatuses(configuredHost.listPlugins()),
+    /credentials=ready/,
+  );
+
+  const missingHost = new PluginHost(new ProviderRegistry(), async () => candidate);
+  await missingHost.load(["missing"], secretStore);
+  assert.match(
+    formatPluginStatuses(missingHost.listPlugins()),
+    /credentials=missing:api-key/,
+  );
+  assert.equal(secretReads, 0);
+});
+
 test("formats loaded, disabled, and failed diagnostics distinctly", async () => {
   const registry = new ProviderRegistry();
   const host = new PluginHost(registry, async (source) => {

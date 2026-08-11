@@ -58,6 +58,13 @@ export function createIntelionProviderPlugin(
         easyserver: "^0.1.0",
         pluginSdk: "^0.1.0",
       },
+      credentials: [
+        {
+          name: INTELION_API_TOKEN_CREDENTIAL,
+          required: true,
+          description: "Intelion.cloud API token",
+        },
+      ],
       provider: {
         id: "intelion",
         displayName: "Intelion.cloud",

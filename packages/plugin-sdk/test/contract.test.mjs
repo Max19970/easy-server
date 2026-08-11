@@ -92,6 +92,58 @@ test("rejects malformed manifests at the plugin boundary", () => {
   );
 });
 
+test("validates optional plugin credential descriptors", () => {
+  assert.deepEqual(
+    parsePluginManifest({
+      ...validManifest,
+      credentials: [
+        {
+          name: "api-key",
+          required: true,
+          description: "Provider API key",
+        },
+        { name: "profile", required: false },
+      ],
+    }).credentials,
+    [
+      {
+        name: "api-key",
+        required: true,
+        description: "Provider API key",
+      },
+      { name: "profile", required: false },
+    ],
+  );
+  assert.equal(parsePluginManifest(validManifest).credentials, undefined);
+  assert.throws(
+    () =>
+      parsePluginManifest({
+        ...validManifest,
+        credentials: [
+          { name: "api-key", required: true },
+          { name: "api-key", required: false },
+        ],
+      }),
+    /duplicate name/,
+  );
+  assert.throws(
+    () =>
+      parsePluginManifest({
+        ...validManifest,
+        credentials: [{ name: "API key", required: true }],
+      }),
+    /must start with a lowercase letter/,
+  );
+  assert.throws(
+    () =>
+      parsePluginManifest({
+        ...validManifest,
+        credentials: [{ name: "api-key", required: "yes" }],
+      }),
+    /required must be a boolean/,
+  );
+});
+
 test("declared lifecycle capabilities require matching adapter methods", () => {
   const withoutPowerAction = provider();
   delete withoutPowerAction.performPowerAction;

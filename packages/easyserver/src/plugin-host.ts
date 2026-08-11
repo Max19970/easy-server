@@ -6,6 +6,7 @@ import {
   parseProviderPlugin,
   PLUGIN_SDK_VERSION,
   type AccessAdapter,
+  type PluginCredentialDescriptor,
   type ProviderFeature,
   type ProviderPlugin,
   type SecretReference,
@@ -26,6 +27,10 @@ const DEFAULT_PLUGIN_LOAD_TIMEOUT_MS = 10_000;
 
 export type PluginState = "loaded" | "disabled" | "failed";
 
+export interface PluginCredentialStatus extends PluginCredentialDescriptor {
+  readonly configured: boolean;
+}
+
 export interface PluginStatus {
   readonly source: string;
   readonly state: PluginState;
@@ -33,6 +38,7 @@ export interface PluginStatus {
   readonly displayName?: string;
   readonly version?: string;
   readonly providerId?: string;
+  readonly credentials?: readonly PluginCredentialStatus[];
   readonly error?: string;
 }
 
@@ -258,6 +264,12 @@ class PluginRuntime {
   }
 
   status(source: string): PluginStatus {
+    const credentials = this.#plugin.manifest.credentials?.map(
+      (descriptor): PluginCredentialStatus => ({
+        ...descriptor,
+        configured: this.#credentials.has(descriptor.name),
+      }),
+    );
     return {
       source,
       state: this.#admitting ? "loaded" : "disabled",
@@ -265,6 +277,7 @@ class PluginRuntime {
       displayName: this.#plugin.manifest.displayName,
       version: this.#plugin.manifest.version,
       providerId: this.providerId,
+      ...(credentials === undefined ? {} : { credentials }),
     };
   }
 }
@@ -282,12 +295,27 @@ export function formatPluginStatuses(
       const provider = status.providerId === undefined
         ? ""
         : ` provider=${escapeTerminalText(status.providerId)}`;
+      const credentials = formatCredentialReadiness(status.credentials);
       const error = status.error === undefined
         ? ""
         : ` error=${escapeTerminalText(status.error)}`;
-      return `${status.state.padEnd(8)} ${label}${provider}${error}`;
+      return `${status.state.padEnd(8)} ${label}${provider}${credentials}${error}`;
     })
     .join("\n")}\n`;
+}
+
+function formatCredentialReadiness(
+  credentials: readonly PluginCredentialStatus[] | undefined,
+): string {
+  if (credentials === undefined) {
+    return "";
+  }
+  const missingRequired = credentials
+    .filter((credential) => credential.required && !credential.configured)
+    .map((credential) => escapeTerminalText(credential.name));
+  return missingRequired.length === 0
+    ? " credentials=ready"
+    : ` credentials=missing:${missingRequired.join(",")}`;
 }
 
 async function withTimeout<T>(
