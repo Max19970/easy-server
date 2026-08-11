@@ -167,6 +167,7 @@ Provider Plugins run in-process and are trusted extensions in `0.1.0`; the plugi
 - [Security model](docs/security-model.md)
 - [Provider Plugin authoring and operational safety](docs/plugin-authoring-and-operational-safety.md)
 - [Versioning and compatibility](docs/versioning-and-compatibility.md)
+- [Contributing](CONTRIBUTING.md)
 - [Support and maintenance policy](docs/support-and-maintenance.md)
 
 For ordinary bugs and provider regressions, open a public GitHub issue using the guidance in the support policy. Security issues should follow [SECURITY.md](SECURITY.md) rather than a public issue.
