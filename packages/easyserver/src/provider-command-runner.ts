@@ -11,6 +11,10 @@ import { HostOperationRunner } from "./host-operation.js";
 import type { ProviderFeatureAdmission } from "./provider-feature-host.js";
 
 export interface ProviderInventoryRefresher {
+  recordAcquiredProviderResources(
+    providerId: string,
+    providerExternalIds: readonly string[],
+  ): Promise<void>;
   refreshProvider(
     providerId: string,
     context: OperationContext,
@@ -37,7 +41,10 @@ export type ProviderCommandHandoff =
     }
   | {
       readonly status: "failed";
-      readonly failure: "invalid-provider-result" | "inventory-refresh-failed";
+      readonly failure:
+        | "invalid-provider-result"
+        | "management-intent-persist-failed"
+        | "inventory-refresh-failed";
       readonly affectedProviderExternalIds: readonly string[];
       readonly canonicalInstances: readonly CanonicalInstanceHandoff[];
       readonly unresolvedProviderExternalIds: readonly string[];
@@ -123,6 +130,31 @@ export class ProviderCommandRunner {
 
     const affectedProviderExternalIds =
       providerResult?.affectedProviderExternalIds ?? [];
+    if (affectedProviderExternalIds.length > 0) {
+      try {
+        await request.inventory.recordAcquiredProviderResources(
+          request.providerId,
+          affectedProviderExternalIds,
+        );
+      } catch (error) {
+        if (command.operation !== "mutation") {
+          throw error;
+        }
+        return {
+          operation: command.operation,
+          mutationOutcome: "succeeded",
+          ...(providerResult === undefined ? {} : { providerResult }),
+          handoff: {
+            status: "failed",
+            failure: "management-intent-persist-failed",
+            affectedProviderExternalIds,
+            canonicalInstances: [],
+            unresolvedProviderExternalIds: affectedProviderExternalIds,
+          },
+        };
+      }
+    }
+
     const refreshRequested =
       providerResult?.refreshProviderInventory === true ||
       affectedProviderExternalIds.length > 0;

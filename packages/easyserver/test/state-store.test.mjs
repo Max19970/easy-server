@@ -151,7 +151,7 @@ test("competing updates preserve unrelated plugin, credential, and instance chan
         },
         { source: "fixture:extra", enabled: false },
       ],
-      instances: [instance],
+      instances: [{ ...instance, management: "discovered" }],
     });
   });
 });
@@ -171,7 +171,7 @@ test("compute instance bindings persist stable local and provider identities", a
     assert.deepEqual(await store.read(), {
       version: 1,
       plugins: [],
-      instances: [binding],
+      instances: [{ ...binding, management: "discovered" }],
     });
 
     await assert.rejects(
@@ -181,6 +181,49 @@ test("compute instance bindings persist stable local and provider identities", a
         instances: [binding, { ...binding, id: "instance:9d832a32-2b45-4d1c-8f21-286b3a2aecee" }],
       }),
       /duplicate provider identity/,
+    );
+  });
+});
+
+test("managed provenance and pending acquisition identities persist without rotating canonical ids", async () => {
+  await withTempDirectory(async (directory) => {
+    const path = join(directory, "state.json");
+    const store = new JsonStateStore(path);
+    const state = {
+      version: 1,
+      plugins: [],
+      instances: [
+        {
+          id: "instance:550e8400-e29b-41d4-a716-446655440000",
+          providerId: "fixture",
+          providerExternalId: "managed-1",
+          management: "managed",
+        },
+      ],
+      pendingManagedResources: [
+        { providerId: "fixture", providerExternalId: "pending-2" },
+      ],
+    };
+
+    await store.write(state);
+    assert.deepEqual(await store.read(), state);
+
+    await assert.rejects(
+      store.write({
+        ...state,
+        pendingManagedResources: [
+          ...state.pendingManagedResources,
+          state.pendingManagedResources[0],
+        ],
+      }),
+      /duplicate provider identity/,
+    );
+    await assert.rejects(
+      store.write({
+        ...state,
+        instances: [{ ...state.instances[0], management: "owned" }],
+      }),
+      /management must be discovered or managed/,
     );
   });
 });
@@ -403,7 +446,13 @@ test("corrupt primary recovers the last-known-good state in a fresh process", as
       { encoding: "utf8" },
     );
     assert.equal(child.status, 0, child.stderr);
-    assert.deepEqual(JSON.parse(child.stdout), expected);
+    assert.deepEqual(JSON.parse(child.stdout), {
+      ...expected,
+      instances: expected.instances.map((binding) => ({
+        ...binding,
+        management: "discovered",
+      })),
+    });
   });
 });
 

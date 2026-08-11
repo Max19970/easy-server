@@ -28,12 +28,15 @@ import {
   JsonStateStore,
   type EasyServerState,
   type InstanceBinding,
+  type InstanceManagement,
+  type PendingManagedResource,
 } from "./state-store.js";
 
 export interface ComputeInstance {
   readonly id: string;
   readonly providerId: string;
   readonly providerExternalId: string;
+  readonly management: InstanceManagement;
   readonly name?: string;
   readonly state: InstanceState;
   readonly rawState: ProviderRawState;
@@ -49,6 +52,7 @@ export interface StaleInventoryInstance {
   readonly id: string;
   readonly providerId: string;
   readonly providerExternalId: string;
+  readonly management: InstanceManagement;
   readonly name?: string;
   readonly state: InstanceState;
   readonly observedAt: string;
@@ -60,6 +64,7 @@ export interface UnobservedInventoryInstance {
   readonly id: string;
   readonly providerId: string;
   readonly providerExternalId: string;
+  readonly management: InstanceManagement;
   readonly freshness: "unobserved";
   readonly availableActions: readonly [];
 }
@@ -195,6 +200,87 @@ export class ComputeManager {
     return refreshed.instances;
   }
 
+  async recordAcquiredProviderResources(
+    providerId: string,
+    providerExternalIds: readonly string[],
+  ): Promise<void> {
+    if (providerExternalIds.length === 0) {
+      return;
+    }
+
+    await this.stateStore.update((state) => {
+      let changed = false;
+      const managedIds = new Set(providerExternalIds);
+      const instances = (state.instances ?? []).map((binding) => {
+        if (
+          binding.providerId === providerId &&
+          managedIds.has(binding.providerExternalId) &&
+          binding.management !== "managed"
+        ) {
+          changed = true;
+          return { ...binding, management: "managed" as const };
+        }
+        return binding;
+      });
+      const bound = new Set(
+        instances
+          .filter((binding) => binding.providerId === providerId)
+          .map((binding) => binding.providerExternalId),
+      );
+      const pending = [...(state.pendingManagedResources ?? [])];
+      const pendingKeys = new Set(
+        pending.map((resource) =>
+          providerResourceKey(resource.providerId, resource.providerExternalId),
+        ),
+      );
+      for (const providerExternalId of providerExternalIds) {
+        if (bound.has(providerExternalId)) {
+          continue;
+        }
+        const key = providerResourceKey(providerId, providerExternalId);
+        if (!pendingKeys.has(key)) {
+          pendingKeys.add(key);
+          pending.push({ providerId, providerExternalId });
+          changed = true;
+        }
+      }
+
+      if (!changed) {
+        return state;
+      }
+      return {
+        ...state,
+        ...(instances.length === 0 ? {} : { instances }),
+        ...(pending.length === 0 ? {} : { pendingManagedResources: pending }),
+      };
+    });
+  }
+
+  async adoptInstance(id: string): Promise<void> {
+    let found = false;
+    await this.stateStore.update((state) => {
+      const instances = (state.instances ?? []).map((binding) => {
+        if (binding.id !== id) {
+          return binding;
+        }
+        found = true;
+        return binding.management === "managed"
+          ? binding
+          : { ...binding, management: "managed" as const };
+      });
+      if (!found) {
+        return state;
+      }
+      const current = state.instances?.find((binding) => binding.id === id);
+      return current?.management === "managed"
+        ? state
+        : { ...state, instances };
+    });
+    if (!found) {
+      throw normalizedError("not-found", `Compute Instance not found: ${id}`);
+    }
+  }
+
   async inspectInstance(
     id: string,
     context: OperationContext,
@@ -244,6 +330,13 @@ export class ComputeManager {
     const binding = state.instances?.find((candidate) => candidate.id === id);
     if (binding === undefined) {
       throw normalizedError("not-found", `Compute Instance not found: ${id}`);
+    }
+
+    if (action === "instance.destroy" && binding.management !== "managed") {
+      throw normalizedError(
+        "conflict",
+        `Compute Instance ${id} is discovered/unmanaged; adopt it before destroy`,
+      );
     }
 
     const admission = this.registry.acquire(binding.providerId);
@@ -467,6 +560,12 @@ function reconcileProviderInventory(
   observedAt: string,
 ): { readonly state: EasyServerState; readonly instances: readonly ComputeInstance[] } {
   const previousBindings = state.instances ?? [];
+  const pendingManagedResources = state.pendingManagedResources ?? [];
+  const pendingManagedIds = new Set(
+    pendingManagedResources
+      .filter((resource) => resource.providerId === providerId)
+      .map((resource) => resource.providerExternalId),
+  );
   const existing = new Map(
     previousBindings
       .filter((binding) => binding.providerId === providerId)
@@ -474,14 +573,23 @@ function reconcileProviderInventory(
   );
   const currentBindings: InstanceBinding[] = [];
   const instances: ComputeInstance[] = [];
+  const observedExternalIds = new Set<string>();
 
   for (const snapshot of snapshots) {
-    const binding = withObservation(
-      existing.get(snapshot.providerExternalId) ??
-        newBinding(providerId, snapshot.providerExternalId),
-      snapshot,
-      observedAt,
-    );
+    observedExternalIds.add(snapshot.providerExternalId);
+    const shouldBeManaged = pendingManagedIds.has(snapshot.providerExternalId);
+    const existingBinding = existing.get(snapshot.providerExternalId);
+    const baseBinding =
+      existingBinding === undefined
+        ? newBinding(
+            providerId,
+            snapshot.providerExternalId,
+            shouldBeManaged ? "managed" : "discovered",
+          )
+        : shouldBeManaged && existingBinding.management !== "managed"
+          ? { ...existingBinding, management: "managed" as const }
+          : existingBinding;
+    const binding = withObservation(baseBinding, snapshot, observedAt);
     currentBindings.push(binding);
     instances.push(toComputeInstance(binding, snapshot));
   }
@@ -490,10 +598,18 @@ function reconcileProviderInventory(
     ...previousBindings.filter((binding) => binding.providerId !== providerId),
     ...currentBindings,
   ];
+  const remainingPending = pendingManagedResources.filter(
+    (resource) =>
+      resource.providerId !== providerId ||
+      !observedExternalIds.has(resource.providerExternalId),
+  );
+  const changed =
+    !sameBindings(previousBindings, bindings) ||
+    !samePendingManagedResources(pendingManagedResources, remainingPending);
   return {
-    state: sameBindings(previousBindings, bindings)
-      ? state
-      : { ...state, instances: bindings },
+    state: changed
+      ? withReconciledState(state, bindings, remainingPending)
+      : state,
     instances,
   };
 }
@@ -541,6 +657,7 @@ function toDegradedInventoryInstance(binding: InstanceBinding): InventoryInstanc
       id: binding.id,
       providerId: binding.providerId,
       providerExternalId: binding.providerExternalId,
+      management: binding.management,
       freshness: "unobserved",
       availableActions: [],
     };
@@ -550,6 +667,7 @@ function toDegradedInventoryInstance(binding: InstanceBinding): InventoryInstanc
     id: binding.id,
     providerId: binding.providerId,
     providerExternalId: binding.providerExternalId,
+    management: binding.management,
     state: observation.state,
     observedAt: observation.observedAt,
     freshness: "stale",
@@ -558,11 +676,16 @@ function toDegradedInventoryInstance(binding: InstanceBinding): InventoryInstanc
   };
 }
 
-function newBinding(providerId: string, providerExternalId: string): InstanceBinding {
+function newBinding(
+  providerId: string,
+  providerExternalId: string,
+  management: InstanceManagement,
+): InstanceBinding {
   return {
     id: `instance:${randomUUID()}`,
     providerId,
     providerExternalId,
+    management,
   };
 }
 
@@ -589,6 +712,7 @@ function toComputeInstance(
     id: binding.id,
     providerId: binding.providerId,
     providerExternalId: binding.providerExternalId,
+    management: binding.management,
     state: snapshot.state,
     rawState: snapshot.rawState,
     availableActions: snapshot.availableActions,
@@ -608,9 +732,43 @@ function sameBindings(
         binding.id === right[index]?.id &&
         binding.providerId === right[index]?.providerId &&
         binding.providerExternalId === right[index]?.providerExternalId &&
+        binding.management === right[index]?.management &&
         binding.observation?.state === right[index]?.observation?.state &&
         binding.observation?.observedAt === right[index]?.observation?.observedAt &&
         binding.observation?.name === right[index]?.observation?.name,
     )
   );
+}
+
+function samePendingManagedResources(
+  left: readonly PendingManagedResource[],
+  right: readonly PendingManagedResource[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (resource, index) =>
+        resource.providerId === right[index]?.providerId &&
+        resource.providerExternalId === right[index]?.providerExternalId,
+    )
+  );
+}
+
+function withReconciledState(
+  state: EasyServerState,
+  instances: readonly InstanceBinding[],
+  pendingManagedResources: readonly PendingManagedResource[],
+): EasyServerState {
+  const { pendingManagedResources: _previousPending, ...base } = state;
+  return {
+    ...base,
+    instances,
+    ...(pendingManagedResources.length === 0
+      ? {}
+      : { pendingManagedResources }),
+  };
+}
+
+function providerResourceKey(providerId: string, providerExternalId: string): string {
+  return `${providerId}\u0000${providerExternalId}`;
 }

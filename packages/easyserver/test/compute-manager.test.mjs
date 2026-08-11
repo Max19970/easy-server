@@ -183,6 +183,7 @@ test("global inventory exposes a known identity without prior observation as uno
     assert.deepEqual(result.instances, [
       {
         ...binding,
+        management: "discovered",
         freshness: "unobserved",
         availableActions: [],
       },
@@ -466,6 +467,50 @@ test("provider capabilities reject unsupported actions before provider lookup", 
   });
 });
 
+test("discovered resources require explicit adoption before destroy", async () => {
+  await withStore(async (store) => {
+    const registry = new ProviderRegistry();
+    let getCalls = 0;
+    let destroyCalls = 0;
+    const snapshot = {
+      providerExternalId: "manual-resource",
+      state: "stopped",
+      rawState: "stopped",
+      availableActions: ["instance.destroy"],
+    };
+    registerProvider(registry, {
+      providerId: "manual",
+      capabilities: ["instance.destroy"],
+      list: async () => [snapshot],
+      get: async () => {
+        getCalls += 1;
+        return snapshot;
+      },
+      destroy: async () => {
+        destroyCalls += 1;
+      },
+    });
+
+    const manager = new ComputeManager(registry, store);
+    const [instance] = await manager.listInstances(context);
+    assert.equal(instance.management, "discovered");
+
+    await assert.rejects(
+      manager.performAction(instance.id, "instance.destroy", context),
+      (error) => error?.code === "conflict" && /adopt/.test(error.message),
+    );
+    assert.equal(getCalls, 0);
+    assert.equal(destroyCalls, 0);
+
+    await manager.adoptInstance(instance.id);
+    const adopted = await manager.inspectInstance(instance.id, context);
+    assert.equal(adopted.management, "managed");
+    assert.equal(adopted.id, instance.id);
+    await manager.performAction(instance.id, "instance.destroy", context);
+    assert.equal(destroyCalls, 1);
+  });
+});
+
 test("destroy uses its distinct destructive provider operation", async () => {
   await withStore(async (store) => {
     const registry = new ProviderRegistry();
@@ -492,6 +537,7 @@ test("destroy uses its distinct destructive provider operation", async () => {
 
     const manager = new ComputeManager(registry, store);
     const [instance] = await manager.listInstances(context);
+    await manager.adoptInstance(instance.id);
     await manager.performAction(instance.id, "instance.destroy", context);
 
     assert.equal(destroyCall, "destroy-me");
@@ -678,6 +724,7 @@ test("uncertain mutation does not discard stable local identity when reconciliat
 
     const manager = new ComputeManager(registry, store);
     const [before] = await manager.listInstances(context);
+    await manager.adoptInstance(before.id);
 
     await assert.rejects(
       manager.performAction(before.id, "instance.destroy", context),
@@ -717,6 +764,7 @@ test("outcome-unknown reconciliation honors definitive absence", async () => {
 
     const manager = new ComputeManager(registry, store);
     const [before] = await manager.listInstances(context);
+    await manager.adoptInstance(before.id);
     await assert.rejects(
       manager.performAction(before.id, "instance.destroy", context),
       (error) => error?.code === "outcome-unknown",

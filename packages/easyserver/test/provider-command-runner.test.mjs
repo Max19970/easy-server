@@ -26,7 +26,10 @@ function request(command, inventory) {
         return undefined;
       },
     },
-    inventory,
+    inventory: {
+      async recordAcquiredProviderResources() {},
+      ...inventory,
+    },
     context: { signal: new AbortController().signal },
     write() {},
     writeError() {},

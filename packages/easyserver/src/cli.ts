@@ -70,6 +70,7 @@ Usage:
   easyserver plugins credential remove <module> <name>
   easyserver instances list
   easyserver instances inspect <instance-id>
+  easyserver instances adopt <instance-id>
   easyserver instances start <instance-id>
   easyserver instances stop <instance-id>
   easyserver instances restart <instance-id>
@@ -569,6 +570,12 @@ async function runInstances(args: readonly string[]): Promise<void> {
       return;
     }
 
+    if (command === "adopt" && instanceId !== undefined && args.length === 2) {
+      await manager.adoptInstance(instanceId);
+      process.stdout.write(`Adopted ${escapeTerminalText(instanceId)} for EasyServer management\n`);
+      return;
+    }
+
     const action = instanceAction(command);
     if (action !== undefined && instanceId !== undefined && args.length === 2) {
       await manager.performAction(instanceId, action, context);
@@ -906,7 +913,9 @@ function reportProviderCommandHandoff(
     const detail =
       execution.handoff.failure === "invalid-provider-result"
         ? "the Provider Plugin returned an invalid handoff result"
-        : "the follow-up provider inventory refresh failed";
+        : execution.handoff.failure === "management-intent-persist-failed"
+          ? "EasyServer could not persist the acquired-resource management intent"
+          : "the follow-up provider inventory refresh failed";
     const affected =
       execution.handoff.affectedProviderExternalIds.length === 0
         ? ""
@@ -961,7 +970,7 @@ function formatInventory(instances: readonly InventoryInstance[]): string {
       const actions = instance.availableActions.length === 0
         ? "-"
         : instance.availableActions.join(",");
-      return `${instance.id} provider=${escapeTerminalText(instance.providerId)} external=${escapeTerminalText(instance.providerExternalId)} freshness=${instance.freshness} state=${state} actions=${actions}${observedAt}${name}`;
+      return `${instance.id} provider=${escapeTerminalText(instance.providerId)} external=${escapeTerminalText(instance.providerExternalId)} management=${instance.management} freshness=${instance.freshness} state=${state} actions=${actions}${observedAt}${name}`;
     })
     .join("\n")}\n`;
 }

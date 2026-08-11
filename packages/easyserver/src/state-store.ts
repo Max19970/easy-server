@@ -30,17 +30,26 @@ export interface InstanceObservation {
   readonly name?: string;
 }
 
+export type InstanceManagement = "discovered" | "managed";
+
 export interface InstanceBinding {
   readonly id: string;
   readonly providerId: string;
   readonly providerExternalId: string;
+  readonly management: InstanceManagement;
   readonly observation?: InstanceObservation;
+}
+
+export interface PendingManagedResource {
+  readonly providerId: string;
+  readonly providerExternalId: string;
 }
 
 export interface EasyServerState {
   readonly version: 1;
   readonly plugins: readonly PluginRegistration[];
   readonly instances?: readonly InstanceBinding[];
+  readonly pendingManagedResources?: readonly PendingManagedResource[];
 }
 
 export class JsonStateStore {
@@ -243,10 +252,19 @@ function parseState(value: unknown): EasyServerState {
   }
 
   const instances = parseInstanceBindings(state.instances, "state.instances");
+  const pendingManagedResources = parsePendingManagedResources(
+    state.pendingManagedResources,
+    "state.pendingManagedResources",
+  );
 
-  return instances === undefined
-    ? { version: 1, plugins }
-    : { version: 1, plugins, instances };
+  return {
+    version: 1,
+    plugins,
+    ...(instances === undefined ? {} : { instances }),
+    ...(pendingManagedResources === undefined
+      ? {}
+      : { pendingManagedResources }),
+  };
 }
 
 function parseInstanceBindings(
@@ -292,6 +310,10 @@ function parseInstanceBindings(
       );
     }
 
+    const management = parseInstanceManagement(
+      binding.management,
+      `${path}[${index}].management`,
+    );
     const observation = parseInstanceObservation(
       binding.observation,
       `${path}[${index}].observation`,
@@ -299,14 +321,65 @@ function parseInstanceBindings(
 
     seenIds.add(id);
     seenProviderKeys.add(providerKey);
-    bindings.push(
-      observation === undefined
-        ? { id, providerId, providerExternalId }
-        : { id, providerId, providerExternalId, observation },
-    );
+    bindings.push({
+      id,
+      providerId,
+      providerExternalId,
+      management,
+      ...(observation === undefined ? {} : { observation }),
+    });
   }
 
   return bindings;
+}
+
+function parseInstanceManagement(
+  value: unknown,
+  path: string,
+): InstanceManagement {
+  if (value === undefined) {
+    // State written before management provenance existed is treated conservatively.
+    return "discovered";
+  }
+  if (value !== "discovered" && value !== "managed") {
+    throw new TypeError(`${path} must be discovered or managed`);
+  }
+  return value;
+}
+
+function parsePendingManagedResources(
+  value: unknown,
+  path: string,
+): readonly PendingManagedResource[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${path} must be an array`);
+  }
+
+  const resources: PendingManagedResource[] = [];
+  const seen = new Set<string>();
+  for (const [index, candidate] of value.entries()) {
+    const resource = expectRecord(candidate, `${path}[${index}]`);
+    const providerId = expectNonEmptyString(
+      resource.providerId,
+      `${path}[${index}].providerId`,
+    );
+    const providerExternalId = expectNonEmptyString(
+      resource.providerExternalId,
+      `${path}[${index}].providerExternalId`,
+    );
+    const key = `${providerId}\u0000${providerExternalId}`;
+    if (seen.has(key)) {
+      throw new TypeError(
+        `${path} contains duplicate provider identity: ${providerId}/${providerExternalId}`,
+      );
+    }
+    seen.add(key);
+    resources.push({ providerId, providerExternalId });
+  }
+  return resources;
 }
 
 function parseInstanceObservation(

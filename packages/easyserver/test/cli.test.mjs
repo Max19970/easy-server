@@ -761,7 +761,7 @@ test("lists and inspects compute instances through configured providers", () => 
   assert.equal(firstList.status, 0);
   assert.match(
     firstList.stdout,
-    /provider=inventory external=remote-1 freshness=fresh state=running/,
+    /provider=inventory external=remote-1 management=discovered freshness=fresh state=running/,
   );
   assert.match(firstList.stdout, /actions=instance\.stop/);
   const [instanceId] = firstList.stdout.match(/instance:[0-9a-f-]+/i) ?? [];
@@ -777,11 +777,20 @@ test("lists and inspects compute instances through configured providers", () => 
     id: instanceId,
     providerId: "inventory",
     providerExternalId: "remote-1",
+    management: "discovered",
     state: "running",
     rawState: "READY",
     availableActions: ["instance.stop"],
     name: "Fixture GPU",
   });
+
+  const adopt = runWithState(stateFile, "instances", "adopt", instanceId);
+  assert.equal(adopt.status, 0);
+  assert.equal(adopt.stdout, `Adopted ${instanceId} for EasyServer management\n`);
+  const adoptedInspect = runWithState(stateFile, "instances", "inspect", instanceId);
+  assert.equal(adoptedInspect.status, 0);
+  assert.equal(JSON.parse(adoptedInspect.stdout).management, "managed");
+  assert.equal(JSON.parse(adoptedInspect.stdout).id, instanceId);
 
   const stop = runWithState(stateFile, "instances", "stop", instanceId);
   assert.equal(stop.status, 0);
@@ -820,11 +829,11 @@ test("instances list returns useful partial inventory with explicit degraded sta
   assert.equal(result.status, 2);
   assert.match(
     result.stdout,
-    /provider=partial-healthy external=healthy-remote freshness=fresh state=running actions=instance\.stop/,
+    /provider=partial-healthy external=healthy-remote management=discovered freshness=fresh state=running actions=instance\.stop/,
   );
   assert.match(
     result.stdout,
-    new RegExp(`${staleId} provider=partial-failing external=stale-remote freshness=stale state=stopped actions=-`),
+    new RegExp(`${staleId} provider=partial-failing external=stale-remote management=discovered freshness=stale state=stopped actions=-`),
   );
   assert.match(
     result.stderr,
@@ -938,6 +947,7 @@ test("mounts provider feature commands and reconciles requested inventory change
   assert.equal(reconciledState.instances[0].id, canonical[1]);
   assert.equal(reconciledState.instances[0].providerId, "provider-cli");
   assert.equal(reconciledState.instances[0].providerExternalId, "created-1");
+  assert.equal(reconciledState.instances[0].management, "managed");
 
   assert.equal(
     runWithState(stateFile, "plugins", "disable", providerCliPlugin).status,
@@ -1056,14 +1066,20 @@ export default {
   assert.equal(await readFile(mutationCountPath, "utf8"), "1");
   const afterFailedHandoff = JSON.parse(await readFile(stateFile, "utf8"));
   assert.equal(afterFailedHandoff.instances?.length ?? 0, 0);
+  assert.deepEqual(afterFailedHandoff.pendingManagedResources, [
+    { providerId: "handoff-failure", providerExternalId: "created-1" },
+  ]);
 
   const observed = runWithState(stateFile, "instances", "list");
   assert.equal(observed.status, 0, observed.stderr);
   assert.match(
     observed.stdout,
-    /^instance:[0-9a-f-]+ provider=handoff-failure external=created-1 freshness=fresh state=running actions=-/m,
+    /^instance:[0-9a-f-]+ provider=handoff-failure external=created-1 management=managed freshness=fresh state=running actions=-/m,
   );
   assert.equal(await readFile(mutationCountPath, "utf8"), "1");
+  const reconciled = JSON.parse(await readFile(stateFile, "utf8"));
+  assert.equal(reconciled.instances[0].management, "managed");
+  assert.equal(reconciled.pendingManagedResources, undefined);
 });
 
 test("provider feature outcome-unknown reconciles inventory without retrying the mutation", async () => {
