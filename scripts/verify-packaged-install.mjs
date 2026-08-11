@@ -63,6 +63,7 @@ try {
     sdkTarball,
     cliTarball,
   });
+  await verifyPackageLifecycle(sdkTarball, cliTarball, exampleTarball);
 
   process.stdout.write("Packaged install verification passed.\n");
 } finally {
@@ -375,6 +376,74 @@ async function verifyPluginInstall({
   assert.equal(runCli(prefix, "--version").stdout, "0.1.0\n");
 }
 
+async function verifyPackageLifecycle(sdkTarball, cliTarball, pluginTarball) {
+  const prefix = await createPrefix("lifecycle");
+  const pluginPackage = "@easyai101/easyserver-example-provider";
+  installGlobally(prefix, sdkTarball, cliTarball, pluginTarball);
+  runCli(prefix, "plugins", "add", pluginPackage);
+
+  const statePath = stateFile(prefix);
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  state.plugins[0].credentials = [
+    {
+      name: "api-key",
+      secretRef: "secret:550e8400-e29b-41d4-a716-446655440000",
+    },
+  ];
+  state.instances = [
+    {
+      id: "instance:550e8400-e29b-41d4-a716-446655440001",
+      providerId: "example",
+      providerExternalId: "remote-1",
+    },
+  ];
+  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  const expectedState = await readFile(statePath, "utf8");
+
+  installGlobally(prefix, sdkTarball, cliTarball);
+  assert.equal(
+    await readFile(statePath, "utf8"),
+    expectedState,
+    "reinstalling compatible core packages must preserve Local State and Secret References",
+  );
+  assert.match(
+    runCli(prefix, "plugins", "list").stdout,
+    /^loaded\s+example\.provider-plugin provider=example$/m,
+  );
+
+  uninstallGlobally(prefix, pluginPackage);
+  assertPackageAbsent(prefix, pluginPackage);
+  const missing = runCli(prefix, "plugins", "list");
+  assert.match(missing.stdout, /^failed\s+@easyai101\/easyserver-example-provider\s+error=/m);
+  assert.equal(
+    await readFile(statePath, "utf8"),
+    expectedState,
+    "a missing configured plugin must not rewrite Local State",
+  );
+
+  installGlobally(prefix, sdkTarball, pluginTarball);
+  assert.match(
+    runCli(prefix, "plugins", "list").stdout,
+    /^loaded\s+example\.provider-plugin provider=example$/m,
+  );
+  assert.equal(await readFile(statePath, "utf8"), expectedState);
+
+  uninstallGlobally(prefix, "@easyai101/easyserver");
+  assertPackageAbsent(prefix, "@easyai101/easyserver");
+  assert.equal(
+    await readFile(statePath, "utf8"),
+    expectedState,
+    "uninstalling the core package must leave user state untouched",
+  );
+
+  installGlobally(prefix, sdkTarball, cliTarball);
+  assert.match(
+    runCli(prefix, "plugins", "list").stdout,
+    /^loaded\s+example\.provider-plugin provider=example$/m,
+  );
+  assert.equal(await readFile(statePath, "utf8"), expectedState);
+}
+
 async function createPrefix(name) {
   const prefix = join(temporaryRoot, `prefix-${name}`);
   await mkdir(prefix, { recursive: true });
@@ -386,6 +455,17 @@ function installGlobally(prefix, ...tarballs) {
     ["install", "--global", "--prefix", prefix, "--no-audit", "--no-fund", ...tarballs],
     repositoryRoot,
   );
+}
+
+function uninstallGlobally(prefix, ...packageNames) {
+  runNpm(
+    ["uninstall", "--global", "--prefix", prefix, "--no-audit", "--no-fund", ...packageNames],
+    repositoryRoot,
+  );
+}
+
+function stateFile(prefix) {
+  return join(prefix, "easyserver-state.json");
 }
 
 function runCli(prefix, ...args) {
