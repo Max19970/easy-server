@@ -12,7 +12,24 @@ Use a public GitHub issue for ordinary product bugs and regressions. Include, wh
 - expected and observed behavior;
 - a minimal reproduction or sanitized diagnostic output.
 
-Provider-specific breakage should name the affected provider and whether the same workflow worked previously. Never include API keys, private SSH material, bearer tokens, raw credential values or provider payloads that may contain sensitive account data.
+Provider-specific breakage should name the affected provider and whether the same workflow worked previously. Prefer attaching the output of `easyserver doctor` instead of raw logs when it contains enough information to reproduce or triage the problem.
+
+Never include API keys, passwords, private SSH material, bearer tokens, daemon authentication tokens, raw credential values, Secret References such as `secret:<uuid>`, provider resource/account identifiers, or raw provider payloads that may contain sensitive account data. Do not paste a whole `~/.easyserver` directory, OS-keyring export or unreviewed debug log into a public issue.
+
+### Privacy-safe diagnostics
+
+`easyserver doctor` produces a JSON troubleshooting payload designed to be safe to review and paste into a public bug report. It reports only bounded product/runtime state:
+
+- EasyServer, Node.js, operating-system platform and architecture versions;
+- whether Local State is readable plus counts of configured plugins, credential bindings and canonical instance bindings;
+- configured Provider Plugin status, safe plugin/provider identity where available, and loaded plugin version;
+- coarse plugin failure classes such as `incompatible`, `timeout` or `load-failed` instead of raw exception text;
+- daemon health and, when available, only the count of daemon-owned sessions;
+- local OpenSSH command availability needed for SSH access troubleshooting.
+
+The diagnostic payload intentionally excludes credential values and Secret References, SSH private keys, daemon tokens and loopback descriptor details, canonical/provider instance identifiers, provider-originated names/payloads, local plugin filesystem paths and raw plugin/provider exception text. EasyServer does not dispatch provider operations or resolve configured credentials in order to build this report.
+
+Review the generated JSON before posting it anyway, especially when using third-party Provider Plugins. A plugin module is ordinary JavaScript and may have its own import-time behavior outside EasyServer's diagnostic payload contract.
 
 Security vulnerabilities are different: report them privately using the repository's **Security → Report a vulnerability** flow, as described in the root [`SECURITY.md`](../SECURITY.md). Do not open a public issue for an undisclosed vulnerability.
 
