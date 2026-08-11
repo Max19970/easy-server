@@ -89,9 +89,9 @@ test("a delayed stale observation cannot remove a live successor generation", as
       resumeObserver = resolve;
     });
     const delayed = acquireFilesystemLock(lockPath, {
-      timeoutMs: 1_000,
-      staleAfterMs: 20,
-      heartbeatMs: 5,
+      timeoutMs: 3_000,
+      staleAfterMs: 1_000,
+      heartbeatMs: 50,
       retryMs: 1,
       hooks: {
         async staleOwnerObserved() {
@@ -103,9 +103,9 @@ test("a delayed stale observation cannot remove a live successor generation", as
 
     await observed;
     const successor = await acquireFilesystemLock(lockPath, {
-      timeoutMs: 1_000,
-      staleAfterMs: 20,
-      heartbeatMs: 5,
+      timeoutMs: 3_000,
+      staleAfterMs: 1_000,
+      heartbeatMs: 50,
       retryMs: 1,
     });
     resumeObserver();

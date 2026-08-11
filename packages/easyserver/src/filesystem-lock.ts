@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Stats } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -73,7 +74,10 @@ export async function acquireFilesystemLock(
     const ownerPath = join(lockPath, ownerName);
 
     try {
-      await mkdir(lockPath, { mode: 0o700 });
+      await retryWindowsEpermOnce(
+        () => mkdir(lockPath, { mode: 0o700 }),
+        retryMs,
+      );
       try {
         await writeFile(ownerPath, `${process.pid}\n`, {
           encoding: "utf8",
@@ -132,7 +136,7 @@ export async function acquireFilesystemLock(
       }
     }
 
-    await recoverStaleLock(lockPath, staleAfterMs, options.hooks);
+    await recoverStaleLock(lockPath, staleAfterMs, retryMs, options.hooks);
     throwIfCancelled(options.signal);
     if (Date.now() >= deadline) {
       throw new FilesystemLockTimeoutError(`Timed out waiting for filesystem lock: ${lockPath}`);
@@ -144,11 +148,15 @@ export async function acquireFilesystemLock(
 async function recoverStaleLock(
   lockPath: string,
   staleAfterMs: number,
+  retryMs: number,
   hooks: FilesystemLockHooks | undefined,
 ): Promise<void> {
-  let metadata: Awaited<ReturnType<typeof lstat>>;
+  let observation: Awaited<ReturnType<typeof observeLockPath>>;
   try {
-    metadata = await lstat(lockPath);
+    observation = await retryWindowsEpermOnce(
+      () => observeLockPath(lockPath),
+      retryMs,
+    );
   } catch (error) {
     if (isErrno(error, "ENOENT")) {
       return;
@@ -156,20 +164,13 @@ async function recoverStaleLock(
     throw error;
   }
 
-  if (!metadata.isDirectory()) {
+  const { metadata } = observation;
+  if (observation.entries === undefined) {
     await recoverLegacyLockFile(lockPath, metadata.mtimeMs, staleAfterMs);
     return;
   }
 
-  let entries: string[];
-  try {
-    entries = await readdir(lockPath);
-  } catch (error) {
-    if (isErrno(error, "ENOENT")) {
-      return;
-    }
-    throw error;
-  }
+  const entries = observation.entries;
 
   if (entries.length === 0) {
     if (Date.now() - metadata.mtimeMs > staleAfterMs) {
@@ -324,7 +325,7 @@ async function releaseGeneration(
 
     let entries: string[];
     try {
-      entries = await readdir(lockPath);
+      entries = await retryWindowsEpermOnce(() => readdir(lockPath), retryMs);
     } catch (error) {
       if (isErrno(error, "ENOENT")) {
         return;
@@ -338,6 +339,32 @@ async function releaseGeneration(
       return;
     }
     await delay(retryMs);
+  }
+}
+
+async function observeLockPath(lockPath: string): Promise<
+  | { readonly metadata: Stats; readonly entries: string[] }
+  | { readonly metadata: Stats; readonly entries?: undefined }
+> {
+  const metadata = await lstat(lockPath);
+  if (!metadata.isDirectory()) {
+    return { metadata };
+  }
+  return { metadata, entries: await readdir(lockPath) };
+}
+
+async function retryWindowsEpermOnce<T>(
+  operation: () => Promise<T>,
+  retryMs: number,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (process.platform !== "win32" || !isErrno(error, "EPERM")) {
+      throw error;
+    }
+    await delay(retryMs);
+    return operation();
   }
 }
 
