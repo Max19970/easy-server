@@ -367,6 +367,12 @@ async function findFreePort() {
   return port;
 }
 
+function parseEndpoint(output) {
+  const match = output.match(/endpoint=(127\.0\.0\.1):(\d+)/);
+  assert.ok(match, `missing endpoint in output: ${output}`);
+  return { host: match[1], port: Number(match[2]) };
+}
+
 async function roundTrip(endpoint, payload) {
   const socket = connect(endpoint);
   await once(socket, "connect");
@@ -1262,6 +1268,112 @@ test("coordinated destroy never dispatches provider mutation when session cleanu
   }
 });
 
+test("running daemon reloads plugin enablement for new sessions without closing existing ones", async () => {
+  const stateFile = join(testDirectory, "daemon-plugin-reload-state.json");
+  const daemonFile = join(testDirectory, "daemon-plugin-reload-control.json");
+  const instanceId = "instance:550e8400-e29b-41d4-a716-446655440000";
+  const echo = createServer((socket) => socket.pipe(socket));
+  echo.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+  await once(echo, "listening");
+  const echoAddress = echo.address();
+  assert.ok(echoAddress && typeof echoAddress !== "string");
+
+  await new JsonStateStore(stateFile).write({
+    version: 1,
+    plugins: [],
+    instances: [
+      {
+        id: instanceId,
+        providerId: "destroy-session",
+        providerExternalId: "remote-1",
+        management: "managed",
+      },
+    ],
+  });
+
+  try {
+    const start = runWithDaemon(stateFile, daemonFile, "daemon", "start");
+    assert.equal(start.status, 0, start.stderr);
+
+    const beforeAdd = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "create",
+      instanceId,
+      "--port",
+      String(echoAddress.port),
+    );
+    assert.equal(beforeAdd.status, 1);
+    assert.match(beforeAdd.stderr, /provider-unavailable/);
+
+    const add = runWithState(stateFile, "plugins", "add", destroySessionPlugin);
+    assert.equal(add.status, 0, add.stderr);
+
+    const first = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "create",
+      instanceId,
+      "--port",
+      String(echoAddress.port),
+    );
+    assert.equal(first.status, 0, first.stderr);
+    const firstEndpoint = parseEndpoint(first.stdout);
+    assert.equal(await roundTrip(firstEndpoint, "before-disable"), "before-disable");
+
+    const disable = runWithState(
+      stateFile,
+      "plugins",
+      "disable",
+      destroySessionPlugin,
+    );
+    assert.equal(disable.status, 0, disable.stderr);
+
+    const blocked = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "create",
+      instanceId,
+      "--port",
+      String(echoAddress.port),
+    );
+    assert.equal(blocked.status, 1);
+    assert.match(blocked.stderr, /provider-unavailable/);
+    assert.equal(await roundTrip(firstEndpoint, "still-live"), "still-live");
+
+    const enable = runWithState(
+      stateFile,
+      "plugins",
+      "enable",
+      destroySessionPlugin,
+    );
+    assert.equal(enable.status, 0, enable.stderr);
+
+    const second = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "sessions",
+      "create",
+      instanceId,
+      "--port",
+      String(echoAddress.port),
+    );
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(
+      await roundTrip(parseEndpoint(second.stdout), "after-enable"),
+      "after-enable",
+    );
+  } finally {
+    runWithDaemon(stateFile, daemonFile, "daemon", "stop");
+    await new Promise((resolve, reject) =>
+      echo.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
 test("instances list returns useful partial inventory with explicit degraded status", async () => {
   const stateFile = join(testDirectory, "partial-inventory-state.json");
   const staleId = "instance:550e8400-e29b-41d4-a716-446655440000";
@@ -1696,6 +1808,22 @@ test("managed daemon startup timeout terminates its detached child", async () =>
     `${JSON.stringify({
       version: 1,
       plugins: [{ source: pluginPath, enabled: true }],
+      instances: [
+        {
+          id: "instance:550e8400-e29b-41d4-a716-446655440000",
+          providerId: "managed-daemon-timeout",
+          providerExternalId: "remote-1",
+        },
+      ],
+      endpointIntents: [
+        {
+          name: "startup-blocker",
+          enabled: true,
+          instanceId: "instance:550e8400-e29b-41d4-a716-446655440000",
+          remoteHost: "127.0.0.1",
+          remotePort: 8188,
+        },
+      ],
     })}\n`,
     "utf8",
   );

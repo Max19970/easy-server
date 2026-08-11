@@ -49,6 +49,7 @@ import {
   setPluginCredential,
 } from "./plugin-credentials.js";
 import { ProviderRegistry } from "./provider-registry.js";
+import { ReloadingEndpointOpener } from "./reloading-endpoint-opener.js";
 import { OsKeyringSecretStore } from "./secret-store.js";
 import { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
 import { JsonStateStore, type PluginRegistration } from "./state-store.js";
@@ -286,17 +287,8 @@ async function initializeDaemonForeground(): Promise<{
     }
 
     const store = new JsonStateStore(stateFilePath());
-    const state = await store.read();
-    const registry = new ProviderRegistry();
     const secretStore = new OsKeyringSecretStore();
-    const host = new PluginHost(registry);
-    await host.load(configuredPluginLoads(state.plugins), secretStore);
-    const gateway = new ConnectionGateway(
-      registry,
-      new AccessAdapterRegistry(),
-      store,
-      secretStore,
-    );
+    const gateway = new ReloadingEndpointOpener(store, secretStore);
     const authToken = randomBytes(32).toString("base64url");
     daemon = await startLocalConnectionDaemon({
       gateway,
