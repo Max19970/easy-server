@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import {
@@ -33,6 +32,7 @@ import {
   resolveHostRuntimePaths,
 } from "./host-runtime.js";
 import { ReloadingEndpointOpener } from "./reloading-endpoint-opener.js";
+import { ManagedDaemonOperations } from "./managed-daemon-operations.js";
 import { OsKeyringSecretStore } from "./secret-store.js";
 import { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
 import { escapeTerminalText } from "./terminal-text.js";
@@ -315,41 +315,16 @@ async function initializeDaemonForeground(): Promise<{
   }
 }
 
-type ManagedDaemonState =
-  | { readonly status: "running"; readonly descriptor: LocalDaemonDescriptor }
-  | { readonly status: "stopped" }
-  | {
-      readonly status: "stale";
-      readonly descriptor?: LocalDaemonDescriptor;
-      readonly reason: string;
-    };
-
-async function inspectManagedDaemon(): Promise<ManagedDaemonState> {
-  const descriptorPath = daemonFilePath();
-  let descriptor: LocalDaemonDescriptor | undefined;
-  try {
-    descriptor = await readLocalDaemonDescriptor(descriptorPath);
-  } catch {
-    return { status: "stale", reason: "descriptor is invalid" };
-  }
-  if (descriptor === undefined) {
-    return { status: "stopped" };
-  }
-
-  try {
-    await new LocalDaemonClient(descriptor.address, descriptor.authToken).ping();
-    return { status: "running", descriptor };
-  } catch {
-    return {
-      status: "stale",
-      descriptor,
-      reason: "authenticated health check failed",
-    };
-  }
+function managedDaemonOperations(): ManagedDaemonOperations {
+  return new ManagedDaemonOperations({
+    daemonFile: daemonFilePath(),
+    entrypoint: process.argv[1],
+    env: process.env,
+  });
 }
 
 async function reportManagedDaemonStatus(): Promise<void> {
-  const state = await inspectManagedDaemon();
+  const state = await managedDaemonOperations().inspect();
   if (state.status === "running") {
     process.stdout.write(
       `running endpoint=${state.descriptor.address.host}:${state.descriptor.address.port}\n`,
@@ -361,169 +336,36 @@ async function reportManagedDaemonStatus(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-
   process.stdout.write(`stale reason=${escapeTerminalText(state.reason)}\n`);
   process.exitCode = 2;
 }
 
 async function startManagedDaemon(): Promise<void> {
-  const commandLock = await acquireFilesystemLock(
-    `${daemonFilePath()}.managed.lock`,
-    { timeoutMs: 35_000 },
+  const result = await managedDaemonOperations().start();
+  process.stdout.write(
+    result.alreadyRunning
+      ? `EasyServer daemon already running on ${result.descriptor.address.host}:${result.descriptor.address.port}\n`
+      : `EasyServer daemon started on ${result.descriptor.address.host}:${result.descriptor.address.port}\n`,
   );
-  try {
-    await startManagedDaemonLocked();
-  } finally {
-    await commandLock.release();
-  }
-}
-
-async function startManagedDaemonLocked(): Promise<void> {
-  const current = await inspectManagedDaemon();
-  if (current.status === "running") {
-    process.stdout.write(
-      `EasyServer daemon already running on ${current.descriptor.address.host}:${current.descriptor.address.port}\n`,
-    );
-    return;
-  }
-  const entrypoint = process.argv[1];
-  if (entrypoint === undefined || entrypoint.length === 0) {
-    throw new Error("Cannot determine the EasyServer CLI entrypoint");
-  }
-
-  const child = spawn(process.execPath, [entrypoint, "daemon", "run"], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-    env: process.env,
-  });
-  let spawnError: Error | undefined;
-  child.once("error", (error) => {
-    spawnError = error;
-  });
-  child.unref();
-
-  try {
-    const deadline = Date.now() + managedDaemonStartTimeoutMs();
-    while (Date.now() < deadline) {
-      if (spawnError !== undefined) {
-        throw spawnError;
-      }
-      const state = await inspectManagedDaemon();
-      if (state.status === "running") {
-        process.stdout.write(
-          `EasyServer daemon started on ${state.descriptor.address.host}:${state.descriptor.address.port}\n`,
-        );
-        return;
-      }
-      if (child.exitCode !== null) {
-        throw new Error(
-          `EasyServer daemon exited during startup with code ${child.exitCode}`,
-        );
-      }
-      await cliDelay(25);
-    }
-
-    const finalState = await inspectManagedDaemon();
-    if (finalState.status === "running") {
-      process.stdout.write(
-        `EasyServer daemon started on ${finalState.descriptor.address.host}:${finalState.descriptor.address.port}\n`,
-      );
-      return;
-    }
-    throw new Error("Timed out waiting for EasyServer daemon startup");
-  } catch (error) {
-    await terminateManagedDaemonChild(child);
-    throw error;
-  }
-}
-
-function managedDaemonStartTimeoutMs(): number {
-  const configured = process.env.EASYSERVER_DAEMON_START_TIMEOUT_MS;
-  if (configured === undefined) {
-    return 30_000;
-  }
-  const value = Number(configured);
-  if (!Number.isInteger(value) || value < 1) {
-    throw new Error("EASYSERVER_DAEMON_START_TIMEOUT_MS must be a positive integer");
-  }
-  return value;
-}
-
-async function terminateManagedDaemonChild(
-  child: ReturnType<typeof spawn>,
-): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-  child.kill();
-  await Promise.race([exited, cliDelay(2_000)]);
 }
 
 async function stopManagedDaemon(): Promise<void> {
-  const commandLock = await acquireFilesystemLock(
-    `${daemonFilePath()}.managed.lock`,
-    { timeoutMs: 35_000 },
-  );
-  try {
-    await stopManagedDaemonLocked();
-  } finally {
-    await commandLock.release();
-  }
-}
-
-async function stopManagedDaemonLocked(): Promise<void> {
-  const state = await inspectManagedDaemon();
-  if (state.status === "stopped") {
+  const result = await managedDaemonOperations().stop();
+  if (result.status === "already-stopped") {
     process.stdout.write("EasyServer daemon already stopped.\n");
     return;
   }
-  if (state.status === "stale") {
+  if (result.status === "stale") {
     process.stdout.write(
-      `EasyServer daemon is unreachable; descriptor left intact (${escapeTerminalText(state.reason)}).\n`,
+      `EasyServer daemon is unreachable; descriptor left intact (${escapeTerminalText(result.reason)}).\n`,
     );
     process.exitCode = 2;
     return;
   }
-
-  const client = new LocalDaemonClient(
-    state.descriptor.address,
-    state.descriptor.authToken,
-  );
-  const summary = await client.requestShutdown();
   process.stdout.write(
-    `Stopping EasyServer daemon; closing live-sessions=${summary.liveSessions} active-endpoint-intents=${summary.activeEndpointIntents}.\n`,
+    `Stopping EasyServer daemon; closing live-sessions=${result.summary.liveSessions} active-endpoint-intents=${result.summary.activeEndpointIntents}.\n`,
   );
-  await waitForManagedDaemonStop(state.descriptor);
   process.stdout.write("EasyServer daemon stopped.\n");
-}
-
-async function waitForManagedDaemonStop(
-  expected: LocalDaemonDescriptor,
-): Promise<void> {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    let current: LocalDaemonDescriptor | undefined;
-    try {
-      current = await readLocalDaemonDescriptor(daemonFilePath());
-    } catch {
-      current = undefined;
-    }
-    if (
-      current === undefined ||
-      current.authToken !== expected.authToken ||
-      current.address.port !== expected.address.port
-    ) {
-      return;
-    }
-    await cliDelay(25);
-  }
-  throw new Error("Timed out waiting for EasyServer daemon shutdown");
-}
-
-function cliDelay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function runSessions(args: readonly string[]): Promise<void> {
