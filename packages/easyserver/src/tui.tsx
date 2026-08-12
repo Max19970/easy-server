@@ -146,6 +146,7 @@ export interface TuiShellProps {
   readonly onProviderInteractiveEvent?: (event: ProviderInteractiveEvent) => void;
   readonly onProviderInteractiveClose?: () => void;
   readonly navigateToInstanceId?: string;
+  readonly onInstanceNavigationHandled?: () => void;
 }
 
 export function TuiShell({
@@ -164,6 +165,7 @@ export function TuiShell({
   onProviderInteractiveEvent,
   onProviderInteractiveClose,
   navigateToInstanceId,
+  onInstanceNavigationHandled,
 }: TuiShellProps): React.ReactElement {
   if (operation !== undefined && !isTuiOperationPresentation(operation)) {
     throw new TypeError("TUI operation presentation must come from the presentation model");
@@ -273,7 +275,8 @@ export function TuiShell({
     setActiveIndex(instancesIndex);
     setFocusedIndex(instancesIndex);
     setStatus(`Opened ${navigateToInstanceId}.`);
-  }, [navigateToInstanceId, readSnapshot]);
+    onInstanceNavigationHandled?.();
+  }, [navigateToInstanceId, readSnapshot, onInstanceNavigationHandled]);
 
   const navigation = useMemo(
     () =>
@@ -1347,6 +1350,7 @@ export function TuiApp({
   const [navigateToInstanceId, setNavigateToInstanceId] = useState<string | undefined>();
   const [snapshotStale, setSnapshotStale] = useState(false);
   const controllerRef = useRef<AbortController | undefined>(undefined);
+  const providerFlowBusyRef = useRef(false);
 
   const refresh = useCallback(async () => {
     if (readLoader === undefined) {
@@ -1478,12 +1482,14 @@ export function TuiApp({
   const openProviderWorkflow = useCallback(
     async (workflow: TuiProviderWorkflowReadItem) => {
       if (
+        providerFlowBusyRef.current ||
         providerFlowOpener === undefined ||
         workflow.presentation.kind !== "interactive-flow"
       ) {
         return;
       }
 
+      providerFlowBusyRef.current = true;
       providerFlowHandle?.close();
       setProviderFlowHandle(undefined);
       setProviderFlowScreen(undefined);
@@ -1515,6 +1521,8 @@ export function TuiApp({
             error,
           }),
         );
+      } finally {
+        providerFlowBusyRef.current = false;
       }
     },
     [providerFlowHandle, providerFlowOpener],
@@ -1523,10 +1531,11 @@ export function TuiApp({
   const dispatchProviderWorkflow = useCallback(
     async (event: ProviderInteractiveEvent) => {
       const handle = providerFlowHandle;
-      if (handle === undefined) {
+      if (handle === undefined || providerFlowBusyRef.current) {
         return;
       }
 
+      providerFlowBusyRef.current = true;
       const title = `${handle.descriptor.command.description}`;
       setOperation(
         presentWorkingOperation({
@@ -1588,12 +1597,17 @@ export function TuiApp({
             error,
           }),
         );
+      } finally {
+        providerFlowBusyRef.current = false;
       }
     },
     [providerFlowHandle, refresh],
   );
 
   const closeProviderWorkflow = useCallback(() => {
+    if (providerFlowBusyRef.current) {
+      return;
+    }
     providerFlowHandle?.close();
     setProviderFlowHandle(undefined);
     setProviderFlowScreen(undefined);
@@ -1698,6 +1712,9 @@ export function TuiApp({
       }}
       onProviderInteractiveClose={closeProviderWorkflow}
       navigateToInstanceId={navigateToInstanceId}
+      onInstanceNavigationHandled={() => {
+        setNavigateToInstanceId(undefined);
+      }}
     />
   );
 }

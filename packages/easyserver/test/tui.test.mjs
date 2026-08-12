@@ -1179,8 +1179,9 @@ test("TuiApp runs a generic provider workflow through host confirmation and navi
   assert.match(view.lastFrame(), /Review Nebula allocation/);
 
   view.stdin.write("\r");
+  view.stdin.write("\r");
   await tick();
-  assert.equal(dispatchCalls, 1);
+  assert.equal(dispatchCalls, 1, "a single provider session transition may be in flight");
   assert.match(view.lastFrame(), /Confirmation required/);
   assert.match(view.lastFrame(), /billable/);
 
@@ -1192,6 +1193,16 @@ test("TuiApp runs a generic provider workflow through host confirmation and navi
   assert.match(view.lastFrame(), /Instances/);
   assert.match(view.lastFrame(), /EasyServer ID: instance:nebula-42/);
   assert.equal(closeCalls, 0);
+
+  view.stdin.write("\u001b");
+  await flushEscape();
+  assert.match(view.lastFrame(), /> Overview \[active\]/);
+  view.stdin.write("r");
+  await tick();
+  await tick();
+  await tick();
+  assert.match(view.lastFrame(), /> Overview \[active\]/);
+  assert.doesNotMatch(view.lastFrame(), /EasyServer ID: instance:nebula-42/);
 });
 
 test("degraded provider state remains visible while healthy instance inventory stays usable", async () => {
