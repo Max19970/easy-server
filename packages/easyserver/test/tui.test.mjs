@@ -13,6 +13,13 @@ import {
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const flushEscape = () => new Promise((resolve) => setTimeout(resolve, 30));
 
+async function typeText(view, text) {
+  for (const character of text) {
+    view.stdin.write(character);
+    await tick();
+  }
+}
+
 function shell(props = {}) {
   return React.createElement(TuiShell, { colorEnabled: false, ...props });
 }
@@ -330,6 +337,132 @@ test("read-only surfaces make zero-provider and zero-instance states actionable"
   await tick();
   assert.match(view.lastFrame(), /Providers/);
   assert.match(view.lastFrame(), /easyserver plugins add <module>/);
+});
+
+test("Providers can register an already-installed plugin module without leaving the TUI", async () => {
+  const mutations = [];
+  const view = render(
+    shell({
+      width: 100,
+      readSnapshot: readSnapshot(),
+      readStatus: "ready",
+      onProviderMutation(mutation) {
+        mutations.push(mutation);
+      },
+    }),
+  );
+
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Press a to register an already-installed provider/);
+
+  view.stdin.write("a");
+  await tick();
+  assert.match(view.lastFrame(), /Register installed provider/);
+  assert.match(view.lastFrame(), /Module or path:/);
+
+  await typeText(view, "q-provider");
+  assert.match(view.lastFrame(), /q-provider/);
+
+  view.stdin.write("\r");
+  await tick();
+  assert.deepEqual(mutations, [
+    { kind: "add-plugin", source: "q-provider" },
+  ]);
+  assert.doesNotMatch(view.lastFrame(), /Register installed provider/);
+});
+
+test("provider registration prompt can be cancelled without mutation", async () => {
+  const mutations = [];
+  const view = render(
+    shell({
+      width: 100,
+      readSnapshot: readSnapshot(),
+      readStatus: "ready",
+      onProviderMutation(mutation) {
+        mutations.push(mutation);
+      },
+    }),
+  );
+
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("a");
+  await tick();
+  assert.match(view.lastFrame(), /Register installed provider/);
+  await typeText(view, "@fixture/provider");
+  view.stdin.write("\u001b");
+  await flushEscape();
+
+  assert.deepEqual(mutations, []);
+  assert.doesNotMatch(view.lastFrame(), /Register installed provider/);
+  assert.match(view.lastFrame(), /No provider plugins configured/);
+});
+
+test("TuiApp refreshes provider state after registration mutation succeeds", async () => {
+  let registered = false;
+  const mutations = [];
+  const loader = async () =>
+    readSnapshot({
+      providers: registered
+        ? {
+            status: "ready",
+            items: [
+              {
+                source: "@fixture/provider",
+                state: "loaded",
+                readiness: "ready",
+                pluginId: "fixture.provider",
+                displayName: "Fixture Provider",
+                providerId: "fixture",
+                version: "1.0.0",
+                credentials: { configured: 0, declared: 0, missingRequired: 0 },
+              },
+            ],
+          }
+        : { status: "ready", items: [] },
+    });
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: loader,
+      async providerMutationRunner(mutation) {
+        mutations.push(mutation);
+        registered = true;
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("a");
+  await tick();
+  await typeText(view, "@fixture/provider");
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  await tick();
+
+  assert.deepEqual(mutations, [
+    { kind: "add-plugin", source: "@fixture/provider" },
+  ]);
+  assert.match(view.lastFrame(), /Fixture Provider/);
+  assert.match(view.lastFrame(), /Source: @fixture\/provider/);
 });
 
 test("degraded provider state remains visible while healthy instance inventory stays usable", async () => {

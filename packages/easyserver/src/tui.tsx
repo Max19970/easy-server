@@ -21,7 +21,13 @@ import {
   type TuiInstanceReadItem,
   type TuiReadSnapshot,
 } from "./tui-read-model.js";
+import {
+  createDefaultTuiProviderMutationRunner,
+  type TuiProviderMutation,
+  type TuiProviderMutationRunner,
+} from "./tui-provider-operations.js";
 import type { OperationContext } from "@easyai101/easyserver-plugin-sdk";
+import { escapeTerminalText } from "./terminal-text.js";
 import { EASYSERVER_VERSION } from "./version.js";
 
 type TuiRouteId =
@@ -82,6 +88,7 @@ export interface TuiShellProps {
   readonly readSnapshot?: TuiReadSnapshot;
   readonly readStatus?: TuiReadStatus;
   readonly onRefresh?: (routeId: TuiRouteId) => void;
+  readonly onProviderMutation?: (mutation: TuiProviderMutation) => void;
 }
 
 export function TuiShell({
@@ -93,6 +100,7 @@ export function TuiShell({
   readSnapshot,
   readStatus = "idle",
   onRefresh,
+  onProviderMutation,
 }: TuiShellProps): React.ReactElement {
   if (operation !== undefined && !isTuiOperationPresentation(operation)) {
     throw new TypeError("TUI operation presentation must come from the presentation model");
@@ -106,6 +114,7 @@ export function TuiShell({
   const [activeIndex, setActiveIndex] = useState(0);
   const [helpOpen, setHelpOpen] = useState(false);
   const [status, setStatus] = useState("Ready.");
+  const [providerSourceInput, setProviderSourceInput] = useState<string | undefined>();
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | undefined>(
     () => firstInstanceId(readSnapshot),
   );
@@ -141,7 +150,7 @@ export function TuiShell({
   );
 
   useInput((input, key) => {
-    if ((key.ctrl && input === "c") || input === "q") {
+    if (key.ctrl && input === "c") {
       exit();
       return;
     }
@@ -155,6 +164,36 @@ export function TuiShell({
       if (operationInteractionOpen) {
         return;
       }
+    }
+
+    if (providerSourceInput !== undefined) {
+      if (key.escape) {
+        setProviderSourceInput(undefined);
+        setStatus("Provider registration cancelled.");
+        return;
+      }
+      if (key.return) {
+        const source = providerSourceInput.trim();
+        if (source.length > 0) {
+          onProviderMutation?.({ kind: "add-plugin", source });
+          setProviderSourceInput(undefined);
+          setStatus(`Registering provider ${source}.`);
+        }
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setProviderSourceInput((current) => current?.slice(0, -1) ?? "");
+        return;
+      }
+      if (!key.ctrl && !key.tab && input.length > 0) {
+        setProviderSourceInput((current) => `${current ?? ""}${input}`);
+      }
+      return;
+    }
+
+    if (input === "q") {
+      exit();
+      return;
     }
 
     if (input === "?") {
@@ -174,6 +213,16 @@ export function TuiShell({
     }
 
     if (helpOpen) {
+      return;
+    }
+
+    if (
+      activeRoute.id === "providers" &&
+      input === "a" &&
+      onProviderMutation !== undefined
+    ) {
+      setProviderSourceInput("");
+      setStatus("Enter an installed provider module or path.");
       return;
     }
 
@@ -290,6 +339,8 @@ export function TuiShell({
                   readStatus={readStatus}
                   narrow={narrow}
                   selectedInstanceId={effectiveSelectedInstanceId}
+                  providerSourceInput={providerSourceInput}
+                  canRegisterProvider={onProviderMutation !== undefined}
                 />
               </Box>
             </Box>
@@ -319,7 +370,7 @@ export function TuiShell({
           </Text>
         ) : (
           <Text color={muted} wrap="wrap">
-            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? " · j/k select" : ""} · q quit
+            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? " · j/k select" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · a register" : ""} · q quit
           </Text>
         )}
       </Box>
@@ -333,6 +384,8 @@ interface RouteSurfaceProps {
   readonly readStatus: TuiReadStatus;
   readonly narrow: boolean;
   readonly selectedInstanceId?: string;
+  readonly providerSourceInput?: string;
+  readonly canRegisterProvider: boolean;
 }
 
 function RouteSurface({
@@ -341,6 +394,8 @@ function RouteSurface({
   readStatus,
   narrow,
   selectedInstanceId,
+  providerSourceInput,
+  canRegisterProvider,
 }: RouteSurfaceProps): React.ReactElement {
   if (
     route.id !== "overview" &&
@@ -372,7 +427,13 @@ function RouteSurface({
       />
     );
   }
-  return <ProvidersSurface snapshot={snapshot} />;
+  return (
+    <ProvidersSurface
+      snapshot={snapshot}
+      sourceInput={providerSourceInput}
+      canRegister={canRegisterProvider}
+    />
+  );
 }
 
 function OverviewSurface({ snapshot }: { readonly snapshot: TuiReadSnapshot }): React.ReactElement {
@@ -523,7 +584,26 @@ function InstancesSurface({
   );
 }
 
-function ProvidersSurface({ snapshot }: { readonly snapshot: TuiReadSnapshot }): React.ReactElement {
+function ProvidersSurface({
+  snapshot,
+  sourceInput,
+  canRegister,
+}: {
+  readonly snapshot: TuiReadSnapshot;
+  readonly sourceInput?: string;
+  readonly canRegister: boolean;
+}): React.ReactElement {
+  if (sourceInput !== undefined) {
+    return (
+      <Box flexDirection="column">
+        <Text bold>Register installed provider</Text>
+        <Text>Module or path: {escapeTerminalText(sourceInput)}</Text>
+        <Text>Enter register · Esc cancel</Text>
+        <Text>Install, update and uninstall stay with your package manager.</Text>
+      </Box>
+    );
+  }
+
   if (snapshot.providers.status === "failed") {
     return (
       <Box flexDirection="column">
@@ -537,13 +617,22 @@ function ProvidersSurface({ snapshot }: { readonly snapshot: TuiReadSnapshot }):
     return (
       <Box flexDirection="column">
         <Text>No provider plugins configured.</Text>
-        <Text>For now, add one with: easyserver plugins add &lt;module&gt;</Text>
+        {canRegister ? (
+          <Text>Press a to register an already-installed provider module or path.</Text>
+        ) : (
+          <Text>For now, add one with: easyserver plugins add &lt;module&gt;</Text>
+        )}
       </Box>
     );
   }
 
   return (
     <Box flexDirection="column">
+      {canRegister ? (
+        <Box marginBottom={1}>
+          <Text>Press a to register another installed provider.</Text>
+        </Box>
+      ) : null}
       {snapshot.providers.items.map((provider) => (
         <Box key={`${provider.source}:${provider.pluginId ?? "unloaded"}`} flexDirection="column" marginBottom={1}>
           <Text bold>
@@ -690,12 +779,14 @@ export interface TuiAppProps {
   readonly colorEnabled?: boolean;
   readonly screenReader?: boolean;
   readonly readLoader?: TuiReadLoader;
+  readonly providerMutationRunner?: TuiProviderMutationRunner;
 }
 
 export function TuiApp({
   colorEnabled = true,
   screenReader = false,
   readLoader,
+  providerMutationRunner,
 }: TuiAppProps): React.ReactElement {
   const [snapshot, setSnapshot] = useState<TuiReadSnapshot | undefined>();
   const [operation, setOperation] = useState<TuiOperationPresentation | undefined>();
@@ -751,6 +842,35 @@ export function TuiApp({
     };
   }, [readLoader, refresh]);
 
+  const mutateProvider = useCallback(
+    async (mutation: TuiProviderMutation) => {
+      if (providerMutationRunner === undefined) {
+        return;
+      }
+
+      setOperation(
+        presentWorkingOperation({
+          title: "Register provider",
+          detail: `Validating ${mutation.source} before saving configuration.`,
+          activity: "verifying-state",
+        }),
+      );
+      try {
+        await providerMutationRunner(mutation);
+        await refresh();
+      } catch (error) {
+        setOperation(
+          presentOperationError({
+            title: "Register provider",
+            operation: "mutation",
+            error,
+          }),
+        );
+      }
+    },
+    [providerMutationRunner, refresh],
+  );
+
   const handleOperationAction = useCallback(
     (action: TuiOperationActionKind) => {
       if (action === "cancel") {
@@ -793,6 +913,13 @@ export function TuiApp({
       onRefresh={() => {
         void refresh();
       }}
+      onProviderMutation={
+        providerMutationRunner !== undefined && operation?.phase !== "working"
+          ? (mutation) => {
+              void mutateProvider(mutation);
+            }
+          : undefined
+      }
     />
   );
 }
@@ -803,6 +930,7 @@ export interface TuiRuntimeOptions {
   readonly stderr?: NodeJS.WriteStream;
   readonly env?: NodeJS.ProcessEnv;
   readonly readLoader?: TuiReadLoader;
+  readonly providerMutationRunner?: TuiProviderMutationRunner;
 }
 
 export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
@@ -814,6 +942,7 @@ export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
       colorEnabled={colorEnabled}
       screenReader={screenReader}
       readLoader={options.readLoader}
+      providerMutationRunner={options.providerMutationRunner}
     />,
     {
       stdin: options.stdin ?? process.stdin,
@@ -829,6 +958,9 @@ export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
 }
 
 export async function runTui(): Promise<void> {
-  const app = renderTui({ readLoader: loadDefaultTuiReadSnapshot });
+  const app = renderTui({
+    readLoader: loadDefaultTuiReadSnapshot,
+    providerMutationRunner: createDefaultTuiProviderMutationRunner(),
+  });
   await app.waitUntilExit();
 }
