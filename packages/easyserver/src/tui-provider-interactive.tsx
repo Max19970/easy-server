@@ -95,8 +95,12 @@ export function ProviderInteractiveSurface({
         return;
       }
       if (key.return) {
+        const clearingOptionalNumber =
+          !draft.repeatable &&
+          (draft.kind === "integer" || draft.kind === "decimal") &&
+          draft.value.trim().length === 0;
         const value = parseDraft(draft);
-        if (value !== undefined) {
+        if (value !== undefined || clearingOptionalNumber) {
           onEvent({
             kind: "field-change",
             fieldId: draft.fieldId,
@@ -394,6 +398,9 @@ function parseDraft(draft: DraftValue): ProviderInteractiveFieldValue | undefine
     : [draft.value];
   if (draft.kind === "text") {
     return draft.repeatable ? rawValues : rawValues[0] ?? "";
+  }
+  if (!draft.repeatable && draft.value.trim().length === 0) {
+    return undefined;
   }
   const numbers = rawValues.map(Number);
   if (

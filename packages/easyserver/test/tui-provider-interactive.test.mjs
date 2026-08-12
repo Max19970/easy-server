@@ -112,6 +112,46 @@ test("generic provider form edits provider-owned fields without domain-specific 
   assert.equal(closed, 0);
 });
 
+test("generic optional numeric fields can be cleared back to undefined", async () => {
+  const events = [];
+  const view = render(
+    React.createElement(ProviderInteractiveSurface, {
+      colorEnabled: false,
+      screen: {
+        kind: "form",
+        id: "advanced",
+        title: "Advanced provider IDs",
+        fields: [
+          {
+            kind: "integer",
+            id: "promotion",
+            label: "Promotion ID",
+            required: false,
+            value: 3,
+          },
+        ],
+        actions: [],
+      },
+      onEvent(event) {
+        events.push(event);
+      },
+      onClose() {},
+    }),
+  );
+
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\u007f");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  assert.deepEqual(events.at(-1), {
+    kind: "field-change",
+    fieldId: "promotion",
+    value: undefined,
+  });
+});
+
 test("generic provider table supports provider-owned selection and review submits by action", async () => {
   const events = [];
   const view = render(
