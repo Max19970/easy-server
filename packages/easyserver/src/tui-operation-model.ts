@@ -104,6 +104,7 @@ export interface PresentOperationErrorInput {
   readonly title: string;
   readonly operation: HostOperationKind;
   readonly error: unknown;
+  readonly allowRetry?: boolean;
 }
 
 export interface PresentCompletedOperationInput {
@@ -199,9 +200,10 @@ export function presentOperationError(
 
   const definitelyCancelled = normalized?.code === "cancelled";
   const retryAllowed =
-    input.operation === "read" ||
-    (input.operation === "mutation" &&
-      isRetrySafeHostMutationFailure(input.error));
+    input.allowRetry !== false &&
+    (input.operation === "read" ||
+      (input.operation === "mutation" &&
+        isRetrySafeHostMutationFailure(input.error)));
 
   return createPresentation({
     phase: definitelyCancelled ? "cancelled" : "failed",

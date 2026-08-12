@@ -3,7 +3,10 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 import React from "react";
 import { cleanup, render } from "ink-testing-library";
-import { normalizedError } from "@easyai101/easyserver-plugin-sdk";
+import {
+  hostTrustRequiredError,
+  normalizedError,
+} from "@easyai101/easyserver-plugin-sdk";
 import { renderTui, TuiApp, TuiShell } from "../dist/tui.js";
 import {
   presentMutationConfirmation,
@@ -38,6 +41,37 @@ function readSnapshot(overrides = {}) {
     daemon: { status: "stopped" },
     ...overrides,
   };
+}
+
+function foregroundConnectionSnapshot() {
+  return readSnapshot({
+    instances: {
+      status: "ready",
+      complete: true,
+      providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+      items: [
+        {
+          id: "instance:connect",
+          providerId: "fixture",
+          providerExternalId: "remote-connect",
+          management: "managed",
+          freshness: "fresh",
+          state: "running",
+          rawState: "RUNNING",
+          availableActions: [],
+        },
+      ],
+    },
+  });
+}
+
+async function openConnectionsRoute(view) {
+  for (let index = 0; index < 4; index += 1) {
+    view.stdin.write("\t");
+    await tick();
+  }
+  view.stdin.write("\r");
+  await tick();
 }
 
 class CaptureOutput extends EventEmitter {
@@ -1755,6 +1789,332 @@ test("TuiApp outcome-unknown offers observation refresh without redispatching th
   assert.equal(loaderCalls, 2);
   assert.equal(runnerCalls, 1);
   assert.doesNotMatch(view.lastFrame(), /outcome unknown/);
+});
+
+test("TuiApp guides foreground Endpoint creation with visible deterministic Access Method and loopback lifetime", async () => {
+  let connections = [];
+  let openedRequest;
+  let closedId;
+  const method = { id: "ssh-default", kind: "ssh", mode: "tcp-forward" };
+  const operations = {
+    list() {
+      return connections;
+    },
+    async listAccessMethods(instanceId) {
+      assert.equal(instanceId, "instance:connect");
+      return [method, { id: "ssh-secondary", kind: "ssh", mode: "tcp-forward" }];
+    },
+    async open(request) {
+      openedRequest = request;
+      const connection = {
+        id: "foreground:fixture",
+        instanceId: request.instanceId,
+        remoteHost: request.remoteHost,
+        remotePort: request.remotePort,
+        endpoint: { host: "127.0.0.1", port: 40123 },
+        accessMethod: method,
+        state: "live",
+      };
+      connections = [connection];
+      return connection;
+    },
+    async close(id) {
+      closedId = id;
+      connections = [];
+    },
+    async closeAll() {
+      connections = [];
+    },
+  };
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () => foregroundConnectionSnapshot(),
+      foregroundConnectionOperations: operations,
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openConnectionsRoute(view);
+  assert.match(view.lastFrame(), /> Connections/);
+  assert.match(view.lastFrame(), /Status: Opened Connections\./);
+  assert.match(view.lastFrame(), /TUI-owned foreground Endpoints/);
+
+  view.stdin.write("n");
+  await tick();
+  assert.match(view.lastFrame(), /Choose instance/);
+  assert.match(view.lastFrame(), /> instance:connect/);
+
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Remote host/);
+  assert.match(view.lastFrame(), /Host: 127\.0\.0\.1/);
+
+  view.stdin.write("\r");
+  await tick();
+  await typeText(view, "8188");
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  assert.match(view.lastFrame(), /Access Method/);
+  assert.match(view.lastFrame(), /> ssh-default .* default/);
+  assert.match(view.lastFrame(), /selected ID is\s+passed explicitly/);
+
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Local Endpoint: 127\.0\.0\.1:dynamic/);
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Review foreground Endpoint/);
+  assert.match(view.lastFrame(), /Lifetime: closes when this TUI exits/);
+
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  assert.deepEqual(openedRequest, {
+    instanceId: "instance:connect",
+    remoteHost: "127.0.0.1",
+    remotePort: 8188,
+    accessMethodId: "ssh-default",
+  });
+  assert.match(view.lastFrame(), /127\.0\.0\.1:40123 · live/);
+  assert.match(
+    view.lastFrame(),
+    /TUI-owned foreground Endpoints stay loopback-only and close when this TUI/,
+  );
+
+  view.stdin.write("x");
+  await tick();
+  await tick();
+  assert.equal(closedId, "foreground:fixture");
+  assert.match(view.lastFrame(), /None open/);
+});
+
+test("foreground Endpoint port conflicts preserve the guided form values for correction", async () => {
+  const method = { id: "ssh", kind: "ssh", mode: "tcp-forward" };
+  const operations = {
+    list() {
+      return [];
+    },
+    async listAccessMethods() {
+      return [method];
+    },
+    async open() {
+      throw normalizedError(
+        "conflict",
+        "Local Endpoint port is already in use: 48188",
+      );
+    },
+    async close() {},
+    async closeAll() {},
+  };
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () => foregroundConnectionSnapshot(),
+      foregroundConnectionOperations: operations,
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openConnectionsRoute(view);
+  view.stdin.write("n");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  await typeText(view, "8188");
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  await typeText(view, "48188");
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Local binding: 127\.0\.0\.1:48188/);
+
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  assert.match(view.lastFrame(), /Open foreground Endpoint: failed/);
+  assert.match(view.lastFrame(), /Local Endpoint port is already in use: 48188/);
+  assert.match(view.lastFrame(), /Review foreground Endpoint/);
+  assert.match(view.lastFrame(), /Remote target: 127\.0\.0\.1:8188/);
+  assert.match(view.lastFrame(), /Local binding: 127\.0\.0\.1:48188/);
+  assert.doesNotMatch(view.lastFrame(), /Retry/);
+
+  view.stdin.write("x");
+  await tick();
+  assert.doesNotMatch(view.lastFrame(), /Open foreground Endpoint: failed/);
+  assert.match(view.lastFrame(), /Local binding: 127\.0\.0\.1:48188/);
+});
+
+test("first-use SSH trust is reviewed and accepted inside the foreground connection flow", async () => {
+  const trust = hostTrustRequiredError(
+    "ssh.example.test",
+    2222,
+    "ssh-ed25519",
+    "SHA256:tui-fixture",
+  );
+  const method = { id: "ssh", kind: "ssh", mode: "tcp-forward" };
+  let connections = [];
+  let accepted;
+  const operations = {
+    list() {
+      return connections;
+    },
+    async listAccessMethods() {
+      return [method];
+    },
+    async open(request, _context, interaction) {
+      accepted = await interaction.confirmHostTrust(
+        trust,
+        new AbortController().signal,
+      );
+      assert.equal(accepted, true);
+      const connection = {
+        id: "foreground:ssh",
+        instanceId: request.instanceId,
+        remoteHost: request.remoteHost,
+        remotePort: request.remotePort,
+        endpoint: { host: "127.0.0.1", port: 40222 },
+        accessMethod: method,
+        state: "live",
+      };
+      connections = [connection];
+      return connection;
+    },
+    async close() {},
+    async closeAll() {
+      connections = [];
+    },
+  };
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () => foregroundConnectionSnapshot(),
+      foregroundConnectionOperations: operations,
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openConnectionsRoute(view);
+  view.stdin.write("n");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  await typeText(view, "22");
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+
+  assert.match(view.lastFrame(), /SSH host trust required/);
+  assert.match(view.lastFrame(), /Host: ssh\.example\.test:2222/);
+  assert.match(view.lastFrame(), /Fingerprint: SHA256:tui-fixture/);
+  assert.match(view.lastFrame(), /Trust this fingerprint/);
+
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  assert.equal(accepted, true);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:40222 · live/);
+});
+
+test("quitting with live TUI-owned Endpoints states the count and renders closing before exit", async () => {
+  let connections = [
+    {
+      id: "foreground:a",
+      instanceId: "instance:connect",
+      remoteHost: "127.0.0.1",
+      remotePort: 8188,
+      endpoint: { host: "127.0.0.1", port: 41001 },
+      accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+      state: "live",
+    },
+    {
+      id: "foreground:b",
+      instanceId: "instance:connect",
+      remoteHost: "127.0.0.1",
+      remotePort: 7860,
+      endpoint: { host: "127.0.0.1", port: 41002 },
+      accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+      state: "live",
+    },
+  ];
+  let closeAllCalls = 0;
+  let finishCloseAll;
+  const closeGate = new Promise((resolve) => {
+    finishCloseAll = resolve;
+  });
+  const operations = {
+    list() {
+      return connections;
+    },
+    async listAccessMethods() {
+      return [];
+    },
+    async open() {
+      assert.fail("open is not expected");
+    },
+    async close() {},
+    async closeAll() {
+      closeAllCalls += 1;
+      connections = connections.map((connection) => ({
+        ...connection,
+        state: "closing",
+      }));
+      await closeGate;
+      connections = [];
+    },
+  };
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () => foregroundConnectionSnapshot(),
+      foregroundConnectionOperations: operations,
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openConnectionsRoute(view);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:41001 · live/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:41002 · live/);
+
+  view.stdin.write("q");
+  await tick();
+  assert.equal(closeAllCalls, 0);
+  assert.match(view.lastFrame(), /2 TUI-owned Endpoints are live/);
+  assert.match(view.lastFrame(), /Press q or Ctrl\+C again to close them and quit/);
+
+  view.stdin.write("q");
+  await tick();
+  await tick();
+  assert.equal(closeAllCalls, 1);
+  assert.match(view.lastFrame(), /Closing 2 TUI-owned Endpoints/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:41001 · closing/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:41002 · closing/);
+
+  finishCloseAll();
+  await tick();
+  await tick();
 });
 
 test("TuiApp cancellation clears loading immediately even when loader never settles", async () => {

@@ -13,6 +13,7 @@ import { ProviderInteractiveSurface } from "./tui-provider-interactive.js";
 import {
   isTuiOperationPresentation,
   presentCompletedOperation,
+  presentHostTrustRequest,
   presentMutationConfirmation,
   presentOperationError,
   presentProviderExecution,
@@ -45,6 +46,13 @@ import {
   type TuiInstanceMutationRunner,
 } from "./tui-instance-operations.js";
 import type { InstanceDestroyConfirmationDetails } from "./instance-operations.js";
+import type { AccessMethodDescriptor } from "./connection-gateway.js";
+import {
+  createDefaultTuiForegroundConnectionOperations,
+  type TuiForegroundConnection,
+  type TuiForegroundConnectionOperations,
+  type TuiForegroundConnectionRequest,
+} from "./tui-foreground-connections.js";
 import {
   normalizedError,
   type OperationContext,
@@ -96,9 +104,9 @@ const routes: readonly TuiRoute[] = [
   },
   {
     id: "sessions",
-    label: "Sessions",
-    description: "Connections and Endpoint intents",
-    body: "Connection sessions and persistent Endpoint intents will appear here.",
+    label: "Connections",
+    description: "Foreground Endpoints and persistent sessions",
+    body: "TUI-owned foreground Endpoints and persistent sessions will appear here.",
   },
   {
     id: "diagnostics",
@@ -142,6 +150,28 @@ interface PendingInstanceConfirmation {
   readonly workingTitle: string;
 }
 
+interface PendingHostTrustConfirmation {
+  readonly resolve: (accepted: boolean) => void;
+}
+
+type ForegroundConnectionStep =
+  | "instance"
+  | "remote-host"
+  | "remote-port"
+  | "access-method"
+  | "local-port"
+  | "review";
+
+interface ForegroundConnectionFlow {
+  readonly step: ForegroundConnectionStep;
+  readonly instanceId: string;
+  readonly remoteHost: string;
+  readonly remotePort: string;
+  readonly accessMethods: readonly AccessMethodDescriptor[];
+  readonly accessMethodId?: string;
+  readonly localPort: string;
+}
+
 export interface TuiShellProps {
   readonly width?: number;
   readonly colorEnabled?: boolean;
@@ -152,6 +182,15 @@ export interface TuiShellProps {
   readonly readStatus?: TuiReadStatus;
   readonly onRefresh?: (routeId: TuiRouteId) => void;
   readonly onInstanceMutation?: (mutation: TuiInstanceMutation) => void;
+  readonly foregroundConnections?: readonly TuiForegroundConnection[];
+  readonly onListForegroundAccessMethods?: (
+    instanceId: string,
+  ) => Promise<readonly AccessMethodDescriptor[] | undefined>;
+  readonly onOpenForegroundConnection?: (
+    request: TuiForegroundConnectionRequest,
+  ) => Promise<TuiForegroundConnection | undefined>;
+  readonly onCloseForegroundConnection?: (id: string) => Promise<boolean>;
+  readonly onQuitWithForegroundConnections?: () => Promise<boolean>;
   readonly onProviderMutation?: (mutation: TuiProviderMutation) => void;
   readonly providerInteractiveScreen?: ProviderInteractiveScreen;
   readonly providerInteractiveDisabled?: boolean;
@@ -172,6 +211,11 @@ export function TuiShell({
   readStatus = "idle",
   onRefresh,
   onInstanceMutation,
+  foregroundConnections = [],
+  onListForegroundAccessMethods,
+  onOpenForegroundConnection,
+  onCloseForegroundConnection,
+  onQuitWithForegroundConnections,
   onProviderMutation,
   providerInteractiveScreen,
   providerInteractiveDisabled = false,
@@ -205,6 +249,12 @@ export function TuiShell({
   const [selectedWorkflowKey, setSelectedWorkflowKey] = useState<string | undefined>(
     () => firstWorkflowKey(readSnapshot),
   );
+  const [foregroundConnectionFlow, setForegroundConnectionFlow] =
+    useState<ForegroundConnectionFlow | undefined>();
+  const [selectedForegroundConnectionId, setSelectedForegroundConnectionId] =
+    useState<string | undefined>(() => foregroundConnections[0]?.id);
+  const [foregroundConnectionBusy, setForegroundConnectionBusy] = useState(false);
+  const [quitArmed, setQuitArmed] = useState(false);
   const activeRoute = routes[activeIndex] ?? routes[0];
   const operationInteractionOpen = operation?.interaction !== undefined;
   const providerItems =
@@ -253,6 +303,13 @@ export function TuiShell({
     inventoryItems.some((instance) => instance.id === selectedInstanceId)
       ? selectedInstanceId
       : undefined;
+  const effectiveSelectedForegroundConnectionId =
+    selectedForegroundConnectionId !== undefined &&
+    foregroundConnections.some(
+      (connection) => connection.id === selectedForegroundConnectionId,
+    )
+      ? selectedForegroundConnectionId
+      : undefined;
 
   useEffect(() => {
     setSelectedProviderSource((current) =>
@@ -273,6 +330,12 @@ export function TuiShell({
           : workflowKey(workflowItems[0]),
     );
   }, [readSnapshot]);
+
+  useEffect(() => {
+    setSelectedForegroundConnectionId((current) =>
+      current === undefined ? foregroundConnections[0]?.id : current,
+    );
+  }, [foregroundConnections]);
 
   useEffect(() => {
     if (navigateToInstanceId === undefined) {
@@ -303,9 +366,36 @@ export function TuiShell({
     [activeIndex, focusedIndex],
   );
 
+  const requestExit = (): void => {
+    const count = foregroundConnections.length;
+    if (count === 0) {
+      exit();
+      return;
+    }
+    if (!quitArmed) {
+      setQuitArmed(true);
+      setStatus(
+        `${count} TUI-owned ${count === 1 ? "Endpoint is" : "Endpoints are"} live. Press q or Ctrl+C again to close ${count === 1 ? "it" : "them"} and quit.`,
+      );
+      return;
+    }
+    if (onQuitWithForegroundConnections === undefined) {
+      setStatus("Cannot quit safely while TUI-owned Endpoints are still live.");
+      return;
+    }
+    setStatus(`Closing ${count} TUI-owned ${count === 1 ? "Endpoint" : "Endpoints"} before exit.`);
+    void onQuitWithForegroundConnections().then((closed) => {
+      if (closed) {
+        exit();
+      } else {
+        setQuitArmed(false);
+      }
+    });
+  };
+
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
-      exit();
+      requestExit();
       return;
     }
 
@@ -352,7 +442,7 @@ export function TuiShell({
     if (providerCredentialFlow !== undefined) {
       if (providerCredentialFlow.kind === "picker") {
         if (input === "q") {
-          exit();
+          requestExit();
           return;
         }
         if (key.escape) {
@@ -449,8 +539,246 @@ export function TuiShell({
       return;
     }
 
+    if (foregroundConnectionFlow !== undefined) {
+      if (foregroundConnectionBusy) {
+        return;
+      }
+      if (key.escape) {
+        const previousStep = previousForegroundConnectionStep(
+          foregroundConnectionFlow.step,
+        );
+        if (previousStep === undefined) {
+          setForegroundConnectionFlow(undefined);
+          setStatus("Foreground connection setup cancelled.");
+        } else {
+          setForegroundConnectionFlow({
+            ...foregroundConnectionFlow,
+            step: previousStep,
+          });
+          setStatus("Returned to the previous connection step.");
+        }
+        return;
+      }
+
+      if (foregroundConnectionFlow.step === "instance") {
+        if ((input === "j" || input === "k") && inventoryItems.length > 0) {
+          const currentIndex = Math.max(
+            0,
+            inventoryItems.findIndex(
+              (instance) => instance.id === foregroundConnectionFlow.instanceId,
+            ),
+          );
+          const nextIndex =
+            input === "j"
+              ? (currentIndex + 1) % inventoryItems.length
+              : (currentIndex - 1 + inventoryItems.length) % inventoryItems.length;
+          const next = inventoryItems[nextIndex];
+          if (next !== undefined) {
+            setForegroundConnectionFlow({
+              ...foregroundConnectionFlow,
+              instanceId: next.id,
+              accessMethods: [],
+              accessMethodId: undefined,
+            });
+          }
+          return;
+        }
+        if (key.return && foregroundConnectionFlow.instanceId.length > 0) {
+          setForegroundConnectionFlow({
+            ...foregroundConnectionFlow,
+            step: "remote-host",
+          });
+          setStatus("Enter the remote host. 127.0.0.1 is the ordinary default.");
+        }
+        return;
+      }
+
+      if (foregroundConnectionFlow.step === "remote-host") {
+        if (key.backspace || key.delete) {
+          setForegroundConnectionFlow({
+            ...foregroundConnectionFlow,
+            remoteHost: foregroundConnectionFlow.remoteHost.slice(0, -1),
+          });
+          return;
+        }
+        if (key.return) {
+          if (foregroundConnectionFlow.remoteHost.trim().length === 0) {
+            setStatus("Remote host cannot be empty.");
+            return;
+          }
+          setForegroundConnectionFlow({
+            ...foregroundConnectionFlow,
+            remoteHost: foregroundConnectionFlow.remoteHost.trim(),
+            step: "remote-port",
+          });
+          setStatus("Enter the remote TCP port.");
+          return;
+        }
+        if (!key.ctrl && !key.tab && input.length > 0) {
+          setForegroundConnectionFlow({
+            ...foregroundConnectionFlow,
+            remoteHost: `${foregroundConnectionFlow.remoteHost}${input}`,
+          });
+        }
+        return;
+      }
+
+      if (foregroundConnectionFlow.step === "remote-port") {
+        if (key.backspace || key.delete) {
+          setForegroundConnectionFlow({
+            ...foregroundConnectionFlow,
+            remotePort: foregroundConnectionFlow.remotePort.slice(0, -1),
+          });
+          return;
+        }
+        if (key.return) {
+          const remotePort = parseConnectionPort(
+            foregroundConnectionFlow.remotePort,
+          );
+          if (remotePort === undefined) {
+            setStatus("Remote port must be an integer between 1 and 65535.");
+            return;
+          }
+          if (onListForegroundAccessMethods === undefined) {
+            setStatus("Access Method discovery is unavailable in this TUI session.");
+            return;
+          }
+          setForegroundConnectionBusy(true);
+          setStatus("Discovering Access Methods for the selected instance.");
+          void onListForegroundAccessMethods(foregroundConnectionFlow.instanceId).then(
+            (methods) => {
+              setForegroundConnectionBusy(false);
+              if (methods === undefined) {
+                return;
+              }
+              setForegroundConnectionFlow((current) =>
+                current === undefined
+                  ? current
+                  : {
+                      ...current,
+                      step: "access-method",
+                      accessMethods: methods,
+                      accessMethodId: methods[0]?.id,
+                    },
+              );
+              setStatus(
+                methods.length === 0
+                  ? "No TCP-forward Access Methods are currently available."
+                  : `Selected deterministic default Access Method ${methods[0]?.id}.`,
+              );
+            },
+          );
+          return;
+        }
+        if (/^[0-9]$/.test(input)) {
+          setForegroundConnectionFlow({
+            ...foregroundConnectionFlow,
+            remotePort: `${foregroundConnectionFlow.remotePort}${input}`,
+          });
+        }
+        return;
+      }
+
+      if (foregroundConnectionFlow.step === "access-method") {
+        if (
+          (input === "j" || input === "k") &&
+          foregroundConnectionFlow.accessMethods.length > 0
+        ) {
+          const currentIndex = Math.max(
+            0,
+            foregroundConnectionFlow.accessMethods.findIndex(
+              (method) => method.id === foregroundConnectionFlow.accessMethodId,
+            ),
+          );
+          const nextIndex =
+            input === "j"
+              ? (currentIndex + 1) % foregroundConnectionFlow.accessMethods.length
+              : (currentIndex - 1 + foregroundConnectionFlow.accessMethods.length) %
+                foregroundConnectionFlow.accessMethods.length;
+          const next = foregroundConnectionFlow.accessMethods[nextIndex];
+          if (next !== undefined) {
+            setForegroundConnectionFlow({
+              ...foregroundConnectionFlow,
+              accessMethodId: next.id,
+            });
+          }
+          return;
+        }
+        if (key.return) {
+          if (foregroundConnectionFlow.accessMethodId === undefined) {
+            setStatus(
+              "No TCP-forward Access Method is available. Choose another instance or refresh provider state.",
+            );
+            return;
+          }
+          setForegroundConnectionFlow({
+            ...foregroundConnectionFlow,
+            step: "local-port",
+          });
+          setStatus("Enter a stable local port, or leave it blank for a dynamic port.");
+        }
+        return;
+      }
+
+      if (foregroundConnectionFlow.step === "local-port") {
+        if (key.backspace || key.delete) {
+          setForegroundConnectionFlow({
+            ...foregroundConnectionFlow,
+            localPort: foregroundConnectionFlow.localPort.slice(0, -1),
+          });
+          return;
+        }
+        if (key.return) {
+          if (
+            foregroundConnectionFlow.localPort.length > 0 &&
+            parseConnectionPort(foregroundConnectionFlow.localPort) === undefined
+          ) {
+            setStatus("Local port must be blank or an integer between 1 and 65535.");
+            return;
+          }
+          setForegroundConnectionFlow({
+            ...foregroundConnectionFlow,
+            step: "review",
+          });
+          setStatus("Review the foreground Endpoint and press Enter to open it.");
+          return;
+        }
+        if (/^[0-9]$/.test(input)) {
+          setForegroundConnectionFlow({
+            ...foregroundConnectionFlow,
+            localPort: `${foregroundConnectionFlow.localPort}${input}`,
+          });
+        }
+        return;
+      }
+
+      if (foregroundConnectionFlow.step === "review" && key.return) {
+        const request = foregroundConnectionRequest(foregroundConnectionFlow);
+        if (request === undefined || onOpenForegroundConnection === undefined) {
+          setStatus("The foreground Endpoint request is incomplete.");
+          return;
+        }
+        setForegroundConnectionBusy(true);
+        void onOpenForegroundConnection(request).then((connection) => {
+          setForegroundConnectionBusy(false);
+          if (connection === undefined) {
+            setStatus(
+              "Foreground Endpoint was not opened. Your entered values are preserved for editing.",
+            );
+            return;
+          }
+          setForegroundConnectionFlow(undefined);
+          setSelectedForegroundConnectionId(connection.id);
+          setStatus(
+            `Opened TUI-owned Endpoint ${connection.endpoint.host}:${connection.endpoint.port}.`,
+          );
+        });
+      }
+      return;
+    }
+
     if (input === "q") {
-      exit();
+      requestExit();
       return;
     }
 
@@ -471,6 +799,79 @@ export function TuiShell({
     }
 
     if (helpOpen) {
+      return;
+    }
+
+    if (activeRoute.id === "sessions" && input === "n") {
+      const firstInstance =
+        inventoryItems.find((instance) => instance.id === effectiveSelectedInstanceId) ??
+        inventoryItems[0];
+      if (firstInstance === undefined) {
+        setStatus("No compute instance is available for a foreground connection.");
+        return;
+      }
+      if (
+        onListForegroundAccessMethods === undefined ||
+        onOpenForegroundConnection === undefined
+      ) {
+        setStatus("Foreground connection creation is unavailable in this TUI session.");
+        return;
+      }
+      setForegroundConnectionFlow({
+        step: "instance",
+        instanceId: firstInstance.id,
+        remoteHost: "127.0.0.1",
+        remotePort: "",
+        accessMethods: [],
+        accessMethodId: undefined,
+        localPort: "",
+      });
+      setStatus("Choose the instance for this TUI-owned foreground Endpoint.");
+      return;
+    }
+
+    if (
+      activeRoute.id === "sessions" &&
+      foregroundConnections.length > 0 &&
+      (input === "j" || input === "k")
+    ) {
+      const currentIndex = foregroundConnections.findIndex(
+        (connection) => connection.id === effectiveSelectedForegroundConnectionId,
+      );
+      const nextIndex =
+        currentIndex < 0
+          ? input === "j"
+            ? 0
+            : foregroundConnections.length - 1
+          : input === "j"
+            ? (currentIndex + 1) % foregroundConnections.length
+            : (currentIndex - 1 + foregroundConnections.length) %
+              foregroundConnections.length;
+      const next = foregroundConnections[nextIndex];
+      if (next !== undefined) {
+        setSelectedForegroundConnectionId(next.id);
+        setStatus(
+          `Selected foreground Endpoint ${next.endpoint.host}:${next.endpoint.port}.`,
+        );
+      }
+      return;
+    }
+
+    if (
+      activeRoute.id === "sessions" &&
+      input === "x" &&
+      effectiveSelectedForegroundConnectionId !== undefined &&
+      onCloseForegroundConnection !== undefined
+    ) {
+      const connectionId = effectiveSelectedForegroundConnectionId;
+      setForegroundConnectionBusy(true);
+      void onCloseForegroundConnection(connectionId).then((closed) => {
+        setForegroundConnectionBusy(false);
+        if (closed) {
+          setSelectedForegroundConnectionId(undefined);
+          setStatus("Foreground Endpoint closed.");
+        }
+      });
       return;
     }
 
@@ -734,6 +1135,14 @@ export function TuiShell({
                   narrow={narrow}
                   selectedInstanceId={selectedInstanceId}
                   canMutateInstances={onInstanceMutation !== undefined}
+                  foregroundConnectionFlow={foregroundConnectionFlow}
+                  foregroundConnectionBusy={foregroundConnectionBusy}
+                  foregroundConnections={foregroundConnections}
+                  selectedForegroundConnectionId={selectedForegroundConnectionId}
+                  canManageForegroundConnections={
+                    onOpenForegroundConnection !== undefined &&
+                    onCloseForegroundConnection !== undefined
+                  }
                   providerSourceInput={providerSourceInput}
                   providerCredentialFlow={providerCredentialFlowView}
                   selectedProviderSource={effectiveSelectedProviderSource}
@@ -772,11 +1181,11 @@ export function TuiShell({
           </Text>
         ) : screenReader ? (
           <Text>
-            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; J and K select instances; on Instances, A adopts discovered resources and number keys run shown lifecycle actions; Q quits.
+            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; J and K select items; on Instances, A adopts discovered resources and number keys run shown lifecycle actions; on Connections, N starts a foreground Endpoint and X closes the selected one; Q quits.
           </Text>
         ) : (
           <Text color={muted} wrap="wrap">
-            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? onInstanceMutation === undefined ? " · j/k select" : " · j/k select · a adopt · 1-4 actions" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : ""} · q quit
+            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? onInstanceMutation === undefined ? " · j/k select" : " · j/k select · a adopt · 1-4 actions" : activeRoute.id === "sessions" ? " · n new Endpoint · j/k select · x close" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : ""} · q quit
           </Text>
         )}
       </Box>
@@ -791,6 +1200,11 @@ interface RouteSurfaceProps {
   readonly narrow: boolean;
   readonly selectedInstanceId?: string;
   readonly canMutateInstances: boolean;
+  readonly foregroundConnectionFlow?: ForegroundConnectionFlow;
+  readonly foregroundConnectionBusy: boolean;
+  readonly foregroundConnections: readonly TuiForegroundConnection[];
+  readonly selectedForegroundConnectionId?: string;
+  readonly canManageForegroundConnections: boolean;
   readonly providerSourceInput?: string;
   readonly providerCredentialFlow?: ProviderCredentialFlowView;
   readonly selectedProviderSource?: string;
@@ -809,6 +1223,11 @@ function RouteSurface({
   narrow,
   selectedInstanceId,
   canMutateInstances,
+  foregroundConnectionFlow,
+  foregroundConnectionBusy,
+  foregroundConnections,
+  selectedForegroundConnectionId,
+  canManageForegroundConnections,
   providerSourceInput,
   providerCredentialFlow,
   selectedProviderSource,
@@ -823,7 +1242,8 @@ function RouteSurface({
     route.id !== "overview" &&
     route.id !== "instances" &&
     route.id !== "providers" &&
-    route.id !== "new-instance"
+    route.id !== "new-instance" &&
+    route.id !== "sessions"
   ) {
     return <Text wrap="wrap">{route.body}</Text>;
   }
@@ -867,6 +1287,18 @@ function RouteSurface({
         narrow={narrow}
         selectedInstanceId={selectedInstanceId}
         canMutate={canMutateInstances}
+      />
+    );
+  }
+  if (route.id === "sessions") {
+    return (
+      <ConnectionsSurface
+        snapshot={snapshot}
+        flow={foregroundConnectionFlow}
+        busy={foregroundConnectionBusy}
+        connections={foregroundConnections}
+        selectedConnectionId={selectedForegroundConnectionId}
+        canManage={canManageForegroundConnections}
       />
     );
   }
@@ -1042,6 +1474,152 @@ function InstancesSurface({
           {canMutate ? <InstanceActionGuidance instance={selected} /> : null}
         </Box>
       )}
+    </Box>
+  );
+}
+
+function ConnectionsSurface({
+  snapshot,
+  flow,
+  busy,
+  connections,
+  selectedConnectionId,
+  canManage,
+}: {
+  readonly snapshot: TuiReadSnapshot;
+  readonly flow?: ForegroundConnectionFlow;
+  readonly busy: boolean;
+  readonly connections: readonly TuiForegroundConnection[];
+  readonly selectedConnectionId?: string;
+  readonly canManage: boolean;
+}): React.ReactElement {
+  if (flow !== undefined) {
+    const instances =
+      snapshot.instances.status === "ready" ? snapshot.instances.items : [];
+    const selectedInstance = instances.find(
+      (instance) => instance.id === flow.instanceId,
+    );
+    const selectedMethod = flow.accessMethods.find(
+      (method) => method.id === flow.accessMethodId,
+    );
+    return (
+      <Box flexDirection="column">
+        <Text bold>New TUI-owned foreground Endpoint</Text>
+        <Text>
+          This Endpoint exists only while this TUI process is running. Esc returns to the previous step.
+        </Text>
+        {busy ? <Text>Working… input is temporarily paused.</Text> : null}
+        <Box marginTop={1} flexDirection="column">
+          {flow.step === "instance" ? (
+            <>
+              <Text bold>Choose instance</Text>
+              <Text>j/k select · Enter continue · Esc cancel</Text>
+              {instances.length === 0 ? (
+                <Text>No compute instances are currently available.</Text>
+              ) : (
+                instances.map((instance) => (
+                  <Text key={instance.id} bold={instance.id === flow.instanceId}>
+                    {instance.id === flow.instanceId ? "> " : "  "}
+                    {instance.name ?? instance.id} · {instance.providerId} · {instance.state ?? "unobserved"}
+                  </Text>
+                ))
+              )}
+            </>
+          ) : flow.step === "remote-host" ? (
+            <>
+              <Text bold>Remote host</Text>
+              <Text>Host: {escapeTerminalText(flow.remoteHost)}</Text>
+              <Text>Default: 127.0.0.1 · Enter continue · Backspace edit · Esc back</Text>
+            </>
+          ) : flow.step === "remote-port" ? (
+            <>
+              <Text bold>Remote TCP port</Text>
+              <Text>Port: {flow.remotePort}</Text>
+              <Text>Enter discovers Access Methods · Backspace edit · Esc back</Text>
+            </>
+          ) : flow.step === "access-method" ? (
+            <>
+              <Text bold>Access Method</Text>
+              <Text>
+                The first supported method is the deterministic default; the selected ID is passed explicitly when opening.
+              </Text>
+              {flow.accessMethods.length === 0 ? (
+                <Text>
+                  No TCP-forward Access Methods are currently available. Esc back and choose another instance or refresh provider state.
+                </Text>
+              ) : (
+                flow.accessMethods.map((method, index) => (
+                  <Text key={method.id} bold={method.id === flow.accessMethodId}>
+                    {method.id === flow.accessMethodId ? "> " : "  "}
+                    {escapeTerminalText(method.id)} · {escapeTerminalText(method.kind)} · {method.mode}
+                    {index === 0 ? " · default" : ""}
+                  </Text>
+                ))
+              )}
+              <Text>j/k select · Enter continue · Esc back</Text>
+            </>
+          ) : flow.step === "local-port" ? (
+            <>
+              <Text bold>Local loopback port</Text>
+              <Text>
+                Local Endpoint: 127.0.0.1:{flow.localPort.length === 0 ? "dynamic" : flow.localPort}
+              </Text>
+              <Text>Leave blank for a dynamic port, or enter 1-65535 for a stable requested port.</Text>
+              <Text>Enter continue · Backspace edit · Esc back</Text>
+            </>
+          ) : (
+            <>
+              <Text bold>Review foreground Endpoint</Text>
+              <Text>Instance: {selectedInstance?.name ?? flow.instanceId}</Text>
+              <Text>
+                Remote target: {escapeTerminalText(flow.remoteHost)}:{flow.remotePort}
+              </Text>
+              <Text>
+                Access Method: {selectedMethod === undefined ? "unavailable" : escapeTerminalText(selectedMethod.id)}
+              </Text>
+              <Text>
+                Local binding: 127.0.0.1:{flow.localPort.length === 0 ? "dynamic" : flow.localPort}
+              </Text>
+              <Text>Lifetime: closes when this TUI exits.</Text>
+              <Text>Enter open · Esc back</Text>
+            </>
+          )}
+        </Box>
+      </Box>
+    );
+  }
+
+  const selected = connections.find(
+    (connection) => connection.id === selectedConnectionId,
+  );
+  return (
+    <Box flexDirection="column">
+      <Text>
+        TUI-owned foreground Endpoints stay loopback-only and close when this TUI exits.
+      </Text>
+      <Text>
+        {canManage ? "n new Endpoint · j/k select · x close" : "Foreground connection management is unavailable in this TUI session."}
+      </Text>
+      <Box marginTop={1} flexDirection="column">
+        <Text bold>TUI-owned foreground Endpoints</Text>
+        {connections.length === 0 ? (
+          <Text>
+            None open. {snapshot.instances.status === "ready" && snapshot.instances.items.length === 0 ? "Create or discover an instance first." : "Press n to create one."}
+          </Text>
+        ) : (
+          connections.map((connection) => (
+            <Text key={connection.id} bold={connection.id === selected?.id}>
+              {connection.id === selected?.id ? "> " : "  "}
+              {connection.endpoint.host}:{connection.endpoint.port} · {connection.state} · {connection.instanceId} → {escapeTerminalText(connection.remoteHost)}:{connection.remotePort} · {escapeTerminalText(connection.accessMethod.id)}
+            </Text>
+          ))
+        )}
+      </Box>
+      <Box marginTop={1} flexDirection="column">
+        <Text bold>Persistent connection service</Text>
+        <Text>Daemon: {snapshot.daemon.status}</Text>
+        <Text>Persistent session workflows are handled separately from these TUI-owned Endpoints.</Text>
+      </Box>
     </Box>
   );
 }
@@ -1276,6 +1854,62 @@ function instanceEmptyGuidance(snapshot: TuiReadSnapshot): string {
   return "No compute instances yet. Providers are configured; use New instance when acquisition is enabled.";
 }
 
+function previousForegroundConnectionStep(
+  step: ForegroundConnectionStep,
+): ForegroundConnectionStep | undefined {
+  if (step === "instance") {
+    return undefined;
+  }
+  if (step === "remote-host") {
+    return "instance";
+  }
+  if (step === "remote-port") {
+    return "remote-host";
+  }
+  if (step === "access-method") {
+    return "remote-port";
+  }
+  if (step === "local-port") {
+    return "access-method";
+  }
+  return "local-port";
+}
+
+function parseConnectionPort(value: string): number | undefined {
+  if (!/^[0-9]+$/.test(value)) {
+    return undefined;
+  }
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65_535
+    ? port
+    : undefined;
+}
+
+function foregroundConnectionRequest(
+  flow: ForegroundConnectionFlow,
+): TuiForegroundConnectionRequest | undefined {
+  const remotePort = parseConnectionPort(flow.remotePort);
+  const localPort =
+    flow.localPort.length === 0
+      ? undefined
+      : parseConnectionPort(flow.localPort);
+  if (
+    remotePort === undefined ||
+    (flow.localPort.length > 0 && localPort === undefined) ||
+    flow.remoteHost.trim().length === 0 ||
+    flow.accessMethodId === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    instanceId: flow.instanceId,
+    remoteHost: flow.remoteHost.trim(),
+    remotePort,
+    ...(localPort === undefined ? {} : { localPort }),
+    accessMethodId: flow.accessMethodId,
+  };
+}
+
 function availableInstanceActions(
   instance: TuiInstanceReadItem,
 ): TuiInstanceReadItem["availableActions"] {
@@ -1466,7 +2100,9 @@ function HelpPanel({ colorEnabled }: { readonly colorEnabled: boolean }): React.
       <Text>j / k — select next / previous instance on Instances</Text>
       <Text>a — adopt the selected discovered instance when offered</Text>
       <Text>1-4 — run the shown lifecycle action on the selected instance</Text>
-      <Text>q / Ctrl+C — quit EasyServer</Text>
+      <Text>n — start a TUI-owned foreground Endpoint on Connections</Text>
+      <Text>x — close the selected TUI-owned foreground Endpoint</Text>
+      <Text>q / Ctrl+C — quit EasyServer; live foreground Endpoints require a second quit confirmation</Text>
     </Box>
   );
 }
@@ -1480,6 +2116,7 @@ export interface TuiAppProps {
   readonly screenReader?: boolean;
   readonly readLoader?: TuiReadLoader;
   readonly instanceMutationRunner?: TuiInstanceMutationRunner;
+  readonly foregroundConnectionOperations?: TuiForegroundConnectionOperations;
   readonly providerMutationRunner?: TuiProviderMutationRunner;
   readonly providerFlowOpener?: TuiProviderFlowOpener;
 }
@@ -1489,11 +2126,17 @@ export function TuiApp({
   screenReader = false,
   readLoader,
   instanceMutationRunner,
+  foregroundConnectionOperations,
   providerMutationRunner,
   providerFlowOpener,
 }: TuiAppProps): React.ReactElement {
   const [snapshot, setSnapshot] = useState<TuiReadSnapshot | undefined>();
   const [operation, setOperation] = useState<TuiOperationPresentation | undefined>();
+  const [foregroundConnections, setForegroundConnections] = useState<
+    readonly TuiForegroundConnection[]
+  >(() => foregroundConnectionOperations?.list() ?? []);
+  const [pendingHostTrustConfirmation, setPendingHostTrustConfirmation] =
+    useState<PendingHostTrustConfirmation | undefined>();
   const [pendingInstanceConfirmation, setPendingInstanceConfirmation] =
     useState<PendingInstanceConfirmation | undefined>();
   const [pendingProviderMutation, setPendingProviderMutation] =
@@ -1559,6 +2202,169 @@ export function TuiApp({
       controllerRef.current?.abort();
     };
   }, [readLoader, refresh]);
+
+  useEffect(
+    () => () => {
+      void foregroundConnectionOperations?.closeAll().catch(() => undefined);
+    },
+    [foregroundConnectionOperations],
+  );
+
+  const listForegroundAccessMethods = useCallback(
+    async (
+      instanceId: string,
+    ): Promise<readonly AccessMethodDescriptor[] | undefined> => {
+      if (foregroundConnectionOperations === undefined) {
+        return undefined;
+      }
+      setOperation(
+        presentWorkingOperation({
+          title: "Discover Access Methods",
+          detail: `Reading supported TCP-forward access for ${instanceId}.`,
+          activity: "loading",
+        }),
+      );
+      try {
+        const methods = await foregroundConnectionOperations.listAccessMethods(
+          instanceId,
+          { signal: new AbortController().signal },
+        );
+        setOperation(undefined);
+        return methods;
+      } catch (error) {
+        setOperation(
+          presentOperationError({
+            title: "Discover Access Methods",
+            operation: "read",
+            error,
+            allowRetry: false,
+          }),
+        );
+        return undefined;
+      }
+    },
+    [foregroundConnectionOperations],
+  );
+
+  const openForegroundConnection = useCallback(
+    async (
+      request: TuiForegroundConnectionRequest,
+    ): Promise<TuiForegroundConnection | undefined> => {
+      if (foregroundConnectionOperations === undefined) {
+        return undefined;
+      }
+      setOperation(
+        presentWorkingOperation({
+          title: "Open foreground Endpoint",
+          detail: `${request.instanceId} → ${request.remoteHost ?? "127.0.0.1"}:${request.remotePort}`,
+          activity: "waiting-provider",
+        }),
+      );
+      try {
+        const connection = await foregroundConnectionOperations.open(
+          request,
+          { signal: new AbortController().signal },
+          {
+            confirmHostTrust(trust, signal) {
+              if (signal.aborted) {
+                return Promise.resolve(false);
+              }
+              return new Promise<boolean>((resolve) => {
+                setPendingHostTrustConfirmation({ resolve });
+                setOperation(presentHostTrustRequest(trust));
+              });
+            },
+          },
+        );
+        setPendingHostTrustConfirmation(undefined);
+        setForegroundConnections([...foregroundConnectionOperations.list()]);
+        setOperation(undefined);
+        return connection;
+      } catch (error) {
+        setPendingHostTrustConfirmation(undefined);
+        setForegroundConnections([...foregroundConnectionOperations.list()]);
+        setOperation(
+          presentOperationError({
+            title: "Open foreground Endpoint",
+            operation: "read",
+            error,
+            allowRetry: false,
+          }),
+        );
+        return undefined;
+      }
+    },
+    [foregroundConnectionOperations],
+  );
+
+  const closeForegroundConnection = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (foregroundConnectionOperations === undefined) {
+        return false;
+      }
+      setOperation(
+        presentWorkingOperation({
+          title: "Close foreground Endpoint",
+          detail: "Closing the TUI-owned local Endpoint and its access transport.",
+          activity: "verifying-state",
+        }),
+      );
+      const closing = foregroundConnectionOperations.close(id);
+      setForegroundConnections([...foregroundConnectionOperations.list()]);
+      try {
+        await closing;
+        setForegroundConnections([...foregroundConnectionOperations.list()]);
+        setOperation(
+          presentCompletedOperation({ title: "Foreground Endpoint closed" }),
+        );
+        return true;
+      } catch (error) {
+        setForegroundConnections([...foregroundConnectionOperations.list()]);
+        setOperation(
+          presentOperationError({
+            title: "Close foreground Endpoint",
+            operation: "read",
+            error,
+            allowRetry: false,
+          }),
+        );
+        return false;
+      }
+    },
+    [foregroundConnectionOperations],
+  );
+
+  const closeForegroundConnectionsForExit = useCallback(async (): Promise<boolean> => {
+    if (foregroundConnectionOperations === undefined) {
+      return foregroundConnections.length === 0;
+    }
+    const count = foregroundConnectionOperations.list().length;
+    setOperation(
+      presentWorkingOperation({
+        title: `Closing ${count} TUI-owned ${count === 1 ? "Endpoint" : "Endpoints"}`,
+        detail: "Foreground Endpoints close before the TUI exits.",
+        activity: "verifying-state",
+      }),
+    );
+    const closing = foregroundConnectionOperations.closeAll();
+    setForegroundConnections([...foregroundConnectionOperations.list()]);
+    try {
+      await closing;
+      setForegroundConnections([]);
+      return true;
+    } catch (error) {
+      setForegroundConnections([...foregroundConnectionOperations.list()]);
+      setOperation(
+        presentOperationError({
+          title: "Close foreground Endpoints before exit",
+          operation: "read",
+          error,
+          allowRetry: false,
+        }),
+      );
+      return false;
+    }
+  }, [foregroundConnectionOperations, foregroundConnections.length]);
 
   const mutateInstance = useCallback(
     async (mutation: TuiInstanceMutation) => {
@@ -1851,6 +2657,24 @@ export function TuiApp({
   const handleOperationAction = useCallback(
     (action: TuiOperationActionKind) => {
       if (
+        pendingHostTrustConfirmation !== undefined &&
+        (action === "trust" || action === "decline")
+      ) {
+        const pending = pendingHostTrustConfirmation;
+        setPendingHostTrustConfirmation(undefined);
+        pending.resolve(action === "trust");
+        setOperation(
+          action === "trust"
+            ? presentWorkingOperation({
+                title: "Open foreground Endpoint",
+                detail: "Enrolling the reviewed SSH fingerprint and retrying connection setup once.",
+                activity: "waiting-provider",
+              })
+            : undefined,
+        );
+        return;
+      }
+      if (
         pendingInstanceConfirmation !== undefined &&
         (action === "confirm" || action === "decline")
       ) {
@@ -1910,6 +2734,7 @@ export function TuiApp({
         return;
       }
       if (action === "dismiss") {
+        setPendingHostTrustConfirmation(undefined);
         setPendingInstanceConfirmation(undefined);
         setPendingProviderMutation(undefined);
         setOperation(undefined);
@@ -1917,6 +2742,7 @@ export function TuiApp({
     },
     [
       mutateProvider,
+      pendingHostTrustConfirmation,
       pendingInstanceConfirmation,
       pendingProviderFlowConfirmation,
       pendingProviderMutation,
@@ -1946,6 +2772,27 @@ export function TuiApp({
       onRefresh={() => {
         void refresh();
       }}
+      foregroundConnections={foregroundConnections}
+      onListForegroundAccessMethods={
+        foregroundConnectionOperations === undefined
+          ? undefined
+          : listForegroundAccessMethods
+      }
+      onOpenForegroundConnection={
+        foregroundConnectionOperations === undefined
+          ? undefined
+          : openForegroundConnection
+      }
+      onCloseForegroundConnection={
+        foregroundConnectionOperations === undefined
+          ? undefined
+          : closeForegroundConnection
+      }
+      onQuitWithForegroundConnections={
+        foregroundConnectionOperations === undefined
+          ? undefined
+          : closeForegroundConnectionsForExit
+      }
       onInstanceMutation={
         instanceMutationRunner !== undefined && operation?.phase !== "working"
           ? (mutation) => {
@@ -1986,6 +2833,7 @@ export interface TuiRuntimeOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly readLoader?: TuiReadLoader;
   readonly instanceMutationRunner?: TuiInstanceMutationRunner;
+  readonly foregroundConnectionOperations?: TuiForegroundConnectionOperations;
   readonly providerMutationRunner?: TuiProviderMutationRunner;
   readonly providerFlowOpener?: TuiProviderFlowOpener;
 }
@@ -2000,6 +2848,7 @@ export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
       screenReader={screenReader}
       readLoader={options.readLoader}
       instanceMutationRunner={options.instanceMutationRunner}
+      foregroundConnectionOperations={options.foregroundConnectionOperations}
       providerMutationRunner={options.providerMutationRunner}
       providerFlowOpener={options.providerFlowOpener}
     />,
@@ -2020,6 +2869,7 @@ export async function runTui(): Promise<void> {
   const app = renderTui({
     readLoader: loadDefaultTuiReadSnapshot,
     instanceMutationRunner: createDefaultTuiInstanceMutationRunner(),
+    foregroundConnectionOperations: createDefaultTuiForegroundConnectionOperations(),
     providerMutationRunner: createDefaultTuiProviderMutationRunner(),
     providerFlowOpener: createDefaultTuiProviderFlowOpener(),
   });
