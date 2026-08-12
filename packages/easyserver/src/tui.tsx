@@ -12,6 +12,7 @@ import { TuiOperationDrawer } from "./tui-operation-drawer.js";
 import { ProviderInteractiveSurface } from "./tui-provider-interactive.js";
 import {
   isTuiOperationPresentation,
+  presentCompletedOperation,
   presentMutationConfirmation,
   presentOperationError,
   presentProviderExecution,
@@ -38,6 +39,12 @@ import {
   type TuiProviderMutation,
   type TuiProviderMutationRunner,
 } from "./tui-provider-operations.js";
+import {
+  createDefaultTuiInstanceMutationRunner,
+  type TuiInstanceMutation,
+  type TuiInstanceMutationRunner,
+} from "./tui-instance-operations.js";
+import type { InstanceDestroyConfirmationDetails } from "./instance-operations.js";
 import {
   normalizedError,
   type OperationContext,
@@ -130,6 +137,11 @@ interface PendingProviderFlowConfirmation {
   readonly workingTitle: string;
 }
 
+interface PendingInstanceConfirmation {
+  readonly resolve: (accepted: boolean) => void;
+  readonly workingTitle: string;
+}
+
 export interface TuiShellProps {
   readonly width?: number;
   readonly colorEnabled?: boolean;
@@ -139,6 +151,7 @@ export interface TuiShellProps {
   readonly readSnapshot?: TuiReadSnapshot;
   readonly readStatus?: TuiReadStatus;
   readonly onRefresh?: (routeId: TuiRouteId) => void;
+  readonly onInstanceMutation?: (mutation: TuiInstanceMutation) => void;
   readonly onProviderMutation?: (mutation: TuiProviderMutation) => void;
   readonly providerInteractiveScreen?: ProviderInteractiveScreen;
   readonly providerInteractiveDisabled?: boolean;
@@ -158,6 +171,7 @@ export function TuiShell({
   readSnapshot,
   readStatus = "idle",
   onRefresh,
+  onInstanceMutation,
   onProviderMutation,
   providerInteractiveScreen,
   providerInteractiveDisabled = false,
@@ -238,7 +252,7 @@ export function TuiShell({
     selectedInstanceId !== undefined &&
     inventoryItems.some((instance) => instance.id === selectedInstanceId)
       ? selectedInstanceId
-      : inventoryItems[0]?.id;
+      : undefined;
 
   useEffect(() => {
     setSelectedProviderSource((current) =>
@@ -248,10 +262,7 @@ export function TuiShell({
         : providerItems[0]?.source,
     );
     setSelectedInstanceId((current) =>
-      current !== undefined &&
-      inventoryItems.some((instance) => instance.id === current)
-        ? current
-        : inventoryItems[0]?.id,
+      current === undefined ? inventoryItems[0]?.id : current,
     );
     setSelectedWorkflowKey((current) =>
       current !== undefined &&
@@ -264,10 +275,14 @@ export function TuiShell({
   }, [readSnapshot]);
 
   useEffect(() => {
-    if (
-      navigateToInstanceId === undefined ||
-      !inventoryItems.some((instance) => instance.id === navigateToInstanceId)
-    ) {
+    if (navigateToInstanceId === undefined) {
+      return;
+    }
+    if (!inventoryItems.some((instance) => instance.id === navigateToInstanceId)) {
+      setStatus(
+        `Instance ${navigateToInstanceId} is not visible in the refreshed inventory.`,
+      );
+      onInstanceNavigationHandled?.();
       return;
     }
     const instancesIndex = routes.findIndex((route) => route.id === "instances");
@@ -592,22 +607,40 @@ export function TuiShell({
       inventoryItems.length > 0 &&
       (input === "j" || input === "k")
     ) {
-      const currentIndex = Math.max(
-        0,
-        inventoryItems.findIndex(
-          (instance) => instance.id === effectiveSelectedInstanceId,
-        ),
+      const currentIndex = inventoryItems.findIndex(
+        (instance) => instance.id === effectiveSelectedInstanceId,
       );
       const nextIndex =
-        input === "j"
-          ? (currentIndex + 1) % inventoryItems.length
-          : (currentIndex - 1 + inventoryItems.length) % inventoryItems.length;
+        currentIndex < 0
+          ? input === "j"
+            ? 0
+            : inventoryItems.length - 1
+          : input === "j"
+            ? (currentIndex + 1) % inventoryItems.length
+            : (currentIndex - 1 + inventoryItems.length) % inventoryItems.length;
       const next = inventoryItems[nextIndex];
       if (next !== undefined) {
         setSelectedInstanceId(next.id);
         setStatus(`Selected ${next.id}.`);
       }
       return;
+    }
+
+    if (
+      activeRoute.id === "instances" &&
+      effectiveSelectedInstanceId !== undefined &&
+      onInstanceMutation !== undefined
+    ) {
+      const selected = inventoryItems.find(
+        (instance) => instance.id === effectiveSelectedInstanceId,
+      );
+      const mutation =
+        selected === undefined ? undefined : instanceMutationForInput(selected, input);
+      if (mutation !== undefined) {
+        onInstanceMutation(mutation);
+        setStatus(instanceMutationStatus(mutation));
+        return;
+      }
     }
 
     if (input === "r") {
@@ -699,7 +732,8 @@ export function TuiShell({
                   snapshot={readSnapshot}
                   readStatus={readStatus}
                   narrow={narrow}
-                  selectedInstanceId={effectiveSelectedInstanceId}
+                  selectedInstanceId={selectedInstanceId}
+                  canMutateInstances={onInstanceMutation !== undefined}
                   providerSourceInput={providerSourceInput}
                   providerCredentialFlow={providerCredentialFlowView}
                   selectedProviderSource={effectiveSelectedProviderSource}
@@ -738,11 +772,11 @@ export function TuiShell({
           </Text>
         ) : screenReader ? (
           <Text>
-            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; J and K select instances; Q quits.
+            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; J and K select instances; on Instances, A adopts discovered resources and number keys run shown lifecycle actions; Q quits.
           </Text>
         ) : (
           <Text color={muted} wrap="wrap">
-            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? " · j/k select" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : ""} · q quit
+            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? onInstanceMutation === undefined ? " · j/k select" : " · j/k select · a adopt · 1-4 actions" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : ""} · q quit
           </Text>
         )}
       </Box>
@@ -756,6 +790,7 @@ interface RouteSurfaceProps {
   readonly readStatus: TuiReadStatus;
   readonly narrow: boolean;
   readonly selectedInstanceId?: string;
+  readonly canMutateInstances: boolean;
   readonly providerSourceInput?: string;
   readonly providerCredentialFlow?: ProviderCredentialFlowView;
   readonly selectedProviderSource?: string;
@@ -773,6 +808,7 @@ function RouteSurface({
   readStatus,
   narrow,
   selectedInstanceId,
+  canMutateInstances,
   providerSourceInput,
   providerCredentialFlow,
   selectedProviderSource,
@@ -830,6 +866,7 @@ function RouteSurface({
         snapshot={snapshot}
         narrow={narrow}
         selectedInstanceId={selectedInstanceId}
+        canMutate={canMutateInstances}
       />
     );
   }
@@ -925,12 +962,14 @@ interface InstancesSurfaceProps {
   readonly snapshot: TuiReadSnapshot;
   readonly narrow: boolean;
   readonly selectedInstanceId?: string;
+  readonly canMutate: boolean;
 }
 
 function InstancesSurface({
   snapshot,
   narrow,
   selectedInstanceId,
+  canMutate,
 }: InstancesSurfaceProps): React.ReactElement {
   if (snapshot.instances.status === "failed") {
     return (
@@ -957,37 +996,52 @@ function InstancesSurface({
   }
 
   const selected =
-    items.find((instance) => instance.id === selectedInstanceId) ?? items[0]!;
+    selectedInstanceId === undefined
+      ? items[0]
+      : items.find((instance) => instance.id === selectedInstanceId);
+  const selectionMissing = selectedInstanceId !== undefined && selected === undefined;
 
   return (
     <Box flexDirection="column">
       {snapshot.instances.complete ? null : (
         <PartialInventoryNotice failedProviders={failedProviderOutcomes} />
       )}
-      <Text>j/k select instance · r refresh</Text>
+      <Text>
+        j/k select instance{canMutate ? " · a adopt · 1-4 lifecycle actions" : ""} · r refresh
+      </Text>
       <Box marginTop={1} flexDirection="column">
         {items.map((instance) => (
-          <Text key={instance.id} bold={instance.id === selected.id}>
-            {instance.id === selected.id ? "> " : "  "}
+          <Text key={instance.id} bold={instance.id === selected?.id}>
+            {instance.id === selected?.id ? "> " : "  "}
             {narrow
               ? `${instance.name ?? instance.id} · ${instance.state ?? "unobserved"}`
-              : `${instance.name ?? instance.id} · state=${instance.state ?? "unobserved"} · provider=${instance.providerId} · management=${instance.management} · actions=${formatActions(instance.availableActions)}`}
+              : `${instance.name ?? instance.id} · state=${instance.state ?? "unobserved"} · provider=${instance.providerId} · management=${instance.management} · actions=${formatActions(availableInstanceActions(instance))}`}
           </Text>
         ))}
       </Box>
-      <Box marginTop={1} flexDirection="column">
-        <Text bold>Instance detail</Text>
-        <Text>EasyServer ID: {selected.id}</Text>
-        <Text>Provider: {selected.providerId}</Text>
-        <Text>Provider ID: {selected.providerExternalId}</Text>
-        <Text>Normalized state: {selected.state ?? "unobserved"}</Text>
-        {selected.rawState === undefined ? null : (
-          <Text>Provider state: {String(selected.rawState)}</Text>
-        )}
-        <Text>Freshness: {selected.freshness}</Text>
-        <Text>Management: {selected.management}</Text>
-        <Text>Available actions: {formatActions(selected.availableActions)}</Text>
-      </Box>
+      {selectionMissing ? (
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>Selected instance is no longer visible.</Text>
+          <Text>
+            {selectedInstanceId} disappeared from the refreshed inventory. No action target has been changed; press j/k to choose a current instance.
+          </Text>
+        </Box>
+      ) : selected === undefined ? null : (
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>Instance detail</Text>
+          <Text>EasyServer ID: {selected.id}</Text>
+          <Text>Provider: {selected.providerId}</Text>
+          <Text>Provider ID: {selected.providerExternalId}</Text>
+          <Text>Normalized state: {selected.state ?? "unobserved"}</Text>
+          {selected.rawState === undefined ? null : (
+            <Text>Provider state: {String(selected.rawState)}</Text>
+          )}
+          <Text>Freshness: {selected.freshness}</Text>
+          <Text>Management: {selected.management}</Text>
+          <Text>Available actions: {formatActions(availableInstanceActions(selected))}</Text>
+          {canMutate ? <InstanceActionGuidance instance={selected} /> : null}
+        </Box>
+      )}
     </Box>
   );
 }
@@ -1222,6 +1276,103 @@ function instanceEmptyGuidance(snapshot: TuiReadSnapshot): string {
   return "No compute instances yet. Providers are configured; use New instance when acquisition is enabled.";
 }
 
+function availableInstanceActions(
+  instance: TuiInstanceReadItem,
+): TuiInstanceReadItem["availableActions"] {
+  if (instance.freshness !== "fresh") {
+    return [];
+  }
+  return instance.availableActions.filter(
+    (action) => action !== "instance.destroy" || instance.management === "managed",
+  );
+}
+
+function instanceMutationForInput(
+  instance: TuiInstanceReadItem,
+  input: string,
+): TuiInstanceMutation | undefined {
+  if (
+    input === "a" &&
+    instance.freshness === "fresh" &&
+    instance.management === "discovered"
+  ) {
+    return { kind: "adopt", instanceId: instance.id };
+  }
+  if (!/^[1-9]$/.test(input)) {
+    return undefined;
+  }
+  const action = availableInstanceActions(instance)[Number(input) - 1];
+  return action === undefined
+    ? undefined
+    : { kind: "action", instanceId: instance.id, action };
+}
+
+function instanceMutationStatus(mutation: TuiInstanceMutation): string {
+  return mutation.kind === "adopt"
+    ? `Adoption requested for ${mutation.instanceId}.`
+    : `Requested ${mutation.action} for ${mutation.instanceId}.`;
+}
+
+function instanceMutationTitle(mutation: TuiInstanceMutation): string {
+  if (mutation.kind === "adopt") {
+    return "Adopt instance";
+  }
+  const action = mutation.action.slice("instance.".length);
+  return `${action[0]?.toUpperCase() ?? ""}${action.slice(1)} instance`;
+}
+
+function instanceConfirmationTarget(
+  details: InstanceDestroyConfirmationDetails,
+): string {
+  return `${escapeTerminalText(details.instanceId)} · provider=${escapeTerminalText(details.providerId)} · management=${details.management}`;
+}
+
+function destroyAffectedResources(
+  details: InstanceDestroyConfirmationDetails,
+): readonly string[] {
+  return [
+    ...details.impact.sessionIds.map(
+      (sessionId) => `Session ${escapeTerminalText(sessionId)}`,
+    ),
+    ...details.impact.endpointIntentNames.map(
+      (name) => `Endpoint intent ${escapeTerminalText(name)}`,
+    ),
+    ...(details.impact.pendingCleanupCount === 0
+      ? []
+      : [`${details.impact.pendingCleanupCount} pending connection cleanup(s)`]),
+  ];
+}
+
+function InstanceActionGuidance({
+  instance,
+}: {
+  readonly instance: TuiInstanceReadItem;
+}): React.ReactElement {
+  if (instance.freshness !== "fresh") {
+    return <Text>Refresh before managing this instance; stale or unobserved state is read-only.</Text>;
+  }
+
+  const actions = availableInstanceActions(instance);
+  return (
+    <Box flexDirection="column">
+      {instance.management === "discovered" ? (
+        <Text>a Adopt for EasyServer management</Text>
+      ) : null}
+      {instance.management === "discovered" &&
+      instance.availableActions.includes("instance.destroy") ? (
+        <Text>Destroy is unavailable until this resource is explicitly adopted.</Text>
+      ) : null}
+      {actions.length === 0 ? (
+        <Text>No lifecycle actions are currently available.</Text>
+      ) : (
+        <Text>
+          Actions: {actions.map((action, index) => `${index + 1} ${action.slice("instance.".length)}`).join(" · ")}
+        </Text>
+      )}
+    </Box>
+  );
+}
+
 function formatActions(actions: readonly string[]): string {
   return actions.length === 0 ? "none" : actions.join(", ");
 }
@@ -1313,6 +1464,8 @@ function HelpPanel({ colorEnabled }: { readonly colorEnabled: boolean }): React.
       <Text>? — toggle this help</Text>
       <Text>r — refresh current section</Text>
       <Text>j / k — select next / previous instance on Instances</Text>
+      <Text>a — adopt the selected discovered instance when offered</Text>
+      <Text>1-4 — run the shown lifecycle action on the selected instance</Text>
       <Text>q / Ctrl+C — quit EasyServer</Text>
     </Box>
   );
@@ -1326,6 +1479,7 @@ export interface TuiAppProps {
   readonly colorEnabled?: boolean;
   readonly screenReader?: boolean;
   readonly readLoader?: TuiReadLoader;
+  readonly instanceMutationRunner?: TuiInstanceMutationRunner;
   readonly providerMutationRunner?: TuiProviderMutationRunner;
   readonly providerFlowOpener?: TuiProviderFlowOpener;
 }
@@ -1334,11 +1488,14 @@ export function TuiApp({
   colorEnabled = true,
   screenReader = false,
   readLoader,
+  instanceMutationRunner,
   providerMutationRunner,
   providerFlowOpener,
 }: TuiAppProps): React.ReactElement {
   const [snapshot, setSnapshot] = useState<TuiReadSnapshot | undefined>();
   const [operation, setOperation] = useState<TuiOperationPresentation | undefined>();
+  const [pendingInstanceConfirmation, setPendingInstanceConfirmation] =
+    useState<PendingInstanceConfirmation | undefined>();
   const [pendingProviderMutation, setPendingProviderMutation] =
     useState<TuiProviderMutation | undefined>();
   const [providerFlowHandle, setProviderFlowHandle] =
@@ -1352,9 +1509,9 @@ export function TuiApp({
   const controllerRef = useRef<AbortController | undefined>(undefined);
   const providerFlowBusyRef = useRef(false);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<boolean> => {
     if (readLoader === undefined) {
-      return;
+      return false;
     }
 
     controllerRef.current?.abort();
@@ -1372,14 +1529,15 @@ export function TuiApp({
     try {
       const next = await readLoader({ signal: controller.signal });
       if (controllerRef.current !== controller || controller.signal.aborted) {
-        return;
+        return false;
       }
       setSnapshot(next);
       setSnapshotStale(false);
       setOperation(undefined);
+      return true;
     } catch (error) {
       if (controllerRef.current !== controller || controller.signal.aborted) {
-        return;
+        return false;
       }
       setSnapshotStale(true);
       setOperation(
@@ -1389,6 +1547,7 @@ export function TuiApp({
           error,
         }),
       );
+      return false;
     }
   }, [readLoader]);
 
@@ -1400,6 +1559,80 @@ export function TuiApp({
       controllerRef.current?.abort();
     };
   }, [readLoader, refresh]);
+
+  const mutateInstance = useCallback(
+    async (mutation: TuiInstanceMutation) => {
+      if (instanceMutationRunner === undefined) {
+        return;
+      }
+
+      const title = instanceMutationTitle(mutation);
+      let warning: string | undefined;
+      let observing = false;
+      setOperation(
+        presentWorkingOperation({
+          title,
+          detail: mutation.instanceId,
+          activity: "requested",
+        }),
+      );
+
+      try {
+        const result = await instanceMutationRunner(mutation, {
+          progress(progress) {
+            observing = progress === "observing";
+            setOperation(
+              presentWorkingOperation({
+                title,
+                detail:
+                  progress === "observing"
+                    ? `Observing ${mutation.instanceId} until provider state converges.`
+                    : `Dispatching the requested operation for ${mutation.instanceId}.`,
+                activity: progress,
+              }),
+            );
+          },
+          warning(message) {
+            warning = message;
+          },
+          confirm(prompt, details, context) {
+            if (context.signal.aborted) {
+              return Promise.resolve(false);
+            }
+            return new Promise<boolean>((resolve) => {
+              setPendingInstanceConfirmation({ resolve, workingTitle: title });
+              setOperation(
+                presentMutationConfirmation(prompt, {
+                  target: instanceConfirmationTarget(details),
+                  affectedResources: destroyAffectedResources(details),
+                }),
+              );
+            });
+          },
+        });
+
+        if (!(await refresh())) {
+          return;
+        }
+        setOperation(
+          presentCompletedOperation({
+            title: `${title} completed`,
+            detail: `${mutation.instanceId} observed state=${result.observedState}.${warning === undefined ? "" : ` Warning: ${warning}`}`,
+          }),
+        );
+      } catch (error) {
+        setPendingInstanceConfirmation(undefined);
+        setOperation(
+          presentOperationError({
+            title: observing ? "Observe instance state" : title,
+            operation: observing ? "read" : "mutation",
+            error,
+          }),
+        );
+      }
+    },
+    [instanceMutationRunner, refresh],
+  );
 
   const mutateProvider = useCallback(
     async (mutation: TuiProviderMutation) => {
@@ -1618,6 +1851,24 @@ export function TuiApp({
   const handleOperationAction = useCallback(
     (action: TuiOperationActionKind) => {
       if (
+        pendingInstanceConfirmation !== undefined &&
+        (action === "confirm" || action === "decline")
+      ) {
+        const pending = pendingInstanceConfirmation;
+        setPendingInstanceConfirmation(undefined);
+        pending.resolve(action === "confirm");
+        setOperation(
+          action === "confirm"
+            ? presentWorkingOperation({
+                title: pending.workingTitle,
+                detail: "Dispatching the confirmed instance operation.",
+                activity: "dispatching",
+              })
+            : undefined,
+        );
+        return;
+      }
+      if (
         pendingProviderFlowConfirmation !== undefined &&
         (action === "confirm" || action === "decline")
       ) {
@@ -1654,17 +1905,19 @@ export function TuiApp({
         setOperation(undefined);
         return;
       }
-      if (action === "retry" || action === "refresh") {
+      if (action === "retry" || action === "observe" || action === "refresh") {
         void refresh();
         return;
       }
       if (action === "dismiss") {
+        setPendingInstanceConfirmation(undefined);
         setPendingProviderMutation(undefined);
         setOperation(undefined);
       }
     },
     [
       mutateProvider,
+      pendingInstanceConfirmation,
       pendingProviderFlowConfirmation,
       pendingProviderMutation,
       refresh,
@@ -1693,6 +1946,13 @@ export function TuiApp({
       onRefresh={() => {
         void refresh();
       }}
+      onInstanceMutation={
+        instanceMutationRunner !== undefined && operation?.phase !== "working"
+          ? (mutation) => {
+              void mutateInstance(mutation);
+            }
+          : undefined
+      }
       onProviderMutation={
         providerMutationRunner !== undefined && operation?.phase !== "working"
           ? requestProviderMutation
@@ -1725,6 +1985,7 @@ export interface TuiRuntimeOptions {
   readonly stderr?: NodeJS.WriteStream;
   readonly env?: NodeJS.ProcessEnv;
   readonly readLoader?: TuiReadLoader;
+  readonly instanceMutationRunner?: TuiInstanceMutationRunner;
   readonly providerMutationRunner?: TuiProviderMutationRunner;
   readonly providerFlowOpener?: TuiProviderFlowOpener;
 }
@@ -1738,6 +1999,7 @@ export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
       colorEnabled={colorEnabled}
       screenReader={screenReader}
       readLoader={options.readLoader}
+      instanceMutationRunner={options.instanceMutationRunner}
       providerMutationRunner={options.providerMutationRunner}
       providerFlowOpener={options.providerFlowOpener}
     />,
@@ -1757,6 +2019,7 @@ export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
 export async function runTui(): Promise<void> {
   const app = renderTui({
     readLoader: loadDefaultTuiReadSnapshot,
+    instanceMutationRunner: createDefaultTuiInstanceMutationRunner(),
     providerMutationRunner: createDefaultTuiProviderMutationRunner(),
     providerFlowOpener: createDefaultTuiProviderFlowOpener(),
   });

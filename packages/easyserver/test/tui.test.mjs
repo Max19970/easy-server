@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 import React from "react";
 import { cleanup, render } from "ink-testing-library";
+import { normalizedError } from "@easyai101/easyserver-plugin-sdk";
 import { renderTui, TuiApp, TuiShell } from "../dist/tui.js";
 import {
   presentMutationConfirmation,
@@ -1441,6 +1442,319 @@ test("instance selection is preserved by canonical ID across reorder and narrow 
   assert.match(view.lastFrame(), /Provider: fixture/);
   assert.match(view.lastFrame(), /Management: discovered/);
   assert.match(view.lastFrame(), /Normalized state: stopped/);
+});
+
+test("discovered instances expose adoption and reversible provider actions but never destroy", async () => {
+  const mutations = [];
+  const snapshot = readSnapshot({
+    instances: {
+      status: "ready",
+      complete: true,
+      providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+      items: [
+        {
+          id: "instance:discovered",
+          providerId: "fixture",
+          providerExternalId: "remote-discovered",
+          management: "discovered",
+          freshness: "fresh",
+          state: "running",
+          rawState: "RUNNING",
+          availableActions: ["instance.stop", "instance.destroy"],
+        },
+      ],
+    },
+  });
+  const view = render(
+    shell({
+      width: 100,
+      readSnapshot: snapshot,
+      readStatus: "ready",
+      onInstanceMutation(mutation) {
+        mutations.push(mutation);
+      },
+    }),
+  );
+
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+
+  assert.match(view.lastFrame(), /Management: discovered/);
+  assert.match(view.lastFrame(), /Available actions: instance\.stop/);
+  assert.doesNotMatch(view.lastFrame(), /Available actions:.*instance\.destroy/);
+  assert.match(view.lastFrame(), /a Adopt for EasyServer management/);
+  assert.match(view.lastFrame(), /Destroy is unavailable until this resource is explicitly adopted/);
+  assert.match(view.lastFrame(), /Actions: 1 stop/);
+
+  view.stdin.write("2");
+  await tick();
+  assert.deepEqual(mutations, []);
+
+  view.stdin.write("1");
+  await tick();
+  view.stdin.write("a");
+  await tick();
+  assert.deepEqual(mutations, [
+    {
+      kind: "action",
+      instanceId: "instance:discovered",
+      action: "instance.stop",
+    },
+    { kind: "adopt", instanceId: "instance:discovered" },
+  ]);
+});
+
+test("disappearing selected instance never silently retargets lifecycle input", async () => {
+  const mutations = [];
+  const onInstanceMutation = (mutation) => mutations.push(mutation);
+  const instanceA = {
+    id: "instance:a",
+    providerId: "fixture",
+    providerExternalId: "remote-a",
+    management: "managed",
+    freshness: "fresh",
+    state: "stopped",
+    rawState: "STOPPED",
+    availableActions: ["instance.start"],
+  };
+  const instanceB = {
+    ...instanceA,
+    id: "instance:b",
+    providerExternalId: "remote-b",
+  };
+  const first = readSnapshot({
+    instances: {
+      status: "ready",
+      complete: true,
+      providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+      items: [instanceA, instanceB],
+    },
+  });
+  const second = readSnapshot({
+    instances: {
+      status: "ready",
+      complete: true,
+      providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+      items: [instanceA],
+    },
+  });
+  const view = render(
+    shell({
+      width: 100,
+      readSnapshot: first,
+      readStatus: "ready",
+      onInstanceMutation,
+    }),
+  );
+
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("j");
+  await tick();
+  assert.match(view.lastFrame(), /EasyServer ID: instance:b/);
+
+  view.rerender(
+    shell({
+      width: 100,
+      readSnapshot: second,
+      readStatus: "ready",
+      onInstanceMutation,
+    }),
+  );
+  await tick();
+  assert.match(view.lastFrame(), /Selected instance is no longer visible/);
+  assert.match(view.lastFrame(), /instance:b disappeared from the refreshed inventory/);
+  assert.match(view.lastFrame(), /No action target has\s+been changed/);
+
+  view.stdin.write("1");
+  await tick();
+  assert.deepEqual(mutations, []);
+
+  view.stdin.write("j");
+  await tick();
+  assert.match(view.lastFrame(), /EasyServer ID: instance:a/);
+  view.stdin.write("1");
+  await tick();
+  assert.deepEqual(mutations, [
+    { kind: "action", instanceId: "instance:a", action: "instance.start" },
+  ]);
+});
+
+test("TuiApp destroy review shows provenance and connection consequences before observing completion", async () => {
+  let destroyed = false;
+  let loaderCalls = 0;
+  let runnerCalls = 0;
+  let finishObservation;
+  const observationGate = new Promise((resolve) => {
+    finishObservation = resolve;
+  });
+  const loader = async () => {
+    loaderCalls += 1;
+    return readSnapshot({
+      instances: {
+        status: "ready",
+        complete: true,
+        providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+        items: destroyed
+          ? []
+          : [
+              {
+                id: "instance:managed",
+                providerId: "fixture",
+                providerExternalId: "remote-managed",
+                management: "managed",
+                freshness: "fresh",
+                state: "running",
+                rawState: "RUNNING",
+                availableActions: ["instance.destroy"],
+              },
+            ],
+      },
+    });
+  };
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: loader,
+      async instanceMutationRunner(mutation, interaction) {
+        runnerCalls += 1;
+        assert.deepEqual(mutation, {
+          kind: "action",
+          instanceId: "instance:managed",
+          action: "instance.destroy",
+        });
+        interaction.progress?.("dispatching");
+        const accepted = await interaction.confirm?.(
+          {
+            summary: "Destroy Compute Instance instance:managed",
+            risks: ["destructive"],
+            consequence:
+              "destroys the provider resource; will close 1 active session and 1 Endpoint intent before provider destroy",
+          },
+          {
+            instanceId: "instance:managed",
+            providerId: "fixture",
+            management: "managed",
+            impact: {
+              sessionIds: ["session:active"],
+              endpointIntentNames: ["comfy"],
+              pendingCleanupCount: 0,
+              affectedCount: 2,
+            },
+          },
+          { signal: new AbortController().signal },
+        );
+        assert.equal(accepted, true);
+        interaction.progress?.("observing");
+        await observationGate;
+        destroyed = true;
+        return { observedState: "absent" };
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("1");
+  await tick();
+
+  assert.equal(runnerCalls, 1);
+  assert.match(view.lastFrame(), /Confirmation required/);
+  assert.match(
+    view.lastFrame(),
+    /Target: instance:managed · provider=fixture · management=managed/,
+  );
+  assert.match(view.lastFrame(), /Session session:active/);
+  assert.match(view.lastFrame(), /Endpoint intent comfy/);
+  assert.match(view.lastFrame(), /will close 1 active session and 1 Endpoint intent/);
+
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  assert.match(view.lastFrame(), /observing/);
+  assert.match(view.lastFrame(), /Observing instance:managed until provider state converges/);
+
+  finishObservation();
+  await tick();
+  await tick();
+  await tick();
+  assert.equal(loaderCalls, 2);
+  assert.match(view.lastFrame(), /Destroy instance completed/);
+  assert.match(view.lastFrame(), /observed state=absent/);
+  assert.match(view.lastFrame(), /No compute instances yet/);
+});
+
+test("TuiApp outcome-unknown offers observation refresh without redispatching the instance mutation", async () => {
+  let loaderCalls = 0;
+  let runnerCalls = 0;
+  const loader = async () => {
+    loaderCalls += 1;
+    return readSnapshot({
+      instances: {
+        status: "ready",
+        complete: true,
+        providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+        items: [
+          {
+            id: "instance:uncertain",
+            providerId: "fixture",
+            providerExternalId: "remote-uncertain",
+            management: "managed",
+            freshness: "fresh",
+            state: "stopped",
+            rawState: "STOPPED",
+            availableActions: ["instance.start"],
+          },
+        ],
+      },
+    });
+  };
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: loader,
+      async instanceMutationRunner(_mutation, interaction) {
+        runnerCalls += 1;
+        interaction.progress?.("dispatching");
+        throw normalizedError(
+          "outcome-unknown",
+          "Provider response was lost after dispatch",
+        );
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("1");
+  await tick();
+
+  assert.equal(runnerCalls, 1);
+  assert.match(view.lastFrame(), /Start instance: outcome unknown/);
+  assert.match(view.lastFrame(), /Observe state/);
+  assert.match(view.lastFrame(), /Refresh/);
+  assert.doesNotMatch(view.lastFrame(), /Retry/);
+
+  view.stdin.write("o");
+  await tick();
+  await tick();
+  assert.equal(loaderCalls, 2);
+  assert.equal(runnerCalls, 1);
+  assert.doesNotMatch(view.lastFrame(), /outcome unknown/);
 });
 
 test("TuiApp cancellation clears loading immediately even when loader never settles", async () => {

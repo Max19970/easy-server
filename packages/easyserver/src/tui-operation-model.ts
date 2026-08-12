@@ -27,7 +27,10 @@ export type TuiOperationTone = "info" | "success" | "warning" | "danger";
 export type TuiOperationActivity =
   | "loading"
   | "waiting-provider"
-  | "verifying-state";
+  | "verifying-state"
+  | "requested"
+  | "dispatching"
+  | "observing";
 
 export type TuiOperationActionKind =
   | "cancel"
@@ -103,6 +106,11 @@ export interface PresentOperationErrorInput {
   readonly error: unknown;
 }
 
+export interface PresentCompletedOperationInput {
+  readonly title: string;
+  readonly detail?: string;
+}
+
 export interface MutationConfirmationContext {
   readonly target: string;
   readonly affectedResources: readonly string[];
@@ -156,6 +164,18 @@ export function presentWorkingOperation(
     actions: input.cancellable
       ? [{ kind: "cancel", label: "Cancel" }]
       : [],
+  });
+}
+
+export function presentCompletedOperation(
+  input: PresentCompletedOperationInput,
+): TuiOperationPresentation {
+  return createPresentation({
+    phase: "completed",
+    tone: "success",
+    title: input.title,
+    ...(input.detail === undefined ? {} : { detail: input.detail }),
+    actions: [DISMISS_ACTION],
   });
 }
 

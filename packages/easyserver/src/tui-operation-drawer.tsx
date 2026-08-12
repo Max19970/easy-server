@@ -82,11 +82,22 @@ export function TuiOperationDrawer({
 function phaseLabel(operation: TuiOperationPresentation): string {
   const { phase } = operation;
   if (phase === "working" && operation.activity !== undefined) {
-    return operation.activity === "loading"
-      ? "loading"
-      : operation.activity === "waiting-provider"
-        ? "waiting for provider"
-        : "verifying state";
+    if (operation.activity === "loading") {
+      return "loading";
+    }
+    if (operation.activity === "waiting-provider") {
+      return "waiting for provider";
+    }
+    if (operation.activity === "requested") {
+      return "requested";
+    }
+    if (operation.activity === "dispatching") {
+      return "dispatching";
+    }
+    if (operation.activity === "observing") {
+      return "observing";
+    }
+    return "verifying state";
   }
   if (phase === "awaiting-confirmation") {
     return "awaiting confirmation";
