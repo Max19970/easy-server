@@ -19,6 +19,9 @@ import {
 } from "./local-daemon.js";
 import type { EndpointIntentStatus } from "./endpoint-intent-service.js";
 import type { PluginStatus } from "./plugin-host.js";
+import type {
+  ProviderFeatureCommandDescriptor,
+} from "./provider-feature-operations.js";
 import {
   createHostRuntime,
   resolveHostRuntimePaths,
@@ -116,7 +119,28 @@ export type TuiDaemonReadSnapshot =
         | { readonly status: "unavailable" };
     };
 
+export interface TuiProviderWorkflowReadItem {
+  readonly providerId: string;
+  readonly featureId: string;
+  readonly featureDisplayName: string;
+  readonly commandName: string;
+  readonly description: string;
+  readonly operation: ProviderFeatureCommandDescriptor["operation"];
+  readonly risks: ProviderFeatureCommandDescriptor["risks"];
+  readonly presentation: ProviderFeatureCommandDescriptor["presentation"];
+}
+
+export interface TuiProviderWorkflowSourceItem {
+  readonly providerId: string;
+  readonly featureId: string;
+  readonly featureDisplayName: string;
+  readonly command: ProviderFeatureCommandDescriptor;
+}
+
 export interface TuiReadSnapshot {
+  readonly providerWorkflows: TuiReadSection<{
+    readonly items: readonly TuiProviderWorkflowReadItem[];
+  }>;
   readonly providers: TuiReadSection<{
     readonly items: readonly TuiProviderReadItem[];
   }>;
@@ -129,6 +153,7 @@ export interface TuiReadSnapshot {
 }
 
 export interface TuiReadSources {
+  listProviderWorkflows?(): Promise<readonly TuiProviderWorkflowSourceItem[]>;
   listProviders(): Promise<readonly PluginStatus[]>;
   listInventory(context: OperationContext): Promise<InventoryResult>;
   readDaemon(): Promise<TuiDaemonReadSnapshot>;
@@ -150,6 +175,18 @@ export async function loadDefaultTuiReadSnapshot(
   ];
 
   return new TuiReadOperations({
+    async listProviderWorkflows() {
+      return runtime.providerFeatureOperations.listFeatures().flatMap((feature) =>
+        runtime.providerFeatureOperations
+          .listCommands(feature.providerId, feature.featureId)
+          .map((command) => ({
+            providerId: feature.providerId,
+            featureId: feature.featureId,
+            featureDisplayName: feature.displayName,
+            command,
+          })),
+      );
+    },
     async listProviders() {
       return providerStatuses;
     },
@@ -166,7 +203,8 @@ export class TuiReadOperations {
   constructor(private readonly sources: TuiReadSources) {}
 
   async load(context: OperationContext): Promise<TuiReadSnapshot> {
-    const [providers, inventory, daemon] = await Promise.allSettled([
+    const [providerWorkflows, providers, inventory, daemon] = await Promise.allSettled([
+      this.sources.listProviderWorkflows?.() ?? Promise.resolve([]),
       this.sources.listProviders(),
       this.sources.listInventory(context),
       this.sources.readDaemon(),
@@ -177,6 +215,16 @@ export class TuiReadOperations {
     }
 
     return {
+      providerWorkflows:
+        providerWorkflows.status === "fulfilled"
+          ? {
+              status: "ready",
+              items: providerWorkflows.value.map(projectProviderWorkflow),
+            }
+          : readFailure(
+              providerWorkflows.reason,
+              "Provider workflows could not be inspected",
+            ),
       providers:
         providers.status === "fulfilled"
           ? {
@@ -260,6 +308,27 @@ export async function collectDaemonReadSnapshot(
       endpointIntents.status === "fulfilled"
         ? summarizeEndpointIntents(endpointIntents.value)
         : { status: "unavailable" },
+  };
+}
+
+function projectProviderWorkflow(
+  workflow: TuiProviderWorkflowSourceItem,
+): TuiProviderWorkflowReadItem {
+  return {
+    providerId: escapeTerminalText(workflow.providerId),
+    featureId: escapeTerminalText(workflow.featureId),
+    featureDisplayName: escapeTerminalText(workflow.featureDisplayName),
+    commandName: escapeTerminalText(workflow.command.name),
+    description: escapeTerminalText(workflow.command.description),
+    operation: workflow.command.operation,
+    risks: [...workflow.command.risks],
+    presentation:
+      workflow.command.presentation.kind === "interactive-flow"
+        ? {
+            kind: "interactive-flow",
+            flowId: escapeTerminalText(workflow.command.presentation.flowId),
+          }
+        : { kind: "cli-fallback" },
   };
 }
 

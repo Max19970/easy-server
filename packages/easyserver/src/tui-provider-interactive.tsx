@@ -1,0 +1,436 @@
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Box,
+  Text,
+  useApp,
+  useInput,
+} from "ink";
+import type {
+  ProviderInteractiveAction,
+  ProviderInteractiveEvent,
+  ProviderInteractiveField,
+  ProviderInteractiveFieldValue,
+  ProviderInteractiveScreen,
+} from "@easyai101/easyserver-plugin-sdk";
+import { escapeTerminalText } from "./terminal-text.js";
+
+export interface ProviderInteractiveSurfaceProps {
+  readonly screen: ProviderInteractiveScreen;
+  readonly colorEnabled?: boolean;
+  readonly disabled?: boolean;
+  onEvent(event: ProviderInteractiveEvent): void;
+  onClose(): void;
+}
+
+interface DraftValue {
+  readonly fieldId: string;
+  readonly kind: "text" | "integer" | "decimal";
+  readonly repeatable: boolean;
+  readonly value: string;
+}
+
+export function ProviderInteractiveSurface({
+  screen,
+  colorEnabled = true,
+  disabled = false,
+  onEvent,
+  onClose,
+}: ProviderInteractiveSurfaceProps): React.ReactElement {
+  const { exit } = useApp();
+  const [cursor, setCursor] = useState(0);
+  const [choiceCursor, setChoiceCursor] = useState(0);
+  const [draft, setDraft] = useState<DraftValue | undefined>();
+
+  const selectableCount =
+    screen.kind === "form"
+      ? screen.fields.length
+      : screen.kind === "table"
+        ? screen.rows.length
+        : 0;
+  const actions = screen.actions.filter((action) => !action.disabled);
+
+  useEffect(() => {
+    setCursor(0);
+    setChoiceCursor(0);
+    setDraft(undefined);
+  }, [screen.id, screen.kind]);
+
+  useEffect(() => {
+    if (selectableCount === 0) {
+      setCursor(0);
+      return;
+    }
+    setCursor((current) => Math.min(current, selectableCount - 1));
+  }, [selectableCount]);
+
+  const activeField =
+    screen.kind === "form" ? screen.fields[cursor] : undefined;
+  const activeChoices =
+    activeField?.kind === "single-choice" ||
+    activeField?.kind === "multiple-choice"
+      ? activeField.choices.filter((choice) => !choice.disabled)
+      : [];
+
+  useEffect(() => {
+    if (activeChoices.length === 0) {
+      setChoiceCursor(0);
+      return;
+    }
+    setChoiceCursor((current) => Math.min(current, activeChoices.length - 1));
+  }, [cursor, activeChoices.length]);
+
+  useInput((input, key) => {
+    if (disabled) {
+      return;
+    }
+
+    if (key.ctrl && input === "c") {
+      exit();
+      return;
+    }
+
+    if (draft !== undefined) {
+      if (key.escape) {
+        setDraft(undefined);
+        return;
+      }
+      if (key.return) {
+        const value = parseDraft(draft);
+        if (value !== undefined) {
+          onEvent({
+            kind: "field-change",
+            fieldId: draft.fieldId,
+            value,
+          });
+          setDraft(undefined);
+        }
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setDraft((current) =>
+          current === undefined
+            ? current
+            : { ...current, value: current.value.slice(0, -1) },
+        );
+        return;
+      }
+      if (!key.ctrl && !key.tab && input.length > 0) {
+        setDraft((current) =>
+          current === undefined
+            ? current
+            : { ...current, value: `${current.value}${input}` },
+        );
+      }
+      return;
+    }
+
+    if (input === "q") {
+      exit();
+      return;
+    }
+
+    if (key.escape) {
+      const back = actions.find((action) => action.kind === "back");
+      if (back !== undefined) {
+        onEvent({ kind: "action", actionId: back.id });
+      } else {
+        onClose();
+      }
+      return;
+    }
+
+    const actionIndex = /^[1-9]$/u.test(input) ? Number(input) - 1 : -1;
+    if (actionIndex >= 0 && actions[actionIndex] !== undefined) {
+      onEvent({ kind: "action", actionId: actions[actionIndex]!.id });
+      return;
+    }
+
+    if (input === "r") {
+      const refresh = actions.find((action) => action.kind === "refresh");
+      if (refresh !== undefined) {
+        onEvent({ kind: "action", actionId: refresh.id });
+        return;
+      }
+    }
+
+    if (screen.kind === "review") {
+      if (key.return) {
+        const submit =
+          actions.find((action) => action.kind === "submit") ??
+          actions.find((action) => action.kind === "primary");
+        if (submit !== undefined) {
+          onEvent({ kind: "action", actionId: submit.id });
+        }
+      }
+      return;
+    }
+
+    if ((input === "j" || key.downArrow) && selectableCount > 0) {
+      setCursor((current) => (current + 1) % selectableCount);
+      return;
+    }
+    if ((input === "k" || key.upArrow) && selectableCount > 0) {
+      setCursor((current) => (current - 1 + selectableCount) % selectableCount);
+      return;
+    }
+
+    if (screen.kind === "table") {
+      const row = screen.rows[cursor];
+      if (key.return || input === " ") {
+        if (row === undefined || row.disabled) {
+          return;
+        }
+        const selected = new Set(screen.selectedRowIds);
+        if (screen.selection === "single") {
+          onEvent({ kind: "table-selection", rowIds: [row.id] });
+        } else {
+          if (selected.has(row.id)) {
+            selected.delete(row.id);
+          } else {
+            selected.add(row.id);
+          }
+          onEvent({ kind: "table-selection", rowIds: [...selected] });
+        }
+      }
+      return;
+    }
+
+    const field = screen.fields[cursor];
+    if (field === undefined || field.disabled) {
+      return;
+    }
+
+    if (
+      field.kind === "single-choice" ||
+      field.kind === "multiple-choice"
+    ) {
+      if ((key.rightArrow || input === "l") && activeChoices.length > 0) {
+        const nextIndex = (choiceCursor + 1) % activeChoices.length;
+        setChoiceCursor(nextIndex);
+        if (field.kind === "single-choice") {
+          onEvent({
+            kind: "field-change",
+            fieldId: field.id,
+            value: activeChoices[nextIndex]!.id,
+          });
+        }
+        return;
+      }
+      if ((key.leftArrow || input === "h") && activeChoices.length > 0) {
+        const nextIndex =
+          (choiceCursor - 1 + activeChoices.length) % activeChoices.length;
+        setChoiceCursor(nextIndex);
+        if (field.kind === "single-choice") {
+          onEvent({
+            kind: "field-change",
+            fieldId: field.id,
+            value: activeChoices[nextIndex]!.id,
+          });
+        }
+        return;
+      }
+      if (
+        field.kind === "multiple-choice" &&
+        (key.return || input === " ") &&
+        activeChoices[choiceCursor] !== undefined
+      ) {
+        const selected = new Set(field.value ?? []);
+        const id = activeChoices[choiceCursor]!.id;
+        if (selected.has(id)) {
+          selected.delete(id);
+        } else {
+          selected.add(id);
+        }
+        onEvent({
+          kind: "field-change",
+          fieldId: field.id,
+          value: [...selected],
+        });
+      }
+      return;
+    }
+
+    if (field.kind === "boolean" && (key.return || input === " ")) {
+      onEvent({
+        kind: "field-change",
+        fieldId: field.id,
+        value: !(field.value ?? false),
+      });
+      return;
+    }
+
+    if (
+      key.return &&
+      (field.kind === "text" ||
+        field.kind === "integer" ||
+        field.kind === "decimal")
+    ) {
+      setDraft(fieldDraft(field));
+    }
+  });
+
+  const accent = colorEnabled ? "cyan" : undefined;
+  const muted = colorEnabled ? "gray" : undefined;
+
+  return (
+    <Box flexDirection="column">
+      <Text bold color={accent}>{safe(screen.title)}</Text>
+      {screen.description === undefined ? null : (
+        <Text color={muted}>{safe(screen.description)}</Text>
+      )}
+      <Box marginTop={1} flexDirection="column">
+        {screen.kind === "form" ? (
+          screen.fields.map((field, index) => (
+            <FieldLine
+              key={field.id}
+              field={field}
+              focused={index === cursor}
+              choiceCursor={index === cursor ? choiceCursor : 0}
+              draft={draft?.fieldId === field.id ? draft.value : undefined}
+            />
+          ))
+        ) : screen.kind === "table" ? (
+          <TableView screen={screen} cursor={cursor} />
+        ) : (
+          screen.items.map((item, index) => (
+            <Text key={`${item.label}:${index}`}>
+              {safe(item.label)}: {safe(item.value)}
+            </Text>
+          ))
+        )}
+      </Box>
+      {actions.length === 0 ? null : (
+        <Box marginTop={1} flexDirection="column">
+          {actions.map((action, index) => (
+            <Text key={action.id}>
+              {index + 1} — {safe(action.label)} ({action.kind})
+            </Text>
+          ))}
+        </Box>
+      )}
+      <Box marginTop={1}>
+        <Text color={muted} wrap="wrap">
+          {draft === undefined
+            ? "j/k move · Enter edit/select · h/l choices · number action · Esc back · q quit"
+            : "Enter apply · Backspace edit · Esc cancel input"}
+        </Text>
+      </Box>
+    </Box>
+  );
+}
+
+function FieldLine({
+  field,
+  focused,
+  choiceCursor,
+  draft,
+}: {
+  readonly field: ProviderInteractiveField;
+  readonly focused: boolean;
+  readonly choiceCursor: number;
+  readonly draft?: string;
+}): React.ReactElement {
+  const value = draft ?? fieldDisplayValue(field, choiceCursor);
+  return (
+    <Box flexDirection="column">
+      <Text bold={focused}>
+        {focused ? "> " : "  "}{safe(field.label)}{field.required ? " *" : ""}: {safe(value)}
+      </Text>
+      {field.description === undefined ? null : (
+        <Text>    {safe(field.description)}</Text>
+      )}
+      {field.validation?.state === "invalid" ? (
+        <Text>    Invalid{field.validation.message === undefined ? "" : `: ${safe(field.validation.message)}`}</Text>
+      ) : field.validation?.state === "pending" ? (
+        <Text>    Validating…</Text>
+      ) : null}
+    </Box>
+  );
+}
+
+function TableView({
+  screen,
+  cursor,
+}: {
+  readonly screen: Extract<ProviderInteractiveScreen, { readonly kind: "table" }>;
+  readonly cursor: number;
+}): React.ReactElement {
+  const selected = new Set(screen.selectedRowIds);
+  return (
+    <Box flexDirection="column">
+      <Text>{screen.columns.map((column) => safe(column.label)).join(" · ")}</Text>
+      {screen.rows.map((row, index) => (
+        <Text key={row.id} bold={index === cursor}>
+          {index === cursor ? "> " : "  "}{selected.has(row.id) ? "[x] " : "[ ] "}
+          {screen.columns
+            .map((column) => safe(String(row.cells[column.id] ?? "")))
+            .join(" · ")}
+          {row.disabled ? " · unavailable" : ""}
+        </Text>
+      ))}
+      {screen.loading ? <Text>Loading provider results…</Text> : null}
+    </Box>
+  );
+}
+
+function fieldDraft(
+  field: Extract<ProviderInteractiveField, {
+    readonly kind: "text" | "integer" | "decimal";
+  }>,
+): DraftValue {
+  const repeatable = field.repeatable === true;
+  const raw = field.value;
+  return {
+    fieldId: field.id,
+    kind: field.kind,
+    repeatable,
+    value: Array.isArray(raw) ? raw.join(", ") : raw === undefined ? "" : String(raw),
+  };
+}
+
+function parseDraft(draft: DraftValue): ProviderInteractiveFieldValue | undefined {
+  const rawValues = draft.repeatable
+    ? draft.value.split(",").map((value) => value.trim()).filter((value) => value.length > 0)
+    : [draft.value];
+  if (draft.kind === "text") {
+    return draft.repeatable ? rawValues : rawValues[0] ?? "";
+  }
+  const numbers = rawValues.map(Number);
+  if (
+    numbers.some((value) =>
+      draft.kind === "integer" ? !Number.isInteger(value) : !Number.isFinite(value),
+    )
+  ) {
+    return undefined;
+  }
+  return draft.repeatable ? numbers : numbers[0];
+}
+
+function fieldDisplayValue(
+  field: ProviderInteractiveField,
+  choiceCursor: number,
+): string {
+  if (field.kind === "boolean") {
+    return field.value ? "yes" : "no";
+  }
+  if (field.kind === "single-choice") {
+    const selected = field.choices.find((choice) => choice.id === field.value);
+    const cursorChoice = field.choices.filter((choice) => !choice.disabled)[choiceCursor];
+    return selected?.label ?? cursorChoice?.label ?? "not selected";
+  }
+  if (field.kind === "multiple-choice") {
+    const selected = new Set(field.value ?? []);
+    const labels = field.choices
+      .filter((choice) => selected.has(choice.id))
+      .map((choice) => choice.label);
+    return labels.length === 0 ? "none" : labels.join(", ");
+  }
+  if (Array.isArray(field.value)) {
+    return field.value.join(", ");
+  }
+  return field.value === undefined ? "" : String(field.value);
+}
+
+function safe(value: string): string {
+  return escapeTerminalText(value);
+}

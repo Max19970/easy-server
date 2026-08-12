@@ -9,10 +9,12 @@ import {
   useWindowSize,
 } from "ink";
 import { TuiOperationDrawer } from "./tui-operation-drawer.js";
+import { ProviderInteractiveSurface } from "./tui-provider-interactive.js";
 import {
   isTuiOperationPresentation,
   presentMutationConfirmation,
   presentOperationError,
+  presentProviderExecution,
   presentWorkingOperation,
   type TuiOperationActionKind,
   type TuiOperationPresentation,
@@ -20,8 +22,17 @@ import {
 import {
   loadDefaultTuiReadSnapshot,
   type TuiInstanceReadItem,
+  type TuiProviderWorkflowReadItem,
   type TuiReadSnapshot,
 } from "./tui-read-model.js";
+import {
+  createDefaultTuiProviderFlowOpener,
+  type TuiProviderFlowOpener,
+} from "./tui-provider-flow-operations.js";
+import type {
+  ProviderFeatureInteraction,
+  ProviderInteractiveSessionHandle,
+} from "./provider-feature-operations.js";
 import {
   createDefaultTuiProviderMutationRunner,
   type TuiProviderMutation,
@@ -30,6 +41,8 @@ import {
 import {
   normalizedError,
   type OperationContext,
+  type ProviderInteractiveEvent,
+  type ProviderInteractiveScreen,
 } from "@easyai101/easyserver-plugin-sdk";
 import { escapeTerminalText } from "./terminal-text.js";
 import { EASYSERVER_VERSION } from "./version.js";
@@ -38,6 +51,7 @@ type TuiRouteId =
   | "overview"
   | "instances"
   | "providers"
+  | "new-instance"
   | "sessions"
   | "diagnostics";
 
@@ -66,6 +80,12 @@ const routes: readonly TuiRoute[] = [
     label: "Providers",
     description: "Plugins, setup and acquisition",
     body: "Provider readiness, credentials and provider-owned flows will appear here.",
+  },
+  {
+    id: "new-instance",
+    label: "New instance",
+    description: "Provider-owned acquisition workflows",
+    body: "Interactive provider acquisition workflows will appear here.",
   },
   {
     id: "sessions",
@@ -105,6 +125,11 @@ type ProviderCredentialFlowView =
       readonly hasSecret: boolean;
     };
 
+interface PendingProviderFlowConfirmation {
+  readonly resolve: (accepted: boolean) => void;
+  readonly workingTitle: string;
+}
+
 export interface TuiShellProps {
   readonly width?: number;
   readonly colorEnabled?: boolean;
@@ -115,6 +140,12 @@ export interface TuiShellProps {
   readonly readStatus?: TuiReadStatus;
   readonly onRefresh?: (routeId: TuiRouteId) => void;
   readonly onProviderMutation?: (mutation: TuiProviderMutation) => void;
+  readonly providerInteractiveScreen?: ProviderInteractiveScreen;
+  readonly providerInteractiveDisabled?: boolean;
+  readonly onOpenProviderWorkflow?: (workflow: TuiProviderWorkflowReadItem) => void;
+  readonly onProviderInteractiveEvent?: (event: ProviderInteractiveEvent) => void;
+  readonly onProviderInteractiveClose?: () => void;
+  readonly navigateToInstanceId?: string;
 }
 
 export function TuiShell({
@@ -127,6 +158,12 @@ export function TuiShell({
   readStatus = "idle",
   onRefresh,
   onProviderMutation,
+  providerInteractiveScreen,
+  providerInteractiveDisabled = false,
+  onOpenProviderWorkflow,
+  onProviderInteractiveEvent,
+  onProviderInteractiveClose,
+  navigateToInstanceId,
 }: TuiShellProps): React.ReactElement {
   if (operation !== undefined && !isTuiOperationPresentation(operation)) {
     throw new TypeError("TUI operation presentation must come from the presentation model");
@@ -148,6 +185,9 @@ export function TuiShell({
   );
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | undefined>(
     () => firstInstanceId(readSnapshot),
+  );
+  const [selectedWorkflowKey, setSelectedWorkflowKey] = useState<string | undefined>(
+    () => firstWorkflowKey(readSnapshot),
   );
   const activeRoute = routes[activeIndex] ?? routes[0];
   const operationInteractionOpen = operation?.interaction !== undefined;
@@ -175,6 +215,19 @@ export function TuiShell({
             credentialName: providerCredentialFlow.credentialName,
             hasSecret: providerCredentialFlow.secret.length > 0,
           };
+  const workflowItems =
+    readSnapshot?.providerWorkflows.status === "ready"
+      ? readSnapshot.providerWorkflows.items.filter(
+          (workflow) => workflow.operation === "mutation",
+        )
+      : [];
+  const effectiveSelectedWorkflowKey =
+    selectedWorkflowKey !== undefined &&
+    workflowItems.some((workflow) => workflowKey(workflow) === selectedWorkflowKey)
+      ? selectedWorkflowKey
+      : workflowItems[0] === undefined
+        ? undefined
+        : workflowKey(workflowItems[0]);
   const inventoryItems =
     readSnapshot?.instances.status === "ready"
       ? readSnapshot.instances.items
@@ -198,7 +251,29 @@ export function TuiShell({
         ? current
         : inventoryItems[0]?.id,
     );
+    setSelectedWorkflowKey((current) =>
+      current !== undefined &&
+      workflowItems.some((workflow) => workflowKey(workflow) === current)
+        ? current
+        : workflowItems[0] === undefined
+          ? undefined
+          : workflowKey(workflowItems[0]),
+    );
   }, [readSnapshot]);
+
+  useEffect(() => {
+    if (
+      navigateToInstanceId === undefined ||
+      !inventoryItems.some((instance) => instance.id === navigateToInstanceId)
+    ) {
+      return;
+    }
+    const instancesIndex = routes.findIndex((route) => route.id === "instances");
+    setSelectedInstanceId(navigateToInstanceId);
+    setActiveIndex(instancesIndex);
+    setFocusedIndex(instancesIndex);
+    setStatus(`Opened ${navigateToInstanceId}.`);
+  }, [navigateToInstanceId, readSnapshot]);
 
   const navigation = useMemo(
     () =>
@@ -225,6 +300,10 @@ export function TuiShell({
       if (operationInteractionOpen) {
         return;
       }
+    }
+
+    if (providerInteractiveScreen !== undefined) {
+      return;
     }
 
     if (providerSourceInput !== undefined) {
@@ -462,6 +541,50 @@ export function TuiShell({
     }
 
     if (
+      activeRoute.id === "new-instance" &&
+      workflowItems.length > 0 &&
+      (input === "j" || input === "k")
+    ) {
+      const currentIndex = Math.max(
+        0,
+        workflowItems.findIndex(
+          (workflow) => workflowKey(workflow) === effectiveSelectedWorkflowKey,
+        ),
+      );
+      const nextIndex =
+        input === "j"
+          ? (currentIndex + 1) % workflowItems.length
+          : (currentIndex - 1 + workflowItems.length) % workflowItems.length;
+      const next = workflowItems[nextIndex];
+      if (next !== undefined) {
+        setSelectedWorkflowKey(workflowKey(next));
+        setStatus(`Selected ${next.providerId}/${next.commandName}.`);
+      }
+      return;
+    }
+
+    if (
+      activeRoute.id === "new-instance" &&
+      key.return &&
+      effectiveSelectedWorkflowKey !== undefined
+    ) {
+      const selected = workflowItems.find(
+        (workflow) => workflowKey(workflow) === effectiveSelectedWorkflowKey,
+      );
+      if (selected !== undefined) {
+        if (selected.presentation.kind === "interactive-flow") {
+          onOpenProviderWorkflow?.(selected);
+          setStatus(`Opening ${selected.providerId}/${selected.commandName}.`);
+        } else {
+          setStatus(
+            `CLI fallback: easyserver provider ${selected.providerId} ${selected.featureId} ${selected.commandName}`,
+          );
+        }
+      }
+      return;
+    }
+
+    if (
       activeRoute.id === "instances" &&
       inventoryItems.length > 0 &&
       (input === "j" || input === "k")
@@ -578,6 +701,11 @@ export function TuiShell({
                   providerCredentialFlow={providerCredentialFlowView}
                   selectedProviderSource={effectiveSelectedProviderSource}
                   canRegisterProvider={onProviderMutation !== undefined}
+                  selectedWorkflowKey={effectiveSelectedWorkflowKey}
+                  providerInteractiveScreen={providerInteractiveScreen}
+                  providerInteractiveDisabled={providerInteractiveDisabled}
+                  onProviderInteractiveEvent={onProviderInteractiveEvent}
+                  onProviderInteractiveClose={onProviderInteractiveClose}
                 />
               </Box>
             </Box>
@@ -601,13 +729,17 @@ export function TuiShell({
           <Text color={muted} wrap="wrap">
             Operation status shown · Tab/Shift+Tab or arrows still navigate · drawer actions use the keys shown above · q quit
           </Text>
+        ) : providerInteractiveScreen !== undefined ? (
+          <Text color={muted} wrap="wrap">
+            Provider workflow has focus · use the commands shown in the workflow · Ctrl+C quit
+          </Text>
         ) : screenReader ? (
           <Text>
             Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; J and K select instances; Q quits.
           </Text>
         ) : (
           <Text color={muted} wrap="wrap">
-            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? " · j/k select" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : ""} · q quit
+            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? " · j/k select" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : ""} · q quit
           </Text>
         )}
       </Box>
@@ -625,6 +757,11 @@ interface RouteSurfaceProps {
   readonly providerCredentialFlow?: ProviderCredentialFlowView;
   readonly selectedProviderSource?: string;
   readonly canRegisterProvider: boolean;
+  readonly selectedWorkflowKey?: string;
+  readonly providerInteractiveScreen?: ProviderInteractiveScreen;
+  readonly providerInteractiveDisabled: boolean;
+  readonly onProviderInteractiveEvent?: (event: ProviderInteractiveEvent) => void;
+  readonly onProviderInteractiveClose?: () => void;
 }
 
 function RouteSurface({
@@ -637,11 +774,17 @@ function RouteSurface({
   providerCredentialFlow,
   selectedProviderSource,
   canRegisterProvider,
+  selectedWorkflowKey,
+  providerInteractiveScreen,
+  providerInteractiveDisabled,
+  onProviderInteractiveEvent,
+  onProviderInteractiveClose,
 }: RouteSurfaceProps): React.ReactElement {
   if (
     route.id !== "overview" &&
     route.id !== "instances" &&
-    route.id !== "providers"
+    route.id !== "providers" &&
+    route.id !== "new-instance"
   ) {
     return <Text wrap="wrap">{route.body}</Text>;
   }
@@ -658,6 +801,25 @@ function RouteSurface({
 
   if (route.id === "overview") {
     return <OverviewSurface snapshot={snapshot} />;
+  }
+  if (route.id === "new-instance") {
+    if (providerInteractiveScreen !== undefined) {
+      return (
+        <ProviderInteractiveSurface
+          screen={providerInteractiveScreen}
+          colorEnabled={false}
+          disabled={providerInteractiveDisabled}
+          onEvent={onProviderInteractiveEvent ?? (() => undefined)}
+          onClose={onProviderInteractiveClose ?? (() => undefined)}
+        />
+      );
+    }
+    return (
+      <NewInstanceSurface
+        snapshot={snapshot}
+        selectedWorkflowKey={selectedWorkflowKey}
+      />
+    );
   }
   if (route.id === "instances") {
     return (
@@ -823,6 +985,60 @@ function InstancesSurface({
         <Text>Management: {selected.management}</Text>
         <Text>Available actions: {formatActions(selected.availableActions)}</Text>
       </Box>
+    </Box>
+  );
+}
+
+function NewInstanceSurface({
+  snapshot,
+  selectedWorkflowKey,
+}: {
+  readonly snapshot: TuiReadSnapshot;
+  readonly selectedWorkflowKey?: string;
+}): React.ReactElement {
+  if (snapshot.providerWorkflows.status === "failed") {
+    return (
+      <Box flexDirection="column">
+        <Text>Provider workflows unavailable: {snapshot.providerWorkflows.message}</Text>
+        <Text>Press r to retry. Provider CLI commands remain available.</Text>
+      </Box>
+    );
+  }
+
+  const workflows = snapshot.providerWorkflows.items.filter(
+    (workflow) => workflow.operation === "mutation",
+  );
+  if (workflows.length === 0) {
+    return (
+      <Box flexDirection="column">
+        <Text>No provider acquisition workflows are available.</Text>
+        <Text>Configure a provider first, or use its CLI commands when it exposes no interactive flow.</Text>
+      </Box>
+    );
+  }
+
+  return (
+    <Box flexDirection="column">
+      <Text>j/k select · Enter start</Text>
+      {workflows.map((workflow) => {
+        const key = workflowKey(workflow);
+        const selected = key === selectedWorkflowKey;
+        return (
+          <Box key={key} flexDirection="column" marginTop={1}>
+            <Text bold={selected}>
+              {selected ? "> " : "  "}
+              {workflow.providerId} · {workflow.featureDisplayName} · {workflow.commandName}
+              {workflow.presentation.kind === "interactive-flow" ? " · interactive" : " · CLI only"}
+            </Text>
+            <Text>    {workflow.description}</Text>
+            {workflow.presentation.kind === "cli-fallback" ? (
+              <Text>
+                {`    easyserver provider ${workflow.providerId} ${workflow.featureId} ${workflow.commandName}`}
+              </Text>
+            ) : null}
+          </Box>
+        );
+      })}
     </Box>
   );
 }
@@ -1007,6 +1223,22 @@ function formatActions(actions: readonly string[]): string {
   return actions.length === 0 ? "none" : actions.join(", ");
 }
 
+function workflowKey(workflow: TuiProviderWorkflowReadItem): string {
+  return `${workflow.providerId}\u0000${workflow.featureId}\u0000${workflow.commandName}`;
+}
+
+function firstWorkflowKey(
+  snapshot: TuiReadSnapshot | undefined,
+): string | undefined {
+  if (snapshot?.providerWorkflows.status !== "ready") {
+    return undefined;
+  }
+  const first = snapshot.providerWorkflows.items.find(
+    (workflow) => workflow.operation === "mutation",
+  );
+  return first === undefined ? undefined : workflowKey(first);
+}
+
 function firstProviderSource(
   snapshot: TuiReadSnapshot | undefined,
 ): string | undefined {
@@ -1092,6 +1324,7 @@ export interface TuiAppProps {
   readonly screenReader?: boolean;
   readonly readLoader?: TuiReadLoader;
   readonly providerMutationRunner?: TuiProviderMutationRunner;
+  readonly providerFlowOpener?: TuiProviderFlowOpener;
 }
 
 export function TuiApp({
@@ -1099,11 +1332,19 @@ export function TuiApp({
   screenReader = false,
   readLoader,
   providerMutationRunner,
+  providerFlowOpener,
 }: TuiAppProps): React.ReactElement {
   const [snapshot, setSnapshot] = useState<TuiReadSnapshot | undefined>();
   const [operation, setOperation] = useState<TuiOperationPresentation | undefined>();
   const [pendingProviderMutation, setPendingProviderMutation] =
     useState<TuiProviderMutation | undefined>();
+  const [providerFlowHandle, setProviderFlowHandle] =
+    useState<ProviderInteractiveSessionHandle | undefined>();
+  const [providerFlowScreen, setProviderFlowScreen] =
+    useState<ProviderInteractiveScreen | undefined>();
+  const [pendingProviderFlowConfirmation, setPendingProviderFlowConfirmation] =
+    useState<PendingProviderFlowConfirmation | undefined>();
+  const [navigateToInstanceId, setNavigateToInstanceId] = useState<string | undefined>();
   const [snapshotStale, setSnapshotStale] = useState(false);
   const controllerRef = useRef<AbortController | undefined>(undefined);
 
@@ -1234,8 +1475,152 @@ export function TuiApp({
     [mutateProvider],
   );
 
+  const openProviderWorkflow = useCallback(
+    async (workflow: TuiProviderWorkflowReadItem) => {
+      if (
+        providerFlowOpener === undefined ||
+        workflow.presentation.kind !== "interactive-flow"
+      ) {
+        return;
+      }
+
+      providerFlowHandle?.close();
+      setProviderFlowHandle(undefined);
+      setProviderFlowScreen(undefined);
+      setNavigateToInstanceId(undefined);
+      setOperation(
+        presentWorkingOperation({
+          title: "Open provider workflow",
+          detail: `${workflow.providerId}/${workflow.commandName}`,
+          activity: "waiting-provider",
+        }),
+      );
+      try {
+        const handle = await providerFlowOpener(
+          {
+            providerId: workflow.providerId,
+            featureId: workflow.featureId,
+            flowId: workflow.presentation.flowId,
+          },
+          { signal: new AbortController().signal },
+        );
+        setProviderFlowHandle(handle);
+        setProviderFlowScreen(handle.screen);
+        setOperation(undefined);
+      } catch (error) {
+        setOperation(
+          presentOperationError({
+            title: "Open provider workflow",
+            operation: "read",
+            error,
+          }),
+        );
+      }
+    },
+    [providerFlowHandle, providerFlowOpener],
+  );
+
+  const dispatchProviderWorkflow = useCallback(
+    async (event: ProviderInteractiveEvent) => {
+      const handle = providerFlowHandle;
+      if (handle === undefined) {
+        return;
+      }
+
+      const title = `${handle.descriptor.command.description}`;
+      setOperation(
+        presentWorkingOperation({
+          title: "Update provider workflow",
+          detail: title,
+          activity: "waiting-provider",
+        }),
+      );
+      const interaction: ProviderFeatureInteraction = {
+        confirm(prompt, context) {
+          if (context.signal.aborted) {
+            return Promise.resolve(false);
+          }
+          return new Promise<boolean>((resolve) => {
+            setPendingProviderFlowConfirmation({
+              resolve,
+              workingTitle: title,
+            });
+            setOperation(
+              presentMutationConfirmation(prompt, {
+                target: `${handle.descriptor.command.name}`,
+                affectedResources: ["Provider inventory"],
+              }),
+            );
+          });
+        },
+      };
+
+      try {
+        const result = await handle.dispatch(
+          event,
+          { signal: new AbortController().signal },
+          interaction,
+        );
+        if (result.kind === "screen") {
+          setProviderFlowScreen(result.screen);
+          setOperation(undefined);
+          return;
+        }
+
+        setProviderFlowHandle(undefined);
+        setProviderFlowScreen(undefined);
+        const targetInstanceId =
+          result.execution.handoff.canonicalInstances[0]?.instanceId;
+        await refresh();
+        if (targetInstanceId !== undefined) {
+          setNavigateToInstanceId(targetInstanceId);
+        }
+        setOperation(presentProviderExecution(title, result.execution));
+      } catch (error) {
+        handle.close();
+        setProviderFlowHandle(undefined);
+        setProviderFlowScreen(undefined);
+        setPendingProviderFlowConfirmation(undefined);
+        setOperation(
+          presentOperationError({
+            title,
+            operation: handle.descriptor.command.operation,
+            error,
+          }),
+        );
+      }
+    },
+    [providerFlowHandle, refresh],
+  );
+
+  const closeProviderWorkflow = useCallback(() => {
+    providerFlowHandle?.close();
+    setProviderFlowHandle(undefined);
+    setProviderFlowScreen(undefined);
+    setPendingProviderFlowConfirmation(undefined);
+    setOperation(undefined);
+  }, [providerFlowHandle]);
+
   const handleOperationAction = useCallback(
     (action: TuiOperationActionKind) => {
+      if (
+        pendingProviderFlowConfirmation !== undefined &&
+        (action === "confirm" || action === "decline")
+      ) {
+        const pending = pendingProviderFlowConfirmation;
+        setPendingProviderFlowConfirmation(undefined);
+        pending.resolve(action === "confirm");
+        setOperation(
+          action === "confirm"
+            ? presentWorkingOperation({
+                title: pending.workingTitle,
+                detail: "Waiting for provider result.",
+                activity: "waiting-provider",
+              })
+            : undefined,
+        );
+        return;
+      }
       if (action === "confirm" && pendingProviderMutation !== undefined) {
         const mutation = pendingProviderMutation;
         setPendingProviderMutation(undefined);
@@ -1264,7 +1649,12 @@ export function TuiApp({
         setOperation(undefined);
       }
     },
-    [mutateProvider, pendingProviderMutation, refresh],
+    [
+      mutateProvider,
+      pendingProviderFlowConfirmation,
+      pendingProviderMutation,
+      refresh,
+    ],
   );
 
   const readStatus: TuiReadStatus =
@@ -1294,6 +1684,20 @@ export function TuiApp({
           ? requestProviderMutation
           : undefined
       }
+      providerInteractiveScreen={providerFlowScreen}
+      providerInteractiveDisabled={operation !== undefined}
+      onOpenProviderWorkflow={
+        providerFlowOpener === undefined
+          ? undefined
+          : (workflow) => {
+              void openProviderWorkflow(workflow);
+            }
+      }
+      onProviderInteractiveEvent={(event) => {
+        void dispatchProviderWorkflow(event);
+      }}
+      onProviderInteractiveClose={closeProviderWorkflow}
+      navigateToInstanceId={navigateToInstanceId}
     />
   );
 }
@@ -1305,6 +1709,7 @@ export interface TuiRuntimeOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly readLoader?: TuiReadLoader;
   readonly providerMutationRunner?: TuiProviderMutationRunner;
+  readonly providerFlowOpener?: TuiProviderFlowOpener;
 }
 
 export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
@@ -1317,6 +1722,7 @@ export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
       screenReader={screenReader}
       readLoader={options.readLoader}
       providerMutationRunner={options.providerMutationRunner}
+      providerFlowOpener={options.providerFlowOpener}
     />,
     {
       stdin: options.stdin ?? process.stdin,
@@ -1335,6 +1741,7 @@ export async function runTui(): Promise<void> {
   const app = renderTui({
     readLoader: loadDefaultTuiReadSnapshot,
     providerMutationRunner: createDefaultTuiProviderMutationRunner(),
+    providerFlowOpener: createDefaultTuiProviderFlowOpener(),
   });
   await app.waitUntilExit();
 }

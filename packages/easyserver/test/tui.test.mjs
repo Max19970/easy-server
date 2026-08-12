@@ -26,6 +26,7 @@ function shell(props = {}) {
 
 function readSnapshot(overrides = {}) {
   return {
+    providerWorkflows: { status: "ready", items: [] },
     providers: { status: "ready", items: [] },
     instances: {
       status: "ready",
@@ -1030,6 +1031,167 @@ test("provider selection is preserved by source across refreshed ordering", asyn
   );
   await tick();
   assert.match(view.lastFrame(), /> Provider B/);
+});
+
+test("TuiApp runs a generic provider workflow through host confirmation and navigates to canonical handoff", async () => {
+  const workflow = {
+    providerId: "nebula",
+    featureId: "allocation",
+    featureDisplayName: "Allocation",
+    commandName: "provision",
+    description: "Provision a Nebula allocation",
+    operation: "mutation",
+    risks: ["billable"],
+    presentation: {
+      kind: "interactive-flow",
+      flowId: "provision-wizard",
+    },
+  };
+  let created = false;
+  let openerCalls = 0;
+  let dispatchCalls = 0;
+  let closeCalls = 0;
+  const loader = async () =>
+    readSnapshot({
+      providerWorkflows: { status: "ready", items: [workflow] },
+      instances: {
+        status: "ready",
+        complete: true,
+        providerOutcomes: [{ providerId: "nebula", status: "fresh" }],
+        items: created
+          ? [
+              {
+                id: "instance:nebula-42",
+                providerId: "nebula",
+                providerExternalId: "nebula-42",
+                management: "managed",
+                freshness: "fresh",
+                state: "running",
+                rawState: "READY",
+                availableActions: [],
+              },
+            ]
+          : [],
+      },
+    });
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: loader,
+      async providerFlowOpener(flow) {
+        openerCalls += 1;
+        assert.deepEqual(flow, {
+          providerId: "nebula",
+          featureId: "allocation",
+          flowId: "provision-wizard",
+        });
+        let closed = false;
+        return {
+          descriptor: {
+            id: "provision-wizard",
+            commandName: "provision",
+            command: {
+              name: "provision",
+              description: "Provision a Nebula allocation",
+              operation: "mutation",
+              risks: ["billable"],
+              presentation: {
+                kind: "interactive-flow",
+                flowId: "provision-wizard",
+              },
+            },
+          },
+          screen: {
+            kind: "review",
+            id: "review",
+            title: "Review Nebula allocation",
+            items: [{ label: "Region", value: "EU North" }],
+            actions: [
+              { id: "submit", label: "Provision", kind: "submit" },
+            ],
+          },
+          async dispatch(event, context, interaction) {
+            dispatchCalls += 1;
+            assert.deepEqual(event, { kind: "action", actionId: "submit" });
+            const accepted = await interaction.confirm(
+              {
+                summary: "Provision Nebula allocation",
+                risks: ["billable"],
+                consequence: "may create or increase provider charges",
+              },
+              context,
+            );
+            assert.equal(accepted, true);
+            created = true;
+            closed = true;
+            return {
+              kind: "executed",
+              execution: {
+                operation: "mutation",
+                mutationOutcome: "succeeded",
+                providerResult: {
+                  refreshProviderInventory: true,
+                  affectedProviderExternalIds: ["nebula-42"],
+                },
+                handoff: {
+                  status: "complete",
+                  affectedProviderExternalIds: ["nebula-42"],
+                  canonicalInstances: [
+                    {
+                      providerExternalId: "nebula-42",
+                      instanceId: "instance:nebula-42",
+                    },
+                  ],
+                  unresolvedProviderExternalIds: [],
+                },
+              },
+            };
+          },
+          close() {
+            if (!closed) {
+              closed = true;
+              closeCalls += 1;
+            }
+          },
+        };
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /New instance/);
+  assert.match(view.lastFrame(), /nebula · Allocation · provision · interactive/);
+
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  assert.equal(openerCalls, 1);
+  assert.match(view.lastFrame(), /Review Nebula allocation/);
+
+  view.stdin.write("\r");
+  await tick();
+  assert.equal(dispatchCalls, 1);
+  assert.match(view.lastFrame(), /Confirmation required/);
+  assert.match(view.lastFrame(), /billable/);
+
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  await tick();
+  await tick();
+  assert.match(view.lastFrame(), /Instances/);
+  assert.match(view.lastFrame(), /EasyServer ID: instance:nebula-42/);
+  assert.equal(closeCalls, 0);
 });
 
 test("degraded provider state remains visible while healthy instance inventory stays usable", async () => {

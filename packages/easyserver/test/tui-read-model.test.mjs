@@ -11,6 +11,37 @@ function context(signal = new AbortController().signal) {
 
 test("read snapshot keeps healthy inventory beside degraded providers and plugin failures", async () => {
   const operations = new TuiReadOperations({
+    async listProviderWorkflows() {
+      return [
+        {
+          providerId: "nebula",
+          featureId: "allocation",
+          featureDisplayName: "Allocation\u001b[31m",
+          command: {
+            name: "provision",
+            description: "Provision resource\u001b[2J",
+            operation: "mutation",
+            risks: ["billable"],
+            presentation: {
+              kind: "interactive-flow",
+              flowId: "provision-wizard",
+            },
+          },
+        },
+        {
+          providerId: "legacy",
+          featureId: "catalog",
+          featureDisplayName: "Catalog",
+          command: {
+            name: "create",
+            description: "Create from CLI",
+            operation: "mutation",
+            risks: [],
+            presentation: { kind: "cli-fallback" },
+          },
+        },
+      ];
+    },
     async listProviders() {
       return [
         {
@@ -100,6 +131,33 @@ test("read snapshot keeps healthy inventory beside degraded providers and plugin
 
   const snapshot = await operations.load(context());
 
+  assert.equal(snapshot.providerWorkflows.status, "ready");
+  assert.deepEqual(snapshot.providerWorkflows.items, [
+    {
+      providerId: "nebula",
+      featureId: "allocation",
+      featureDisplayName: "Allocation\\u001b[31m",
+      commandName: "provision",
+      description: "Provision resource\\u001b[2J",
+      operation: "mutation",
+      risks: ["billable"],
+      presentation: {
+        kind: "interactive-flow",
+        flowId: "provision-wizard",
+      },
+    },
+    {
+      providerId: "legacy",
+      featureId: "catalog",
+      featureDisplayName: "Catalog",
+      commandName: "create",
+      description: "Create from CLI",
+      operation: "mutation",
+      risks: [],
+      presentation: { kind: "cli-fallback" },
+    },
+  ]);
+
   assert.equal(snapshot.providers.status, "ready");
   assert.deepEqual(
     snapshot.providers.items.map((provider) => [provider.state, provider.readiness]),
@@ -138,6 +196,9 @@ test("read snapshot keeps healthy inventory beside degraded providers and plugin
 
 test("read snapshot isolates section failure instead of hiding healthy sections", async () => {
   const operations = new TuiReadOperations({
+    async listProviderWorkflows() {
+      throw new Error("private feature details");
+    },
     async listProviders() {
       throw new Error("private plugin loader details");
     },
@@ -150,6 +211,9 @@ test("read snapshot isolates section failure instead of hiding healthy sections"
   });
 
   const snapshot = await operations.load(context());
+  assert.equal(snapshot.providerWorkflows.status, "failed");
+  assert.match(snapshot.providerWorkflows.message, /provider workflows/i);
+  assert.doesNotMatch(snapshot.providerWorkflows.message, /private feature details/);
   assert.equal(snapshot.providers.status, "failed");
   assert.match(snapshot.providers.message, /provider configuration/i);
   assert.doesNotMatch(snapshot.providers.message, /private plugin loader details/);
