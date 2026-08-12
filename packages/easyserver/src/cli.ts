@@ -103,7 +103,25 @@ await run(process.argv.slice(2));
 async function run(args: readonly string[]): Promise<void> {
   const [command] = args;
 
-  if (command === undefined || command === "--help" || command === "-h") {
+  if (command === undefined) {
+    if (!supportsInteractiveTui()) {
+      process.stderr.write(
+        "EasyServer TUI requires an interactive terminal. Use easyserver --help for command-mode usage.\n",
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    try {
+      const { runTui } = await import("./tui.js");
+      await runTui();
+    } catch (error) {
+      reportCliError(error);
+    }
+    return;
+  }
+
+  if (command === "--help" || command === "-h") {
     process.stdout.write(help);
     return;
   }
@@ -710,6 +728,14 @@ async function runConnect(args: readonly string[]): Promise<void> {
 
 function isInteractiveTerminal(): boolean {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+function supportsInteractiveTui(): boolean {
+  return Boolean(
+    process.stdin.isTTY &&
+      process.stdout.isTTY &&
+      typeof process.stdin.setRawMode === "function",
+  );
 }
 
 async function confirmRiskyMutationInteractively(

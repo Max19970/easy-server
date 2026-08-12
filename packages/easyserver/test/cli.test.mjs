@@ -6,7 +6,7 @@ import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test, { after } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { JsonStateStore } from "../dist/state-store.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -27,6 +27,9 @@ const providerCliPlugin = fileURLToPath(
 );
 const daemonPlugin = fileURLToPath(
   new URL("./fixtures/daemon-plugin.mjs", import.meta.url),
+);
+const rejectTuiRuntime = fileURLToPath(
+  new URL("./fixtures/reject-tui-runtime.mjs", import.meta.url),
 );
 const destroySessionPlugin = fileURLToPath(
   new URL("./fixtures/destroy-session-plugin.mjs", import.meta.url),
@@ -201,6 +204,17 @@ function runWithStateEnv(stateFile, extraEnv, ...args) {
     encoding: "utf8",
     env: { ...process.env, ...extraEnv, EASYSERVER_STATE_FILE: stateFile },
   });
+}
+
+function runWithoutTuiRuntime(...args) {
+  return spawnSync(
+    process.execPath,
+    ["--import", pathToFileURL(rejectTuiRuntime).href, cli, ...args],
+    {
+      encoding: "utf8",
+      env: { ...process.env, EASYSERVER_STATE_FILE: emptyStateFile },
+    },
+  );
 }
 
 function runWithDaemon(stateFile, daemonFile, ...args) {
@@ -413,10 +427,32 @@ test("prints help", () => {
   assert.match(result.stdout, /connect <instance-id> --port <remote-port>/);
 });
 
+test("no-argument non-TTY invocation fails without terminal control output", () => {
+  const result = run();
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /interactive terminal/i);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /\u001b\[/);
+});
+
 test("prints version", () => {
   const result = run("--version");
   assert.equal(result.status, 0);
   assert.equal(result.stdout, "0.1.0\n");
+});
+
+test("command mode never initializes the React or Ink runtime", () => {
+  const helpResult = runWithoutTuiRuntime("--help");
+  assert.equal(helpResult.status, 0, helpResult.stderr);
+  assert.match(helpResult.stdout, /EasyServer/);
+
+  const versionResult = runWithoutTuiRuntime("--version");
+  assert.equal(versionResult.status, 0, versionResult.stderr);
+  assert.equal(versionResult.stdout, "0.1.0\n");
+
+  const namedCommandResult = runWithoutTuiRuntime("plugins", "list");
+  assert.equal(namedCommandResult.status, 0, namedCommandResult.stderr);
+  assert.match(namedCommandResult.stdout, /No provider plugins configured/);
 });
 
 test("doctor emits a privacy-safe troubleshooting payload", async () => {
