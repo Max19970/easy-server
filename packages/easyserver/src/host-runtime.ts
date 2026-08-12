@@ -7,6 +7,7 @@ import {
   PluginHost,
   type PluginImporter,
 } from "./plugin-host.js";
+import { PluginOperations } from "./plugin-operations.js";
 import { ProviderFeatureHost } from "./provider-feature-host.js";
 import { ProviderRegistry } from "./provider-registry.js";
 import {
@@ -49,6 +50,7 @@ export class HostRuntime {
     readonly providerRegistry: ProviderRegistry,
     readonly providerFeatureHost: ProviderFeatureHost,
     readonly pluginHost: PluginHost,
+    readonly pluginOperations: PluginOperations,
     readonly accessAdapters: AccessAdapterRegistry,
     readonly sshAdapter: OpenSshAccessAdapter,
     readonly computeManager: ComputeManager,
@@ -90,6 +92,7 @@ export async function createHostRuntime(
     providerRegistry,
     providerFeatureHost,
     pluginHost,
+    new PluginOperations(stateStore, secretStore, options.pluginImporter),
     accessAdapters,
     sshAdapter,
     new ComputeManager(providerRegistry, stateStore),

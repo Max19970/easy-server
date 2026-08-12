@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { isAbsolute, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
   INSTANCE_STATES,
@@ -10,7 +9,6 @@ import {
   type AvailableAction,
   type HostTrustRequiredError,
   type InstanceState,
-  type PluginCredentialDescriptor,
   type ProviderCliCommand,
 } from "@easyai101/easyserver-plugin-sdk";
 import {
@@ -34,27 +32,16 @@ import {
   ProviderCommandRunner,
   type ProviderCommandExecutionResult,
 } from "./provider-command-runner.js";
-import {
-  formatPluginStatuses,
-  PluginHost,
-  type PluginStatus,
-} from "./plugin-host.js";
-import {
-  removePluginCredential,
-  setPluginCredential,
-} from "./plugin-credentials.js";
-import { ProviderRegistry } from "./provider-registry.js";
+import { formatPluginStatuses } from "./plugin-host.js";
+import type { PluginOperations } from "./plugin-operations.js";
 import {
   createHostRuntime,
   resolveHostRuntimePaths,
 } from "./host-runtime.js";
 import { ReloadingEndpointOpener } from "./reloading-endpoint-opener.js";
-import {
-  OsKeyringSecretStore,
-  type SecretStore,
-} from "./secret-store.js";
+import { OsKeyringSecretStore } from "./secret-store.js";
 import { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
-import { JsonStateStore, type PluginRegistration } from "./state-store.js";
+import { JsonStateStore } from "./state-store.js";
 import { escapeTerminalText } from "./terminal-text.js";
 import type { EndpointIntentStatus } from "./endpoint-intent-service.js";
 import { EASYSERVER_VERSION } from "./version.js";
@@ -1128,25 +1115,34 @@ async function runPlugins(args: readonly string[]): Promise<void> {
     paths: resolveHostRuntimePaths(),
     loadConfiguredPlugins: false,
   });
-  const { stateStore: store, secretStore } = runtime;
+  const operations = runtime.pluginOperations;
 
   if (command === "list") {
-    await listPlugins(store, parsePluginSources(args.slice(1)), secretStore);
+    process.stdout.write(
+      formatPluginStatuses(
+        await operations.list(parsePluginSources(args.slice(1))),
+      ),
+    );
     return;
   }
 
   if (command === "add" && args.length === 2) {
-    await addPlugin(store, persistedPluginSource(args[1]));
+    const result = await operations.add(args[1]);
+    process.stdout.write(`Added ${escapeTerminalText(result.pluginId)}\n`);
     return;
   }
 
   if ((command === "enable" || command === "disable") && args.length === 2) {
-    await setPluginEnabled(store, persistedPluginSource(args[1]), command === "enable");
+    const enabled = command === "enable";
+    const result = await operations.setEnabled(args[1], enabled);
+    process.stdout.write(
+      `${enabled ? "Enabled" : "Disabled"} ${escapeTerminalText(result.source)}\n`,
+    );
     return;
   }
 
   if (command === "credential") {
-    await runPluginCredential(store, secretStore, args.slice(1));
+    await runPluginCredential(operations, args.slice(1));
     return;
   }
 
@@ -1154,8 +1150,7 @@ async function runPlugins(args: readonly string[]): Promise<void> {
 }
 
 async function runPluginCredential(
-  store: JsonStateStore,
-  secretStore: SecretStore,
+  operations: PluginOperations,
   args: readonly string[],
 ): Promise<void> {
   const [command, rawSource, name, option, variable] = args;
@@ -1167,23 +1162,11 @@ async function runPluginCredential(
     variable !== undefined &&
     args.length === 5
   ) {
-    const source = persistedPluginSource(rawSource);
-    const declaredCredentials = await configuredPluginCredentialDescriptors(
-      store,
-      source,
-    );
     const secret = process.env[variable];
     if (secret === undefined || secret.length === 0) {
       throw new Error(`Environment variable is empty or missing: ${variable}`);
     }
-    const result = await setPluginCredential(
-      store,
-      secretStore,
-      source,
-      name,
-      secret,
-      declaredCredentials,
-    );
+    const result = await operations.setCredential(rawSource, name, secret);
     process.stdout.write(
       `Configured credential ${escapeTerminalText(name)} for ${escapeTerminalText(rawSource)}\n`,
     );
@@ -1201,18 +1184,7 @@ async function runPluginCredential(
     name !== undefined &&
     args.length === 3
   ) {
-    const source = persistedPluginSource(rawSource);
-    const declaredCredentials = await configuredPluginCredentialDescriptors(
-      store,
-      source,
-    );
-    const result = await removePluginCredential(
-      store,
-      secretStore,
-      source,
-      name,
-      declaredCredentials,
-    );
+    const result = await operations.removeCredential(rawSource, name);
     process.stdout.write(
       `Removed credential ${escapeTerminalText(name)} from ${escapeTerminalText(rawSource)}\n`,
     );
@@ -1227,206 +1199,6 @@ async function runPluginCredential(
   throw new CliUsageError(
     "plugins credential expects set <module> <name> --env <variable> or remove <module> <name>",
   );
-}
-
-async function configuredPluginCredentialDescriptors(
-  store: JsonStateStore,
-  source: string,
-): Promise<readonly PluginCredentialDescriptor[] | undefined> {
-  const state = await store.read();
-  const index = findConfiguredPlugin(state.plugins, source);
-  const registration = state.plugins[index];
-  const host = new PluginHost(new ProviderRegistry());
-  await host.load([
-    {
-      source,
-      ...(registration.credentials === undefined
-        ? {}
-        : { credentials: registration.credentials }),
-    },
-  ]);
-  const status = host.listPlugins()[0];
-  if (status?.state !== "loaded" || status.credentials === undefined) {
-    return undefined;
-  }
-  return status.credentials.map(({ configured: _configured, ...descriptor }) =>
-    descriptor,
-  );
-}
-
-async function listPlugins(
-  store: JsonStateStore,
-  explicitSources: readonly string[],
-  secretStore: Pick<SecretStore, "get">,
-): Promise<void> {
-  const canonicalExplicitSources = explicitSources.map(canonicalPluginSource);
-  const explicitSourceSet = new Set(canonicalExplicitSources);
-  const state = await store.read();
-  const configured = configuredPluginLoads(state.plugins);
-  const configuredSourceSet = new Set(configured.map((plugin) => plugin.source));
-  const registry = new ProviderRegistry();
-  const host = new PluginHost(registry);
-  await host.load(
-    [
-      ...configured,
-      ...canonicalExplicitSources.filter(
-        (source) => !configuredSourceSet.has(source),
-      ),
-    ],
-    secretStore,
-  );
-
-  const disabledStatuses: PluginStatus[] = state.plugins
-    .filter((plugin) => !plugin.enabled)
-    .map((plugin) => canonicalPluginSource(plugin.source))
-    .filter((source) => !explicitSourceSet.has(source))
-    .map((source) => ({ source, state: "disabled" }));
-
-  process.stdout.write(
-    formatPluginStatuses([...host.listPlugins(), ...disabledStatuses]),
-  );
-}
-
-async function addPlugin(store: JsonStateStore, source: string): Promise<void> {
-  let status: PluginStatus | undefined;
-
-  for (;;) {
-    const snapshot = await store.read();
-    if (
-      snapshot.plugins.some(
-        (plugin) => canonicalPluginSource(plugin.source) === source,
-      )
-    ) {
-      throw new Error(`Plugin source is already configured: ${source}`);
-    }
-
-    status = await validatePluginActivation(snapshot.plugins, source);
-    let retry = false;
-    await store.update((state) => {
-      if (
-        state.plugins.some(
-          (plugin) => canonicalPluginSource(plugin.source) === source,
-        )
-      ) {
-        throw new Error(`Plugin source is already configured: ${source}`);
-      }
-      if (!samePluginActivationInputs(state.plugins, snapshot.plugins)) {
-        retry = true;
-        return state;
-      }
-      return {
-        ...state,
-        plugins: [...state.plugins, { source, enabled: true }],
-      };
-    });
-
-    if (!retry) {
-      break;
-    }
-  }
-
-  process.stdout.write(`Added ${escapeTerminalText(status?.pluginId ?? source)}\n`);
-}
-
-async function setPluginEnabled(
-  store: JsonStateStore,
-  source: string,
-  enabled: boolean,
-): Promise<void> {
-  if (!enabled) {
-    await store.update((state) => {
-      const index = findConfiguredPlugin(state.plugins, source);
-      if (!state.plugins[index].enabled) {
-        return state;
-      }
-      const plugins = state.plugins.map<PluginRegistration>(
-        (plugin, pluginIndex) =>
-          pluginIndex === index ? { ...plugin, source, enabled: false } : plugin,
-      );
-      return { ...state, plugins };
-    });
-    process.stdout.write(`Disabled ${escapeTerminalText(source)}\n`);
-    return;
-  }
-
-  for (;;) {
-    const snapshot = await store.read();
-    const snapshotIndex = findConfiguredPlugin(snapshot.plugins, source);
-    if (snapshot.plugins[snapshotIndex].enabled) {
-      break;
-    }
-
-    await validatePluginActivation(snapshot.plugins, source);
-    let retry = false;
-    await store.update((state) => {
-      const index = findConfiguredPlugin(state.plugins, source);
-      if (state.plugins[index].enabled) {
-        return state;
-      }
-      if (!samePluginActivationInputs(state.plugins, snapshot.plugins)) {
-        retry = true;
-        return state;
-      }
-      const plugins = state.plugins.map<PluginRegistration>(
-        (plugin, pluginIndex) =>
-          pluginIndex === index ? { ...plugin, source, enabled: true } : plugin,
-      );
-      return { ...state, plugins };
-    });
-
-    if (!retry) {
-      break;
-    }
-  }
-
-  process.stdout.write(`Enabled ${escapeTerminalText(source)}\n`);
-}
-
-function findConfiguredPlugin(
-  plugins: readonly PluginRegistration[],
-  source: string,
-): number {
-  const index = plugins.findIndex(
-    (plugin) => canonicalPluginSource(plugin.source) === source,
-  );
-  if (index < 0) {
-    throw new Error(`Plugin source is not configured: ${source}`);
-  }
-  return index;
-}
-
-function samePluginActivationInputs(
-  current: readonly PluginRegistration[],
-  snapshot: readonly PluginRegistration[],
-): boolean {
-  const currentEnabled = current
-    .filter((plugin) => plugin.enabled)
-    .map((plugin) => canonicalPluginSource(plugin.source));
-  const snapshotEnabled = snapshot
-    .filter((plugin) => plugin.enabled)
-    .map((plugin) => canonicalPluginSource(plugin.source));
-  return (
-    currentEnabled.length === snapshotEnabled.length &&
-    currentEnabled.every((source, index) => source === snapshotEnabled[index])
-  );
-}
-
-async function validatePluginActivation(
-  plugins: readonly PluginRegistration[],
-  source: string,
-): Promise<PluginStatus> {
-  const configured = configuredPluginLoads(plugins).filter(
-    (plugin) => plugin.source !== source,
-  );
-  const host = new PluginHost(new ProviderRegistry());
-  await host.load([...configured, source]);
-  const status = host.listPlugins().at(-1);
-
-  if (status?.state !== "loaded") {
-    throw new Error(status?.error ?? `Failed to load plugin: ${source}`);
-  }
-
-  return status;
 }
 
 function formatProviderFeatures(
@@ -1924,40 +1696,6 @@ function parsePluginSources(args: readonly string[]): readonly string[] {
   }
 
   return sources;
-}
-
-function configuredPluginLoads(
-  plugins: readonly PluginRegistration[],
-): readonly {
-  readonly source: string;
-  readonly credentials?: PluginRegistration["credentials"];
-}[] {
-  return plugins
-    .filter((plugin) => plugin.enabled)
-    .map((plugin) => ({
-      source: canonicalPluginSource(plugin.source),
-      ...(plugin.credentials === undefined
-        ? {}
-        : { credentials: plugin.credentials }),
-    }));
-}
-
-function persistedPluginSource(source: string): string {
-  return canonicalPluginSource(source);
-}
-
-function canonicalPluginSource(source: string): string {
-  return isPathSpecifier(source) ? resolve(source) : source;
-}
-
-function isPathSpecifier(source: string): boolean {
-  return (
-    isAbsolute(source) ||
-    source.startsWith("./") ||
-    source.startsWith("../") ||
-    source.startsWith(".\\") ||
-    source.startsWith("..\\")
-  );
 }
 
 function stateFilePath(): string {
