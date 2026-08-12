@@ -47,13 +47,13 @@ export class ManagedDaemonOperations {
   readonly #daemonFile: string;
   readonly #entrypoint?: string;
   readonly #env: NodeJS.ProcessEnv;
-  readonly #startTimeoutMs: number;
+  readonly #startTimeoutMs?: number;
 
   constructor(options: ManagedDaemonOperationsOptions) {
     this.#daemonFile = options.daemonFile;
     this.#entrypoint = options.entrypoint;
     this.#env = options.env ?? process.env;
-    this.#startTimeoutMs = options.startTimeoutMs ?? configuredStartTimeout(this.#env);
+    this.#startTimeoutMs = options.startTimeoutMs;
   }
 
   async inspect(): Promise<ManagedDaemonState> {
@@ -116,7 +116,8 @@ export class ManagedDaemonOperations {
       child.unref();
 
       try {
-        const deadline = Date.now() + this.#startTimeoutMs;
+        const deadline =
+          Date.now() + (this.#startTimeoutMs ?? configuredStartTimeout(this.#env));
         while (Date.now() < deadline) {
           if (spawnError !== undefined) {
             throw spawnError;

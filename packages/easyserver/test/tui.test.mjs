@@ -65,6 +65,31 @@ function foregroundConnectionSnapshot() {
   });
 }
 
+function persistentConnectionSnapshot(items = []) {
+  return readSnapshot({
+    ...foregroundConnectionSnapshot(),
+    daemon: {
+      status: "running",
+      sessions: {
+        status: "ready",
+        total: items.length,
+        live: items.filter((session) => session.state === "live").length,
+        closing: items.filter((session) => session.state === "closing").length,
+        failed: items.filter((session) => session.state === "failed").length,
+        items,
+      },
+      endpointIntents: {
+        status: "ready",
+        total: 0,
+        live: 0,
+        starting: 0,
+        error: 0,
+        disabled: 0,
+      },
+    },
+  });
+}
+
 async function openConnectionsRoute(view) {
   for (let index = 0; index < 4; index += 1) {
     view.stdin.write("\t");
@@ -1882,7 +1907,7 @@ test("TuiApp guides foreground Endpoint creation with visible deterministic Acce
   assert.match(view.lastFrame(), /127\.0\.0\.1:40123 · live/);
   assert.match(
     view.lastFrame(),
-    /TUI-owned foreground Endpoints stay loopback-only and close when this TUI/,
+    /Foreground Endpoints belong to this TUI; persistent Endpoints belong to the[\s\S]*daemon/,
   );
 
   view.stdin.write("x");
@@ -2115,6 +2140,408 @@ test("quitting with live TUI-owned Endpoints states the count and renders closin
   finishCloseAll();
   await tick();
   await tick();
+});
+
+test("persistent Endpoint retry preserves one idempotency key across the guided TUI flow", async () => {
+  const method = { id: "ssh", kind: "ssh", mode: "tcp-forward" };
+  const requests = [];
+  let attempts = 0;
+  const foregroundOperations = {
+    list() {
+      return [];
+    },
+    async listAccessMethods() {
+      return [method];
+    },
+    async open() {
+      assert.fail("foreground open is not expected");
+    },
+    async close() {},
+    async closeAll() {},
+  };
+  const daemonOperations = {
+    async createSession(request) {
+      requests.push(request);
+      attempts += 1;
+      if (attempts === 1) {
+        throw normalizedError("provider-unavailable", "fixture response lost");
+      }
+      return {
+        id: "session:persistent",
+        state: "live",
+        instanceId: request.instanceId,
+        remoteHost: request.remoteHost,
+        remotePort: request.remotePort,
+        requestedAccessMethodId: request.accessMethodId,
+        idempotencyKey: request.idempotencyKey,
+        accessMethod: method,
+        endpoint: { host: "127.0.0.1", port: 48188 },
+      };
+    },
+    async start() {
+      assert.fail("daemon start is not expected");
+    },
+    async stop() {
+      assert.fail("daemon stop is not expected");
+    },
+    async shutdownImpact() {
+      return { liveSessions: 0, activeEndpointIntents: 0 };
+    },
+    async closeSession() {},
+  };
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () => persistentConnectionSnapshot(),
+      foregroundConnectionOperations: foregroundOperations,
+      daemonOperations,
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openConnectionsRoute(view);
+  view.stdin.write("p");
+  await tick();
+  assert.match(view.lastFrame(), /New daemon-owned persistent Endpoint/);
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  await typeText(view, "8188");
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Review persistent Endpoint/);
+  assert.match(view.lastFrame(), /survives TUI exit/);
+
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].idempotencyKey, /^tui:/);
+  assert.match(view.lastFrame(), /Create persistent Endpoint: failed/);
+  assert.match(view.lastFrame(), /idempotency key are preserved for retry/);
+
+  view.stdin.write("x");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].idempotencyKey, requests[0].idempotencyKey);
+  assert.deepEqual(
+    { ...requests[1], idempotencyKey: undefined },
+    { ...requests[0], idempotencyKey: undefined },
+  );
+});
+
+test("daemon Stop reviews live persistent impact before shutdown dispatch", async () => {
+  let stopped = false;
+  let stopCalls = 0;
+  const loader = async () =>
+    stopped ? readSnapshot({ daemon: { status: "stopped" } }) : persistentConnectionSnapshot([
+      {
+        id: "session:one",
+        state: "live",
+        instanceId: "instance:connect",
+        remoteHost: "127.0.0.1",
+        remotePort: 8188,
+        accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+        endpoint: { host: "127.0.0.1", port: 48188 },
+      },
+      {
+        id: "session:two",
+        state: "live",
+        instanceId: "instance:connect",
+        remoteHost: "127.0.0.1",
+        remotePort: 7860,
+        accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+        endpoint: { host: "127.0.0.1", port: 47860 },
+      },
+    ]);
+  const daemonOperations = {
+    async shutdownImpact() {
+      return { liveSessions: 2, activeEndpointIntents: 1 };
+    },
+    async stop() {
+      stopCalls += 1;
+      stopped = true;
+      return {
+        status: "stopped",
+        summary: { liveSessions: 2, activeEndpointIntents: 1 },
+      };
+    },
+    async start() {
+      assert.fail("start is not expected");
+    },
+    async createSession() {
+      assert.fail("create is not expected");
+    },
+    async closeSession() {},
+  };
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: loader,
+      daemonOperations,
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openConnectionsRoute(view);
+  view.stdin.write("d");
+  await tick();
+  await tick();
+  assert.equal(stopCalls, 0);
+  assert.match(view.lastFrame(), /Stop EasyServer daemon/);
+  assert.match(view.lastFrame(), /closes 2 live persistent sessions and 1 active Endpoint intent/);
+  assert.match(view.lastFrame(), /2 live persistent session\(s\)/);
+
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  await tick();
+  assert.equal(stopCalls, 1);
+  assert.match(view.lastFrame(), /EasyServer daemon stopped/);
+});
+
+test("stopped daemon starts from Connections and refreshes to authenticated running state", async () => {
+  let running = false;
+  let startCalls = 0;
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () =>
+        running ? persistentConnectionSnapshot() : readSnapshot({ daemon: { status: "stopped" } }),
+      daemonOperations: {
+        async start() {
+          startCalls += 1;
+          running = true;
+          return {
+            alreadyRunning: false,
+            descriptor: {
+              version: 1,
+              address: { host: "127.0.0.1", port: 43210 },
+              authToken: "not-rendered",
+            },
+          };
+        },
+        async shutdownImpact() {
+          return { liveSessions: 0, activeEndpointIntents: 0 };
+        },
+        async stop() {
+          assert.fail("stop is not expected");
+        },
+        async createSession() {
+          assert.fail("create is not expected");
+        },
+        async closeSession() {},
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openConnectionsRoute(view);
+  assert.match(view.lastFrame(), /Daemon: stopped/);
+  view.stdin.write("d");
+  await tick();
+  await tick();
+  await tick();
+  assert.equal(startCalls, 1);
+  assert.match(view.lastFrame(), /Daemon: running/);
+  assert.doesNotMatch(view.lastFrame(), /not-rendered/);
+});
+
+test("unreachable daemon is distinct from stopped and blocks persistent mutations", async () => {
+  let createCalls = 0;
+  const view = render(
+    shell({
+      width: 110,
+      readSnapshot: readSnapshot({ daemon: { status: "unreachable" } }),
+      readStatus: "ready",
+      async onCreatePersistentSession() {
+        createCalls += 1;
+        return true;
+      },
+      async onClosePersistentSession() {
+        return true;
+      },
+      async onStartDaemon() {
+        return true;
+      },
+      async onStopDaemon() {
+        return true;
+      },
+    }),
+  );
+
+  await openConnectionsRoute(view);
+  assert.match(view.lastFrame(), /Daemon: unreachable/);
+  assert.match(view.lastFrame(), /authenticated health failed/);
+  view.stdin.write("p");
+  await tick();
+  assert.equal(createCalls, 0);
+  assert.match(view.lastFrame(), /Start the EasyServer daemon before creating a persistent session/);
+
+  view.rerender(
+    shell({
+      width: 110,
+      readSnapshot: readSnapshot({ daemon: { status: "stale" } }),
+      readStatus: "ready",
+      async onCreatePersistentSession() {
+        createCalls += 1;
+        return true;
+      },
+      async onClosePersistentSession() {
+        return true;
+      },
+      async onStartDaemon() {
+        return true;
+      },
+      async onStopDaemon() {
+        return true;
+      },
+    }),
+  );
+  await tick();
+  assert.match(view.lastFrame(), /Daemon: stale/);
+  assert.match(view.lastFrame(), /descriptor is invalid/);
+});
+
+test("cleanup-failed persistent Session remains visible by stable ID beside healthy sessions", async () => {
+  const closed = [];
+  const snapshot = persistentConnectionSnapshot([
+    {
+      id: "session:healthy",
+      state: "live",
+      instanceId: "instance:connect",
+      remoteHost: "127.0.0.1",
+      remotePort: 8188,
+      accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+      endpoint: { host: "127.0.0.1", port: 48188 },
+    },
+    {
+      id: "session:cleanup-failed",
+      state: "failed",
+      instanceId: "instance:connect",
+      remoteHost: "127.0.0.1",
+      remotePort: 7860,
+      accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+      failure: {
+        code: "plugin-failure",
+        message: "Connection Session cleanup failed",
+      },
+    },
+  ]);
+  const view = render(
+    shell({
+      width: 110,
+      readSnapshot: snapshot,
+      readStatus: "ready",
+      async onClosePersistentSession(id) {
+        closed.push(id);
+        return true;
+      },
+      async onCreatePersistentSession() {
+        return true;
+      },
+      async onStartDaemon() {
+        return true;
+      },
+      async onStopDaemon() {
+        return true;
+      },
+    }),
+  );
+
+  await openConnectionsRoute(view);
+  assert.match(view.lastFrame(), /session:healthy · live/);
+  assert.match(view.lastFrame(), /session:cleanup-failed · failed/);
+  view.stdin.write("J");
+  await tick();
+  assert.match(view.lastFrame(), /Session ID: session:cleanup-failed/);
+  assert.match(view.lastFrame(), /Cleanup failure: plugin-failure: Connection Session cleanup failed/);
+  assert.match(view.lastFrame(), /session:healthy · live/);
+
+  view.stdin.write("c");
+  await tick();
+  await tick();
+  assert.deepEqual(closed, ["session:cleanup-failed"]);
+});
+
+test("TUI cleanup closes foreground Endpoints but leaves daemon-owned Sessions untouched", async () => {
+  let foregroundCloseAll = 0;
+  let daemonClose = 0;
+  let daemonStop = 0;
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () => persistentConnectionSnapshot([
+        {
+          id: "session:survives",
+          state: "live",
+          instanceId: "instance:connect",
+          remoteHost: "127.0.0.1",
+          remotePort: 8188,
+          accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+          endpoint: { host: "127.0.0.1", port: 48188 },
+        },
+      ]),
+      foregroundConnectionOperations: {
+        list() {
+          return [];
+        },
+        async listAccessMethods() {
+          return [];
+        },
+        async open() {
+          assert.fail("open is not expected");
+        },
+        async close() {},
+        async closeAll() {
+          foregroundCloseAll += 1;
+        },
+      },
+      daemonOperations: {
+        async start() {
+          assert.fail("start is not expected");
+        },
+        async shutdownImpact() {
+          return { liveSessions: 1, activeEndpointIntents: 0 };
+        },
+        async stop() {
+          daemonStop += 1;
+          return { status: "stopped", summary: { liveSessions: 1, activeEndpointIntents: 0 } };
+        },
+        async createSession() {
+          assert.fail("create is not expected");
+        },
+        async closeSession() {
+          daemonClose += 1;
+        },
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  cleanup();
+  await tick();
+  assert.equal(foregroundCloseAll, 1);
+  assert.equal(daemonClose, 0);
+  assert.equal(daemonStop, 0);
+  void view;
 });
 
 test("TuiApp cancellation clears loading immediately even when loader never settles", async () => {

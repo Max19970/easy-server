@@ -92,12 +92,31 @@ export type TuiReadSection<T> =
       readonly message: string;
     };
 
+export interface TuiPersistentSessionReadItem {
+  readonly id: string;
+  readonly state: PersistentConnectionSession["state"];
+  readonly instanceId: string;
+  readonly remoteHost: string;
+  readonly remotePort: number;
+  readonly requestedLocalPort?: number;
+  readonly requestedAccessMethodId?: string;
+  readonly idempotencyKey?: string;
+  readonly accessMethod: {
+    readonly id: string;
+    readonly kind: string;
+    readonly mode: PersistentConnectionSession["accessMethod"]["mode"];
+  };
+  readonly endpoint?: { readonly host: "127.0.0.1"; readonly port: number };
+  readonly failure?: { readonly code: string; readonly message: string };
+}
+
 export interface TuiSessionSummary {
   readonly status: "ready";
   readonly total: number;
   readonly live: number;
   readonly closing: number;
   readonly failed: number;
+  readonly items: readonly TuiPersistentSessionReadItem[];
 }
 
 export interface TuiEndpointIntentSummary {
@@ -110,7 +129,7 @@ export interface TuiEndpointIntentSummary {
 }
 
 export type TuiDaemonReadSnapshot =
-  | { readonly status: "stopped" | "invalid" | "unreachable" }
+  | { readonly status: "stopped" | "stale" | "unreachable" }
   | {
       readonly status: "running";
       readonly sessions: TuiSessionSummary | { readonly status: "unavailable" };
@@ -274,7 +293,7 @@ export async function collectDaemonReadSnapshot(
   try {
     descriptor = await readDescriptor(descriptorPath);
   } catch {
-    return { status: "invalid" };
+    return { status: "stale" };
   }
 
   if (descriptor === undefined) {
@@ -457,6 +476,44 @@ function summarizeSessions(
     live: sessions.filter((session) => session.state === "live").length,
     closing: sessions.filter((session) => session.state === "closing").length,
     failed: sessions.filter((session) => session.state === "failed").length,
+    items: sessions.map(projectPersistentSession),
+  };
+}
+
+function projectPersistentSession(
+  session: PersistentConnectionSession,
+): TuiPersistentSessionReadItem {
+  return {
+    id: escapeTerminalText(session.id),
+    state: session.state,
+    instanceId: escapeTerminalText(session.instanceId),
+    remoteHost: escapeTerminalText(session.remoteHost),
+    remotePort: session.remotePort,
+    ...(session.requestedLocalPort === undefined
+      ? {}
+      : { requestedLocalPort: session.requestedLocalPort }),
+    ...(session.requestedAccessMethodId === undefined
+      ? {}
+      : { requestedAccessMethodId: escapeTerminalText(session.requestedAccessMethodId) }),
+    ...(session.idempotencyKey === undefined
+      ? {}
+      : { idempotencyKey: escapeTerminalText(session.idempotencyKey) }),
+    accessMethod: {
+      id: escapeTerminalText(session.accessMethod.id),
+      kind: escapeTerminalText(session.accessMethod.kind),
+      mode: session.accessMethod.mode,
+    },
+    ...("endpoint" in session && session.endpoint !== undefined
+      ? { endpoint: session.endpoint }
+      : {}),
+    ...(session.state === "failed"
+      ? {
+          failure: {
+            code: escapeTerminalText(session.failure.code),
+            message: escapeTerminalText(session.failure.message),
+          },
+        }
+      : {}),
   };
 }
 

@@ -24,6 +24,7 @@ import {
 import {
   loadDefaultTuiReadSnapshot,
   type TuiInstanceReadItem,
+  type TuiPersistentSessionReadItem,
   type TuiProviderWorkflowReadItem,
   type TuiReadSnapshot,
 } from "./tui-read-model.js";
@@ -53,6 +54,12 @@ import {
   type TuiForegroundConnectionOperations,
   type TuiForegroundConnectionRequest,
 } from "./tui-foreground-connections.js";
+import {
+  createDefaultTuiDaemonOperations,
+  newTuiPersistentSessionIdempotencyKey,
+  type TuiDaemonOperations,
+  type TuiPersistentSessionRequest,
+} from "./tui-daemon-operations.js";
 import {
   normalizedError,
   type OperationContext,
@@ -154,6 +161,10 @@ interface PendingHostTrustConfirmation {
   readonly resolve: (accepted: boolean) => void;
 }
 
+interface PendingDaemonStopConfirmation {
+  readonly resolve: (stopped: boolean) => void;
+}
+
 type ForegroundConnectionStep =
   | "instance"
   | "remote-host"
@@ -163,6 +174,7 @@ type ForegroundConnectionStep =
   | "review";
 
 interface ForegroundConnectionFlow {
+  readonly mode: "foreground" | "persistent";
   readonly step: ForegroundConnectionStep;
   readonly instanceId: string;
   readonly remoteHost: string;
@@ -170,6 +182,7 @@ interface ForegroundConnectionFlow {
   readonly accessMethods: readonly AccessMethodDescriptor[];
   readonly accessMethodId?: string;
   readonly localPort: string;
+  readonly idempotencyKey?: string;
 }
 
 export interface TuiShellProps {
@@ -191,6 +204,12 @@ export interface TuiShellProps {
   ) => Promise<TuiForegroundConnection | undefined>;
   readonly onCloseForegroundConnection?: (id: string) => Promise<boolean>;
   readonly onQuitWithForegroundConnections?: () => Promise<boolean>;
+  readonly onStartDaemon?: () => Promise<boolean>;
+  readonly onStopDaemon?: () => Promise<boolean>;
+  readonly onCreatePersistentSession?: (
+    request: TuiPersistentSessionRequest,
+  ) => Promise<boolean>;
+  readonly onClosePersistentSession?: (id: string) => Promise<boolean>;
   readonly onProviderMutation?: (mutation: TuiProviderMutation) => void;
   readonly providerInteractiveScreen?: ProviderInteractiveScreen;
   readonly providerInteractiveDisabled?: boolean;
@@ -216,6 +235,10 @@ export function TuiShell({
   onOpenForegroundConnection,
   onCloseForegroundConnection,
   onQuitWithForegroundConnections,
+  onStartDaemon,
+  onStopDaemon,
+  onCreatePersistentSession,
+  onClosePersistentSession,
   onProviderMutation,
   providerInteractiveScreen,
   providerInteractiveDisabled = false,
@@ -254,6 +277,8 @@ export function TuiShell({
   const [selectedForegroundConnectionId, setSelectedForegroundConnectionId] =
     useState<string | undefined>(() => foregroundConnections[0]?.id);
   const [foregroundConnectionBusy, setForegroundConnectionBusy] = useState(false);
+  const [selectedPersistentSessionId, setSelectedPersistentSessionId] =
+    useState<string | undefined>();
   const [quitArmed, setQuitArmed] = useState(false);
   const activeRoute = routes[activeIndex] ?? routes[0];
   const operationInteractionOpen = operation?.interaction !== undefined;
@@ -310,6 +335,16 @@ export function TuiShell({
     )
       ? selectedForegroundConnectionId
       : undefined;
+  const persistentSessions =
+    readSnapshot?.daemon.status === "running" &&
+    readSnapshot.daemon.sessions.status === "ready"
+      ? readSnapshot.daemon.sessions.items ?? []
+      : [];
+  const effectiveSelectedPersistentSessionId =
+    selectedPersistentSessionId !== undefined &&
+    persistentSessions.some((session) => session.id === selectedPersistentSessionId)
+      ? selectedPersistentSessionId
+      : undefined;
 
   useEffect(() => {
     setSelectedProviderSource((current) =>
@@ -336,6 +371,12 @@ export function TuiShell({
       current === undefined ? foregroundConnections[0]?.id : current,
     );
   }, [foregroundConnections]);
+
+  useEffect(() => {
+    setSelectedPersistentSessionId((current) =>
+      current === undefined ? persistentSessions[0]?.id : current,
+    );
+  }, [readSnapshot]);
 
   useEffect(() => {
     if (navigateToInstanceId === undefined) {
@@ -549,7 +590,11 @@ export function TuiShell({
         );
         if (previousStep === undefined) {
           setForegroundConnectionFlow(undefined);
-          setStatus("Foreground connection setup cancelled.");
+          setStatus(
+            foregroundConnectionFlow.mode === "persistent"
+              ? "Persistent session setup cancelled."
+              : "Foreground connection setup cancelled.",
+          );
         } else {
           setForegroundConnectionFlow({
             ...foregroundConnectionFlow,
@@ -740,7 +785,11 @@ export function TuiShell({
             ...foregroundConnectionFlow,
             step: "review",
           });
-          setStatus("Review the foreground Endpoint and press Enter to open it.");
+          setStatus(
+            foregroundConnectionFlow.mode === "persistent"
+              ? "Review the persistent Endpoint and press Enter to create it."
+              : "Review the foreground Endpoint and press Enter to open it.",
+          );
           return;
         }
         if (/^[0-9]$/.test(input)) {
@@ -754,8 +803,37 @@ export function TuiShell({
 
       if (foregroundConnectionFlow.step === "review" && key.return) {
         const request = foregroundConnectionRequest(foregroundConnectionFlow);
-        if (request === undefined || onOpenForegroundConnection === undefined) {
-          setStatus("The foreground Endpoint request is incomplete.");
+        if (request === undefined) {
+          setStatus("The connection request is incomplete.");
+          return;
+        }
+        if (foregroundConnectionFlow.mode === "persistent") {
+          if (
+            onCreatePersistentSession === undefined ||
+            foregroundConnectionFlow.idempotencyKey === undefined
+          ) {
+            setStatus("Persistent session creation is unavailable in this TUI session.");
+            return;
+          }
+          setForegroundConnectionBusy(true);
+          void onCreatePersistentSession({
+            ...request,
+            idempotencyKey: foregroundConnectionFlow.idempotencyKey,
+          }).then((created) => {
+            setForegroundConnectionBusy(false);
+            if (!created) {
+              setStatus(
+                "Persistent Endpoint was not created. Values and idempotency key are preserved for retry.",
+              );
+              return;
+            }
+            setForegroundConnectionFlow(undefined);
+            setStatus("Created daemon-owned persistent Endpoint.");
+          });
+          return;
+        }
+        if (onOpenForegroundConnection === undefined) {
+          setStatus("Foreground connection creation is unavailable in this TUI session.");
           return;
         }
         setForegroundConnectionBusy(true);
@@ -818,6 +896,7 @@ export function TuiShell({
         return;
       }
       setForegroundConnectionFlow({
+        mode: "foreground",
         step: "instance",
         instanceId: firstInstance.id,
         remoteHost: "127.0.0.1",
@@ -827,6 +906,96 @@ export function TuiShell({
         localPort: "",
       });
       setStatus("Choose the instance for this TUI-owned foreground Endpoint.");
+      return;
+    }
+
+    if (activeRoute.id === "sessions" && input === "p") {
+      const firstInstance =
+        inventoryItems.find((instance) => instance.id === effectiveSelectedInstanceId) ??
+        inventoryItems[0];
+      if (readSnapshot?.daemon.status !== "running") {
+        setStatus("Start the EasyServer daemon before creating a persistent session.");
+        return;
+      }
+      if (firstInstance === undefined) {
+        setStatus("No compute instance is available for a persistent connection.");
+        return;
+      }
+      if (
+        onListForegroundAccessMethods === undefined ||
+        onCreatePersistentSession === undefined
+      ) {
+        setStatus("Persistent session creation is unavailable in this TUI session.");
+        return;
+      }
+      setForegroundConnectionFlow({
+        mode: "persistent",
+        step: "instance",
+        instanceId: firstInstance.id,
+        remoteHost: "127.0.0.1",
+        remotePort: "",
+        accessMethods: [],
+        accessMethodId: undefined,
+        localPort: "",
+        idempotencyKey: newTuiPersistentSessionIdempotencyKey(),
+      });
+      setStatus("Choose the instance for this daemon-owned persistent Endpoint.");
+      return;
+    }
+
+    if (activeRoute.id === "sessions" && input === "d") {
+      setForegroundConnectionBusy(true);
+      const action =
+        readSnapshot?.daemon.status === "running" ? onStopDaemon : onStartDaemon;
+      if (action === undefined) {
+        setForegroundConnectionBusy(false);
+        setStatus("Daemon lifecycle management is unavailable in this TUI session.");
+        return;
+      }
+      void action().then(() => setForegroundConnectionBusy(false));
+      return;
+    }
+
+    if (
+      activeRoute.id === "sessions" &&
+      persistentSessions.length > 0 &&
+      (input === "J" || input === "K")
+    ) {
+      const currentIndex = persistentSessions.findIndex(
+        (session) => session.id === effectiveSelectedPersistentSessionId,
+      );
+      const nextIndex =
+        currentIndex < 0
+          ? input === "J"
+            ? 0
+            : persistentSessions.length - 1
+          : input === "J"
+            ? (currentIndex + 1) % persistentSessions.length
+            : (currentIndex - 1 + persistentSessions.length) %
+              persistentSessions.length;
+      const next = persistentSessions[nextIndex];
+      if (next !== undefined) {
+        setSelectedPersistentSessionId(next.id);
+        setStatus(`Selected persistent Session ${next.id}.`);
+      }
+      return;
+    }
+
+    if (
+      activeRoute.id === "sessions" &&
+      input === "c" &&
+      effectiveSelectedPersistentSessionId !== undefined &&
+      onClosePersistentSession !== undefined
+    ) {
+      const sessionId = effectiveSelectedPersistentSessionId;
+      setForegroundConnectionBusy(true);
+      void onClosePersistentSession(sessionId).then((closed) => {
+        setForegroundConnectionBusy(false);
+        if (closed) {
+          setSelectedPersistentSessionId(undefined);
+          setStatus(`Closed persistent Session ${sessionId}.`);
+        }
+      });
       return;
     }
 
@@ -1139,9 +1308,17 @@ export function TuiShell({
                   foregroundConnectionBusy={foregroundConnectionBusy}
                   foregroundConnections={foregroundConnections}
                   selectedForegroundConnectionId={selectedForegroundConnectionId}
+                  selectedPersistentSessionId={selectedPersistentSessionId}
                   canManageForegroundConnections={
                     onOpenForegroundConnection !== undefined &&
                     onCloseForegroundConnection !== undefined
+                  }
+                  canManagePersistentSessions={
+                    onCreatePersistentSession !== undefined &&
+                    onClosePersistentSession !== undefined
+                  }
+                  canManageDaemon={
+                    onStartDaemon !== undefined && onStopDaemon !== undefined
                   }
                   providerSourceInput={providerSourceInput}
                   providerCredentialFlow={providerCredentialFlowView}
@@ -1181,11 +1358,11 @@ export function TuiShell({
           </Text>
         ) : screenReader ? (
           <Text>
-            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; J and K select items; on Instances, A adopts discovered resources and number keys run shown lifecycle actions; on Connections, N starts a foreground Endpoint and X closes the selected one; Q quits.
+            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; on Instances, J and K select and number keys run lifecycle actions; on Connections, N starts a foreground Endpoint, P creates a persistent Endpoint, D starts or stops the daemon, lowercase J/K and X manage foreground Endpoints, uppercase J/K and C manage persistent Sessions; Q quits.
           </Text>
         ) : (
           <Text color={muted} wrap="wrap">
-            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? onInstanceMutation === undefined ? " · j/k select" : " · j/k select · a adopt · 1-4 actions" : activeRoute.id === "sessions" ? " · n new Endpoint · j/k select · x close" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : ""} · q quit
+            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? onInstanceMutation === undefined ? " · j/k select" : " · j/k select · a adopt · 1-4 actions" : activeRoute.id === "sessions" ? " · n foreground · p persistent · d daemon · j/k/x foreground · J/K/c persistent" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : ""} · q quit
           </Text>
         )}
       </Box>
@@ -1204,7 +1381,10 @@ interface RouteSurfaceProps {
   readonly foregroundConnectionBusy: boolean;
   readonly foregroundConnections: readonly TuiForegroundConnection[];
   readonly selectedForegroundConnectionId?: string;
+  readonly selectedPersistentSessionId?: string;
   readonly canManageForegroundConnections: boolean;
+  readonly canManagePersistentSessions: boolean;
+  readonly canManageDaemon: boolean;
   readonly providerSourceInput?: string;
   readonly providerCredentialFlow?: ProviderCredentialFlowView;
   readonly selectedProviderSource?: string;
@@ -1227,7 +1407,10 @@ function RouteSurface({
   foregroundConnectionBusy,
   foregroundConnections,
   selectedForegroundConnectionId,
+  selectedPersistentSessionId,
   canManageForegroundConnections,
+  canManagePersistentSessions,
+  canManageDaemon,
   providerSourceInput,
   providerCredentialFlow,
   selectedProviderSource,
@@ -1298,7 +1481,10 @@ function RouteSurface({
         busy={foregroundConnectionBusy}
         connections={foregroundConnections}
         selectedConnectionId={selectedForegroundConnectionId}
+        selectedPersistentSessionId={selectedPersistentSessionId}
         canManage={canManageForegroundConnections}
+        canManagePersistent={canManagePersistentSessions}
+        canManageDaemon={canManageDaemon}
       />
     );
   }
@@ -1484,14 +1670,20 @@ function ConnectionsSurface({
   busy,
   connections,
   selectedConnectionId,
+  selectedPersistentSessionId,
   canManage,
+  canManagePersistent,
+  canManageDaemon,
 }: {
   readonly snapshot: TuiReadSnapshot;
   readonly flow?: ForegroundConnectionFlow;
   readonly busy: boolean;
   readonly connections: readonly TuiForegroundConnection[];
   readonly selectedConnectionId?: string;
+  readonly selectedPersistentSessionId?: string;
   readonly canManage: boolean;
+  readonly canManagePersistent: boolean;
+  readonly canManageDaemon: boolean;
 }): React.ReactElement {
   if (flow !== undefined) {
     const instances =
@@ -1504,9 +1696,13 @@ function ConnectionsSurface({
     );
     return (
       <Box flexDirection="column">
-        <Text bold>New TUI-owned foreground Endpoint</Text>
+        <Text bold>
+          {flow.mode === "persistent" ? "New daemon-owned persistent Endpoint" : "New TUI-owned foreground Endpoint"}
+        </Text>
         <Text>
-          This Endpoint exists only while this TUI process is running. Esc returns to the previous step.
+          {flow.mode === "persistent"
+            ? "This Endpoint survives TUI exit and is owned by the EasyServer daemon. Esc returns to the previous step."
+            : "This Endpoint exists only while this TUI process is running. Esc returns to the previous step."}
         </Text>
         {busy ? <Text>Working… input is temporarily paused.</Text> : null}
         <Box marginTop={1} flexDirection="column">
@@ -1569,7 +1765,9 @@ function ConnectionsSurface({
             </>
           ) : (
             <>
-              <Text bold>Review foreground Endpoint</Text>
+              <Text bold>
+                Review {flow.mode === "persistent" ? "persistent" : "foreground"} Endpoint
+              </Text>
               <Text>Instance: {selectedInstance?.name ?? flow.instanceId}</Text>
               <Text>
                 Remote target: {escapeTerminalText(flow.remoteHost)}:{flow.remotePort}
@@ -1580,8 +1778,10 @@ function ConnectionsSurface({
               <Text>
                 Local binding: 127.0.0.1:{flow.localPort.length === 0 ? "dynamic" : flow.localPort}
               </Text>
-              <Text>Lifetime: closes when this TUI exits.</Text>
-              <Text>Enter open · Esc back</Text>
+              <Text>
+                Lifetime: {flow.mode === "persistent" ? "daemon-owned; survives TUI exit" : "closes when this TUI exits"}.
+              </Text>
+              <Text>Enter {flow.mode === "persistent" ? "create" : "open"} · Esc back</Text>
             </>
           )}
         </Box>
@@ -1592,13 +1792,22 @@ function ConnectionsSurface({
   const selected = connections.find(
     (connection) => connection.id === selectedConnectionId,
   );
+  const persistentSessions =
+    snapshot.daemon.status === "running" && snapshot.daemon.sessions.status === "ready"
+      ? snapshot.daemon.sessions.items ?? []
+      : [];
+  const selectedPersistent = persistentSessions.find(
+    (session) => session.id === selectedPersistentSessionId,
+  );
   return (
     <Box flexDirection="column">
       <Text>
-        TUI-owned foreground Endpoints stay loopback-only and close when this TUI exits.
+        Foreground Endpoints belong to this TUI; persistent Endpoints belong to the daemon and survive TUI exit.
       </Text>
       <Text>
-        {canManage ? "n new Endpoint · j/k select · x close" : "Foreground connection management is unavailable in this TUI session."}
+        {canManage ? "n new foreground" : "foreground unavailable"}
+        {canManagePersistent ? " · p new persistent · J/K select persistent · c close persistent" : ""}
+        {canManageDaemon ? " · d start/stop daemon" : ""}
       </Text>
       <Box marginTop={1} flexDirection="column">
         <Text bold>TUI-owned foreground Endpoints</Text>
@@ -1607,19 +1816,88 @@ function ConnectionsSurface({
             None open. {snapshot.instances.status === "ready" && snapshot.instances.items.length === 0 ? "Create or discover an instance first." : "Press n to create one."}
           </Text>
         ) : (
-          connections.map((connection) => (
-            <Text key={connection.id} bold={connection.id === selected?.id}>
-              {connection.id === selected?.id ? "> " : "  "}
-              {connection.endpoint.host}:{connection.endpoint.port} · {connection.state} · {connection.instanceId} → {escapeTerminalText(connection.remoteHost)}:{connection.remotePort} · {escapeTerminalText(connection.accessMethod.id)}
-            </Text>
-          ))
+          <>
+            <Text>j/k select · x close</Text>
+            {connections.map((connection) => (
+              <Text key={connection.id} bold={connection.id === selected?.id}>
+                {connection.id === selected?.id ? "> " : "  "}
+                {connection.endpoint.host}:{connection.endpoint.port} · {connection.state} · {connection.instanceId} → {escapeTerminalText(connection.remoteHost)}:{connection.remotePort} · {escapeTerminalText(connection.accessMethod.id)}
+              </Text>
+            ))}
+          </>
         )}
       </Box>
       <Box marginTop={1} flexDirection="column">
-        <Text bold>Persistent connection service</Text>
+        <Text bold>Daemon-owned persistent Endpoints</Text>
         <Text>Daemon: {snapshot.daemon.status}</Text>
-        <Text>Persistent session workflows are handled separately from these TUI-owned Endpoints.</Text>
+        {snapshot.daemon.status === "stale" ? (
+          <Text>Daemon state is stale because its descriptor is invalid. Start will reconcile the managed daemon state.</Text>
+        ) : snapshot.daemon.status === "unreachable" ? (
+          <Text>Daemon descriptor exists, but authenticated health failed. No session mutation is attempted.</Text>
+        ) : snapshot.daemon.status === "stopped" ? (
+          <Text>Daemon is stopped. Press d to start it.</Text>
+        ) : "sessions" in snapshot.daemon && snapshot.daemon.sessions.status === "unavailable" ? (
+          <Text>Daemon is healthy, but Connection Session details are temporarily unavailable.</Text>
+        ) : persistentSessions.length === 0 ? (
+          <Text>No persistent sessions. Press p to create one.</Text>
+        ) : (
+          <>
+            <Text>J/K select · c close · p new</Text>
+            {persistentSessions.map((session) => (
+              <PersistentSessionLine
+                key={session.id}
+                session={session}
+                selected={session.id === selectedPersistent?.id}
+              />
+            ))}
+            {selectedPersistent === undefined ? null : (
+              <PersistentSessionDetail session={selectedPersistent} />
+            )}
+          </>
+        )}
       </Box>
+    </Box>
+  );
+}
+
+function PersistentSessionLine({
+  session,
+  selected,
+}: {
+  readonly session: TuiPersistentSessionReadItem;
+  readonly selected: boolean;
+}): React.ReactElement {
+  const endpoint = session.endpoint === undefined
+    ? "no local endpoint"
+    : `${session.endpoint.host}:${session.endpoint.port}`;
+  return (
+    <Text bold={selected}>
+      {selected ? "> " : "  "}{session.id} · {session.state} · {endpoint} · {session.instanceId} → {session.remoteHost}:{session.remotePort}
+      {session.state === "failed" ? ` · ${session.failure?.code ?? "failure"}` : ""}
+    </Text>
+  );
+}
+
+function PersistentSessionDetail({
+  session,
+}: {
+  readonly session: TuiPersistentSessionReadItem;
+}): React.ReactElement {
+  return (
+    <Box marginTop={1} flexDirection="column">
+      <Text bold>Persistent Session detail</Text>
+      <Text>Session ID: {session.id}</Text>
+      <Text>State: {session.state}</Text>
+      <Text>Instance: {session.instanceId}</Text>
+      <Text>Remote target: {session.remoteHost}:{session.remotePort}</Text>
+      <Text>Requested local port: {session.requestedLocalPort ?? "dynamic"}</Text>
+      <Text>Access Method: {session.accessMethod.id} · {session.accessMethod.kind}</Text>
+      {session.endpoint === undefined ? null : (
+        <Text>Local Endpoint: {session.endpoint.host}:{session.endpoint.port}</Text>
+      )}
+      {session.state === "failed" ? (
+        <Text>Cleanup failure: {session.failure?.code}: {session.failure?.message}</Text>
+      ) : null}
     </Box>
   );
 }
@@ -2101,8 +2379,11 @@ function HelpPanel({ colorEnabled }: { readonly colorEnabled: boolean }): React.
       <Text>a — adopt the selected discovered instance when offered</Text>
       <Text>1-4 — run the shown lifecycle action on the selected instance</Text>
       <Text>n — start a TUI-owned foreground Endpoint on Connections</Text>
-      <Text>x — close the selected TUI-owned foreground Endpoint</Text>
-      <Text>q / Ctrl+C — quit EasyServer; live foreground Endpoints require a second quit confirmation</Text>
+      <Text>p — create a daemon-owned persistent Endpoint</Text>
+      <Text>d — start or stop the managed daemon</Text>
+      <Text>j / k and x — select or close foreground Endpoints</Text>
+      <Text>J / K and c — select or close persistent Sessions</Text>
+      <Text>q / Ctrl+C — quit EasyServer; live foreground Endpoints require a second quit confirmation, persistent Sessions survive</Text>
     </Box>
   );
 }
@@ -2117,6 +2398,7 @@ export interface TuiAppProps {
   readonly readLoader?: TuiReadLoader;
   readonly instanceMutationRunner?: TuiInstanceMutationRunner;
   readonly foregroundConnectionOperations?: TuiForegroundConnectionOperations;
+  readonly daemonOperations?: TuiDaemonOperations;
   readonly providerMutationRunner?: TuiProviderMutationRunner;
   readonly providerFlowOpener?: TuiProviderFlowOpener;
 }
@@ -2127,6 +2409,7 @@ export function TuiApp({
   readLoader,
   instanceMutationRunner,
   foregroundConnectionOperations,
+  daemonOperations,
   providerMutationRunner,
   providerFlowOpener,
 }: TuiAppProps): React.ReactElement {
@@ -2137,6 +2420,8 @@ export function TuiApp({
   >(() => foregroundConnectionOperations?.list() ?? []);
   const [pendingHostTrustConfirmation, setPendingHostTrustConfirmation] =
     useState<PendingHostTrustConfirmation | undefined>();
+  const [pendingDaemonStopConfirmation, setPendingDaemonStopConfirmation] =
+    useState<PendingDaemonStopConfirmation | undefined>();
   const [pendingInstanceConfirmation, setPendingInstanceConfirmation] =
     useState<PendingInstanceConfirmation | undefined>();
   const [pendingProviderMutation, setPendingProviderMutation] =
@@ -2365,6 +2650,160 @@ export function TuiApp({
       return false;
     }
   }, [foregroundConnectionOperations, foregroundConnections.length]);
+
+  const startDaemon = useCallback(async (): Promise<boolean> => {
+    if (daemonOperations === undefined) {
+      return false;
+    }
+    setOperation(
+      presentWorkingOperation({
+        title: "Start EasyServer daemon",
+        detail: "Starting the managed local connection daemon and verifying authenticated health.",
+        activity: "verifying-state",
+      }),
+    );
+    try {
+      const result = await daemonOperations.start();
+      await refresh();
+      setOperation(
+        presentCompletedOperation({
+          title: result.alreadyRunning ? "EasyServer daemon already running" : "EasyServer daemon started",
+          detail: `Control endpoint ${result.descriptor.address.host}:${result.descriptor.address.port}`,
+        }),
+      );
+      return true;
+    } catch (error) {
+      setOperation(
+        presentOperationError({
+          title: "Start EasyServer daemon",
+          operation: "mutation",
+          error,
+          allowRetry: false,
+        }),
+      );
+      return false;
+    }
+  }, [daemonOperations, refresh]);
+
+  const requestStopDaemon = useCallback(async (): Promise<boolean> => {
+    if (daemonOperations === undefined) {
+      return false;
+    }
+    try {
+      const impact = await daemonOperations.shutdownImpact();
+      if (impact === undefined) {
+        await refresh();
+        return true;
+      }
+      return await new Promise<boolean>((resolve) => {
+        setPendingDaemonStopConfirmation({ resolve });
+        setOperation(
+          presentMutationConfirmation(
+            {
+              summary: "Stop EasyServer daemon",
+              risks: ["destructive"],
+              consequence: `closes ${impact.liveSessions} live persistent ${impact.liveSessions === 1 ? "session" : "sessions"} and ${impact.activeEndpointIntents} active Endpoint ${impact.activeEndpointIntents === 1 ? "intent" : "intents"}; daemon-owned Endpoints stop with the daemon`,
+            },
+            {
+              target: "Local EasyServer daemon",
+              affectedResources: [
+                `${impact.liveSessions} live persistent session(s)`,
+                `${impact.activeEndpointIntents} active Endpoint intent(s)`,
+              ],
+            },
+          ),
+        );
+      });
+    } catch (error) {
+      setOperation(
+        presentOperationError({
+          title: "Inspect daemon shutdown impact",
+          operation: "read",
+          error,
+          allowRetry: false,
+        }),
+      );
+      return false;
+    }
+  }, [daemonOperations, refresh]);
+
+  const createPersistentSession = useCallback(
+    async (request: TuiPersistentSessionRequest): Promise<boolean> => {
+      if (daemonOperations === undefined) {
+        return false;
+      }
+      setOperation(
+        presentWorkingOperation({
+          title: "Create persistent Endpoint",
+          detail: `${request.instanceId} → ${request.remoteHost ?? "127.0.0.1"}:${request.remotePort}`,
+          activity: "waiting-provider",
+        }),
+      );
+      try {
+        await daemonOperations.createSession(request, {
+          confirmHostTrust(trust, signal) {
+            if (signal.aborted) {
+              return Promise.resolve(false);
+            }
+            return new Promise<boolean>((resolve) => {
+              setPendingHostTrustConfirmation({ resolve });
+              setOperation(presentHostTrustRequest(trust));
+            });
+          },
+        });
+        setPendingHostTrustConfirmation(undefined);
+        await refresh();
+        setOperation(undefined);
+        return true;
+      } catch (error) {
+        setPendingHostTrustConfirmation(undefined);
+        await refresh();
+        setOperation(
+          presentOperationError({
+            title: "Create persistent Endpoint",
+            operation: "read",
+            error,
+            allowRetry: false,
+          }),
+        );
+        return false;
+      }
+    },
+    [daemonOperations, refresh],
+  );
+
+  const closePersistentSession = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (daemonOperations === undefined) {
+        return false;
+      }
+      setOperation(
+        presentWorkingOperation({
+          title: "Close persistent Session",
+          detail: id,
+          activity: "verifying-state",
+        }),
+      );
+      try {
+        await daemonOperations.closeSession(id);
+        await refresh();
+        setOperation(undefined);
+        return true;
+      } catch (error) {
+        await refresh();
+        setOperation(
+          presentOperationError({
+            title: "Close persistent Session",
+            operation: "read",
+            error,
+            allowRetry: false,
+          }),
+        );
+        return false;
+      }
+    },
+    [daemonOperations, refresh],
+  );
 
   const mutateInstance = useCallback(
     async (mutation: TuiInstanceMutation) => {
@@ -2666,11 +3105,68 @@ export function TuiApp({
         setOperation(
           action === "trust"
             ? presentWorkingOperation({
-                title: "Open foreground Endpoint",
+                title: "Establish connection",
                 detail: "Enrolling the reviewed SSH fingerprint and retrying connection setup once.",
                 activity: "waiting-provider",
               })
             : undefined,
+        );
+        return;
+      }
+      if (
+        pendingDaemonStopConfirmation !== undefined &&
+        (action === "confirm" || action === "decline")
+      ) {
+        const pending = pendingDaemonStopConfirmation;
+        setPendingDaemonStopConfirmation(undefined);
+        if (action === "decline") {
+          setOperation(undefined);
+          pending.resolve(false);
+          return;
+        }
+        if (daemonOperations === undefined) {
+          setOperation(undefined);
+          pending.resolve(false);
+          return;
+        }
+        setOperation(
+          presentWorkingOperation({
+            title: "Stop EasyServer daemon",
+            detail: "Closing daemon-owned sessions and waiting for the managed daemon to stop.",
+            activity: "verifying-state",
+          }),
+        );
+        void daemonOperations.stop().then(
+          async (result) => {
+            await refresh();
+            if (result.status === "stale") {
+              setOperation(
+                presentOperationError({
+                  title: "Stop EasyServer daemon",
+                  operation: "mutation",
+                  error: new Error(`Daemon remained unreachable: ${result.reason}`),
+                  allowRetry: false,
+                }),
+              );
+              pending.resolve(false);
+              return;
+            }
+            setOperation(
+              presentCompletedOperation({ title: "EasyServer daemon stopped" }),
+            );
+            pending.resolve(true);
+          },
+          (error) => {
+            setOperation(
+              presentOperationError({
+                title: "Stop EasyServer daemon",
+                operation: "mutation",
+                error,
+                allowRetry: false,
+              }),
+            );
+            pending.resolve(false);
+          },
         );
         return;
       }
@@ -2735,13 +3231,16 @@ export function TuiApp({
       }
       if (action === "dismiss") {
         setPendingHostTrustConfirmation(undefined);
+        setPendingDaemonStopConfirmation(undefined);
         setPendingInstanceConfirmation(undefined);
         setPendingProviderMutation(undefined);
         setOperation(undefined);
       }
     },
     [
+      daemonOperations,
       mutateProvider,
+      pendingDaemonStopConfirmation,
       pendingHostTrustConfirmation,
       pendingInstanceConfirmation,
       pendingProviderFlowConfirmation,
@@ -2793,6 +3292,14 @@ export function TuiApp({
           ? undefined
           : closeForegroundConnectionsForExit
       }
+      onStartDaemon={daemonOperations === undefined ? undefined : startDaemon}
+      onStopDaemon={daemonOperations === undefined ? undefined : requestStopDaemon}
+      onCreatePersistentSession={
+        daemonOperations === undefined ? undefined : createPersistentSession
+      }
+      onClosePersistentSession={
+        daemonOperations === undefined ? undefined : closePersistentSession
+      }
       onInstanceMutation={
         instanceMutationRunner !== undefined && operation?.phase !== "working"
           ? (mutation) => {
@@ -2834,6 +3341,7 @@ export interface TuiRuntimeOptions {
   readonly readLoader?: TuiReadLoader;
   readonly instanceMutationRunner?: TuiInstanceMutationRunner;
   readonly foregroundConnectionOperations?: TuiForegroundConnectionOperations;
+  readonly daemonOperations?: TuiDaemonOperations;
   readonly providerMutationRunner?: TuiProviderMutationRunner;
   readonly providerFlowOpener?: TuiProviderFlowOpener;
 }
@@ -2849,6 +3357,7 @@ export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
       readLoader={options.readLoader}
       instanceMutationRunner={options.instanceMutationRunner}
       foregroundConnectionOperations={options.foregroundConnectionOperations}
+      daemonOperations={options.daemonOperations}
       providerMutationRunner={options.providerMutationRunner}
       providerFlowOpener={options.providerFlowOpener}
     />,
@@ -2870,6 +3379,7 @@ export async function runTui(): Promise<void> {
     readLoader: loadDefaultTuiReadSnapshot,
     instanceMutationRunner: createDefaultTuiInstanceMutationRunner(),
     foregroundConnectionOperations: createDefaultTuiForegroundConnectionOperations(),
+    daemonOperations: createDefaultTuiDaemonOperations(),
     providerMutationRunner: createDefaultTuiProviderMutationRunner(),
     providerFlowOpener: createDefaultTuiProviderFlowOpener(),
   });

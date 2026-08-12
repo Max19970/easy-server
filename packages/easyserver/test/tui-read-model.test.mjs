@@ -116,7 +116,7 @@ test("read snapshot keeps healthy inventory beside degraded providers and plugin
     async readDaemon() {
       return {
         status: "running",
-        sessions: { status: "ready", total: 2, live: 1, closing: 0, failed: 1 },
+        sessions: { status: "ready", total: 2, live: 1, closing: 0, failed: 1, items: [] },
         endpointIntents: {
           status: "ready",
           total: 2,
@@ -222,6 +222,16 @@ test("read snapshot isolates section failure instead of hiding healthy sections"
   assert.equal(snapshot.daemon.status, "stopped");
 });
 
+test("invalid daemon descriptor is projected as stale rather than healthy or stopped", async () => {
+  const snapshot = await collectDaemonReadSnapshot("fixture-daemon.json", {
+    async readDescriptor() {
+      throw new TypeError("invalid descriptor");
+    },
+  });
+
+  assert.deepEqual(snapshot, { status: "stale" });
+});
+
 test("daemon read snapshot never exposes descriptor credentials and tolerates detail failure", async () => {
   const descriptor = {
     version: 1,
@@ -237,8 +247,30 @@ test("daemon read snapshot never exposes descriptor credentials and tolerates de
         async ping() {},
         async listSessions() {
           return [
-            { state: "live" },
-            { state: "failed" },
+            {
+              id: "session:live",
+              state: "live",
+              instanceId: "instance:one",
+              remoteHost: "127.0.0.1",
+              remotePort: 8188,
+              requestedLocalPort: 48188,
+              requestedAccessMethodId: "ssh",
+              idempotencyKey: "fixture-live",
+              accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+              endpoint: { host: "127.0.0.1", port: 48188 },
+            },
+            {
+              id: "session:failed",
+              state: "failed",
+              instanceId: "instance:two",
+              remoteHost: "127.0.0.1",
+              remotePort: 7860,
+              accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+              failure: {
+                code: "plugin-failure",
+                message: "Connection Session cleanup failed",
+              },
+            },
           ];
         },
         async listEndpointIntents() {
@@ -250,7 +282,39 @@ test("daemon read snapshot never exposes descriptor credentials and tolerates de
 
   assert.deepEqual(snapshot, {
     status: "running",
-    sessions: { status: "ready", total: 2, live: 1, closing: 0, failed: 1 },
+    sessions: {
+      status: "ready",
+      total: 2,
+      live: 1,
+      closing: 0,
+      failed: 1,
+      items: [
+        {
+          id: "session:live",
+          state: "live",
+          instanceId: "instance:one",
+          remoteHost: "127.0.0.1",
+          remotePort: 8188,
+          requestedLocalPort: 48188,
+          requestedAccessMethodId: "ssh",
+          idempotencyKey: "fixture-live",
+          accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+          endpoint: { host: "127.0.0.1", port: 48188 },
+        },
+        {
+          id: "session:failed",
+          state: "failed",
+          instanceId: "instance:two",
+          remoteHost: "127.0.0.1",
+          remotePort: 7860,
+          accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+          failure: {
+            code: "plugin-failure",
+            message: "Connection Session cleanup failed",
+          },
+        },
+      ],
+    },
     endpointIntents: { status: "unavailable" },
   });
   assert.doesNotMatch(JSON.stringify(snapshot), /must-never-escape/);
