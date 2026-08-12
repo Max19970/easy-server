@@ -9,7 +9,6 @@ import {
   type AvailableAction,
   type HostTrustRequiredError,
   type InstanceState,
-  type ProviderCliCommand,
 } from "@easyai101/easyserver-plugin-sdk";
 import {
   retryWithHostTrust,
@@ -28,12 +27,10 @@ import type {
   InstanceWaitTarget,
   InventoryInstance,
 } from "./compute-manager.js";
-import {
-  ProviderCommandRunner,
-  type ProviderCommandExecutionResult,
-} from "./provider-command-runner.js";
+import type { ProviderCommandExecutionResult } from "./provider-command-runner.js";
 import { formatPluginStatuses } from "./plugin-host.js";
 import type { PluginOperations } from "./plugin-operations.js";
+import type { ProviderFeatureCommandDescriptor } from "./provider-feature-operations.js";
 import {
   createHostRuntime,
   resolveHostRuntimePaths,
@@ -876,102 +873,77 @@ function parseConnectArgs(
 async function runProvider(args: readonly string[]): Promise<void> {
   const [providerId, featureId, commandName, ...commandArgs] = args;
   const runtime = await createHostRuntime({ paths: resolveHostRuntimePaths() });
-  const featureHost = runtime.providerFeatureHost;
+  const operations = runtime.providerFeatureOperations;
 
   if (providerId === undefined) {
-    process.stdout.write(formatProviderFeatures(featureHost.listFeatures()));
+    process.stdout.write(formatProviderFeatures(operations.listFeatures()));
     return;
   }
 
   if (featureId === undefined) {
+    process.stdout.write(formatProviderFeatures(operations.listFeatures(providerId)));
+    return;
+  }
+
+  const commands = operations.listCommands(providerId, featureId);
+  if (commandName === undefined) {
+    process.stdout.write(formatProviderCommands(providerId, featureId, commands));
+    return;
+  }
+
+  const command = commands.find((candidate) => candidate.name === commandName);
+  if (command === undefined) {
+    throw new CliUsageError(
+      `Provider command not found: ${providerId}/${featureId}/${commandName}`,
+    );
+  }
+
+  const assumeYes = command.risks.length > 0 && commandArgs[0] === "--yes";
+  const providerCommandArgs = assumeYes ? commandArgs.slice(1) : commandArgs;
+
+  if (
+    providerCommandArgs.length === 1 &&
+    (providerCommandArgs[0] === "--help" || providerCommandArgs[0] === "-h")
+  ) {
     process.stdout.write(
-      formatProviderFeatures(
-        featureHost
-          .listFeatures()
-          .filter((feature) => feature.providerId === providerId),
-      ),
+      formatProviderCommandHelp(providerId, featureId, command),
     );
     return;
   }
 
-  const admission = featureHost.acquire(providerId, featureId);
-  if (admission === undefined) {
-    throw new Error(`Provider Feature not found: ${providerId}/${featureId}`);
-  }
-
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  process.once("SIGINT", cancel);
+  process.once("SIGTERM", cancel);
   try {
-    const commands = admission.feature.cli?.commands ?? [];
-    if (commandName === undefined) {
-      process.stdout.write(formatProviderCommands(providerId, featureId, commands));
-      return;
-    }
-
-    const command = commands.find((candidate) => candidate.name === commandName);
-    if (command === undefined) {
-      throw new CliUsageError(
-        `Provider command not found: ${providerId}/${featureId}/${commandName}`,
-      );
-    }
-
-    const risks = command.risks ?? [];
-    const assumeYes = risks.length > 0 && commandArgs[0] === "--yes";
-    const providerCommandArgs = assumeYes ? commandArgs.slice(1) : commandArgs;
-
-    if (
-      providerCommandArgs.length === 1 &&
-      (providerCommandArgs[0] === "--help" || providerCommandArgs[0] === "-h")
-    ) {
-      process.stdout.write(
-        formatProviderCommandHelp(providerId, featureId, command),
-      );
-      return;
-    }
-
-    const controller = new AbortController();
-    const cancel = () => controller.abort();
-    process.once("SIGINT", cancel);
-    process.once("SIGTERM", cancel);
-    try {
-      const context = { signal: controller.signal };
-      const interactive = isInteractiveTerminal();
-      await requireMutationConfirmation(
-        `Provider command ${providerId}/${featureId}/${commandName} (provider=${providerId})`,
-        risks,
-        context,
-        {
-          assumeYes,
-          interactive,
-          ...(interactive ? { confirm: confirmRiskyMutationInteractively } : {}),
+    const interactive = isInteractiveTerminal();
+    const execution = await operations.execute({
+      providerId,
+      featureId,
+      commandName,
+      args: providerCommandArgs,
+      context: { signal: controller.signal },
+      assumeYes,
+      interaction: {
+        ...(interactive ? { confirm: confirmRiskyMutationInteractively } : {}),
+        transcript(event) {
+          if (event.stream === "output") {
+            process.stdout.write(event.text);
+          } else {
+            process.stderr.write(event.text);
+          }
         },
-      );
-
-      const execution = await new ProviderCommandRunner().run({
-        providerId,
-        featureId,
-        command,
-        args: providerCommandArgs,
-        admission,
-        inventory: runtime.computeManager,
-        context,
-        write(text) {
-          process.stdout.write(text);
-        },
-        writeError(text) {
-          process.stderr.write(text);
-        },
-      });
-      reportProviderCommandHandoff(
-        providerId,
-        featureId,
-        commandName,
-        execution,
-      );
-    } finally {
-      process.removeListener("SIGINT", cancel);
-      process.removeListener("SIGTERM", cancel);
-    }
+      },
+    });
+    reportProviderCommandHandoff(
+      providerId,
+      featureId,
+      commandName,
+      execution,
+    );
   } finally {
-    admission.release();
+    process.removeListener("SIGINT", cancel);
+    process.removeListener("SIGTERM", cancel);
   }
 }
 
@@ -1219,7 +1191,7 @@ function formatProviderFeatures(
 function formatProviderCommands(
   providerId: string,
   featureId: string,
-  commands: readonly import("@easyai101/easyserver-plugin-sdk").ProviderCliCommand[],
+  commands: readonly ProviderFeatureCommandDescriptor[],
 ): string {
   if (commands.length === 0) {
     return `No CLI commands for ${escapeTerminalText(providerId)}/${escapeTerminalText(featureId)}.\n`;
@@ -1236,7 +1208,7 @@ function formatProviderCommands(
 function formatProviderCommandHelp(
   providerId: string,
   featureId: string,
-  command: ProviderCliCommand,
+  command: ProviderFeatureCommandDescriptor,
 ): string {
   const commandPath = `easyserver provider ${escapeTerminalText(providerId)} ${escapeTerminalText(featureId)} ${escapeTerminalText(command.name)}`;
   const risks = command.risks ?? [];

@@ -9,6 +9,7 @@ import {
 } from "./plugin-host.js";
 import { PluginOperations } from "./plugin-operations.js";
 import { ProviderFeatureHost } from "./provider-feature-host.js";
+import { ProviderFeatureOperations } from "./provider-feature-operations.js";
 import { ProviderRegistry } from "./provider-registry.js";
 import {
   OsKeyringSecretStore,
@@ -54,6 +55,7 @@ export class HostRuntime {
     readonly accessAdapters: AccessAdapterRegistry,
     readonly sshAdapter: OpenSshAccessAdapter,
     readonly computeManager: ComputeManager,
+    readonly providerFeatureOperations: ProviderFeatureOperations,
     readonly connectionGateway: ConnectionGateway,
   ) {}
 }
@@ -79,6 +81,7 @@ export async function createHostRuntime(
     providerFeatureHost,
   );
   const state = options.state ?? (await stateStore.read());
+  const computeManager = new ComputeManager(providerRegistry, stateStore);
 
   if (options.loadConfiguredPlugins !== false) {
     await pluginHost.load(configuredPluginLoads(state.plugins), secretStore);
@@ -95,7 +98,8 @@ export async function createHostRuntime(
     new PluginOperations(stateStore, secretStore, options.pluginImporter),
     accessAdapters,
     sshAdapter,
-    new ComputeManager(providerRegistry, stateStore),
+    computeManager,
+    new ProviderFeatureOperations(providerFeatureHost, computeManager),
     new ConnectionGateway(
       providerRegistry,
       accessAdapters,
