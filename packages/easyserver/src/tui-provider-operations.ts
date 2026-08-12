@@ -16,6 +16,17 @@ export type TuiProviderMutation =
       readonly kind: "set-enabled";
       readonly source: string;
       readonly enabled: boolean;
+    }
+  | {
+      readonly kind: "set-credential";
+      readonly source: string;
+      readonly name: string;
+      readonly secret: string;
+    }
+  | {
+      readonly kind: "remove-credential";
+      readonly source: string;
+      readonly name: string;
     };
 
 export type TuiProviderMutationRunner = (
@@ -43,6 +54,18 @@ export function createDefaultTuiProviderMutationRunner(
       await operations.add(mutation.source);
       return;
     }
-    await operations.setEnabled(mutation.source, mutation.enabled);
+    if (mutation.kind === "set-enabled") {
+      await operations.setEnabled(mutation.source, mutation.enabled);
+      return;
+    }
+    if (mutation.kind === "set-credential") {
+      await operations.setCredential(
+        mutation.source,
+        mutation.name,
+        mutation.secret,
+      );
+      return;
+    }
+    await operations.removeCredential(mutation.source, mutation.name);
   };
 }

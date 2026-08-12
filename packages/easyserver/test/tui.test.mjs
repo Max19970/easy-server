@@ -525,6 +525,459 @@ test("Providers enable and disable the selected configured plugin by source", as
   ]);
 });
 
+test("Providers configure only declared credentials through masked input", async () => {
+  const mutations = [];
+  const snapshot = readSnapshot({
+    providers: {
+      status: "ready",
+      items: [
+        {
+          source: "@fixture/credentials",
+          state: "loaded",
+          readiness: "credentials-missing",
+          displayName: "Credential Provider",
+          providerId: "credential-fixture",
+          credentials: {
+            configured: 1,
+            declared: 2,
+            missingRequired: 1,
+            items: [
+              {
+                name: "api-key",
+                required: true,
+                configured: false,
+                description: "Fixture API key",
+              },
+              {
+                name: "profile",
+                required: false,
+                configured: true,
+                description: "Optional fixture profile",
+              },
+            ],
+          },
+        },
+      ],
+    },
+  });
+  const view = render(
+    shell({
+      width: 100,
+      readSnapshot: snapshot,
+      readStatus: "ready",
+      onProviderMutation(mutation) {
+        mutations.push(mutation);
+      },
+    }),
+  );
+
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("c");
+  await tick();
+
+  assert.match(view.lastFrame(), /Credentials for Credential Provider/);
+  assert.match(view.lastFrame(), /> api-key · required · missing/);
+  assert.match(view.lastFrame(), /profile · optional · configured/);
+  assert.doesNotMatch(view.lastFrame(), /Credential name:/);
+
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Configure credential api-key/);
+
+  const secret = "q-super-secret-marker";
+  await typeText(view, secret);
+  assert.doesNotMatch(view.lastFrame(), new RegExp(secret));
+  assert.match(view.lastFrame(), /Secret: \*{8}/);
+  assert.match(view.lastFrame(), /Input status: value entered/);
+
+  view.stdin.write("\r");
+  await tick();
+  assert.deepEqual(mutations, [
+    {
+      kind: "set-credential",
+      source: "@fixture/credentials",
+      name: "api-key",
+      secret,
+    },
+  ]);
+});
+
+test("Providers remove a configured declared credential without reading its value", async () => {
+  const mutations = [];
+  const snapshot = readSnapshot({
+    providers: {
+      status: "ready",
+      items: [
+        {
+          source: "@fixture/credentials",
+          state: "loaded",
+          readiness: "ready",
+          displayName: "Credential Provider",
+          providerId: "credential-fixture",
+          credentials: {
+            configured: 1,
+            declared: 1,
+            missingRequired: 0,
+            items: [
+              {
+                name: "api-key",
+                required: true,
+                configured: true,
+                description: "Fixture API key",
+              },
+            ],
+          },
+        },
+      ],
+    },
+  });
+  const view = render(
+    shell({
+      width: 100,
+      readSnapshot: snapshot,
+      readStatus: "ready",
+      onProviderMutation(mutation) {
+        mutations.push(mutation);
+      },
+    }),
+  );
+
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("c");
+  await tick();
+  assert.match(view.lastFrame(), /> api-key · required · configured/);
+
+  view.stdin.write("x");
+  await tick();
+  assert.deepEqual(mutations, [
+    {
+      kind: "remove-credential",
+      source: "@fixture/credentials",
+      name: "api-key",
+    },
+  ]);
+});
+
+test("TuiApp confirms credential removal before deleting the stored value", async () => {
+  let configured = true;
+  const mutations = [];
+  const loader = async () =>
+    readSnapshot({
+      providers: {
+        status: "ready",
+        items: [
+          {
+            source: "@fixture/credentials",
+            state: "loaded",
+            readiness: configured ? "ready" : "credentials-missing",
+            displayName: "Credential Provider",
+            credentials: {
+              configured: configured ? 1 : 0,
+              declared: 1,
+              missingRequired: configured ? 0 : 1,
+              items: [
+                { name: "api-key", required: true, configured },
+              ],
+            },
+          },
+        ],
+      },
+    });
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: loader,
+      async providerMutationRunner(mutation) {
+        mutations.push(mutation);
+        configured = false;
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("c");
+  await tick();
+  view.stdin.write("x");
+  await tick();
+
+  assert.deepEqual(mutations, []);
+  assert.match(view.lastFrame(), /Confirmation required/);
+  assert.match(view.lastFrame(), /Remove credential api-key/);
+  assert.match(view.lastFrame(), /Target: @fixture\/credentials/);
+
+  view.stdin.write("\u001b");
+  await flushEscape();
+  assert.deepEqual(mutations, []);
+  assert.doesNotMatch(view.lastFrame(), /Confirmation required/);
+
+  view.stdin.write("c");
+  await tick();
+  view.stdin.write("x");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  await tick();
+
+  assert.deepEqual(mutations, [
+    {
+      kind: "remove-credential",
+      source: "@fixture/credentials",
+      name: "api-key",
+    },
+  ]);
+});
+
+test("Providers explain credential eligibility for providers without usable descriptors", async () => {
+  const snapshot = readSnapshot({
+    providers: {
+      status: "ready",
+      items: [
+        {
+          source: "@fixture/disabled",
+          state: "disabled",
+          readiness: "disabled",
+          displayName: "Disabled Provider",
+          credentials: {
+            configured: 0,
+            declared: 0,
+            missingRequired: 0,
+            items: [],
+          },
+        },
+      ],
+    },
+  });
+  const view = render(
+    shell({
+      width: 100,
+      readSnapshot: snapshot,
+      readStatus: "ready",
+      onProviderMutation() {},
+    }),
+  );
+
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Credential metadata unavailable while disabled/);
+
+  view.stdin.write("c");
+  await tick();
+  assert.match(view.lastFrame(), /Enable the selected provider before managing credentials/);
+});
+
+test("credential secret input cancels without emitting or revealing secret", async () => {
+  const mutations = [];
+  const snapshot = readSnapshot({
+    providers: {
+      status: "ready",
+      items: [
+        {
+          source: "@fixture/credentials",
+          state: "loaded",
+          readiness: "credentials-missing",
+          displayName: "Credential Provider",
+          credentials: {
+            configured: 0,
+            declared: 1,
+            missingRequired: 1,
+            items: [
+              { name: "api-key", required: true, configured: false },
+            ],
+          },
+        },
+      ],
+    },
+  });
+  const view = render(
+    shell({
+      width: 100,
+      readSnapshot: snapshot,
+      readStatus: "ready",
+      onProviderMutation(mutation) {
+        mutations.push(mutation);
+      },
+    }),
+  );
+
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("c");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  await typeText(view, "q-cancelled-secret");
+  assert.doesNotMatch(view.lastFrame(), /q-cancelled-secret/);
+
+  view.stdin.write("\u001b");
+  await flushEscape();
+  assert.deepEqual(mutations, []);
+  assert.match(view.lastFrame(), /Credentials for Credential Provider/);
+});
+
+test("TuiApp never exposes credential values while mutating and refreshes readiness after success", async () => {
+  let configured = false;
+  let releaseMutation;
+  const mutationGate = new Promise((resolve) => {
+    releaseMutation = resolve;
+  });
+  const loader = async () =>
+    readSnapshot({
+      providers: {
+        status: "ready",
+        items: [
+          {
+            source: "@fixture/credentials",
+            state: "loaded",
+            readiness: configured ? "ready" : "credentials-missing",
+            displayName: "Credential Provider",
+            providerId: "credential-fixture",
+            credentials: {
+              configured: configured ? 1 : 0,
+              declared: 1,
+              missingRequired: configured ? 0 : 1,
+              items: [
+                {
+                  name: "api-key",
+                  required: true,
+                  configured,
+                  description: "Fixture API key",
+                },
+              ],
+            },
+          },
+        ],
+      },
+    });
+  const mutations = [];
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: loader,
+      async providerMutationRunner(mutation) {
+        mutations.push(mutation);
+        await mutationGate;
+        configured = true;
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("c");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+
+  const secret = "q-operation-secret-marker";
+  await typeText(view, secret);
+  view.stdin.write("\r");
+  await tick();
+
+  assert.match(view.lastFrame(), /Configure provider credential/);
+  assert.doesNotMatch(view.lastFrame(), new RegExp(secret));
+  assert.equal(mutations.length, 1);
+  assert.equal(mutations[0].secret, secret);
+
+  releaseMutation();
+  await tick();
+  await tick();
+  await tick();
+  assert.match(view.lastFrame(), /loaded · ready/);
+  assert.match(view.lastFrame(), /Credentials: 1\/1 configured/);
+  assert.doesNotMatch(view.lastFrame(), new RegExp(secret));
+});
+
+test("credential mutation failures cannot echo the submitted secret into the operation drawer", async () => {
+  const secret = "q-secret-error-marker";
+  const loader = async () =>
+    readSnapshot({
+      providers: {
+        status: "ready",
+        items: [
+          {
+            source: "@fixture/credentials",
+            state: "loaded",
+            readiness: "credentials-missing",
+            displayName: "Credential Provider",
+            credentials: {
+              configured: 0,
+              declared: 1,
+              missingRequired: 1,
+              items: [
+                { name: "api-key", required: true, configured: false },
+              ],
+            },
+          },
+        ],
+      },
+    });
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: loader,
+      async providerMutationRunner() {
+        throw new Error(`keyring rejected ${secret}`);
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("c");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  await typeText(view, secret);
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+
+  assert.match(view.lastFrame(), /Configure provider credential: failed/);
+  assert.doesNotMatch(view.lastFrame(), new RegExp(secret));
+  assert.match(view.lastFrame(), /Credential update failed/);
+});
+
 test("provider selection is preserved by source across refreshed ordering", async () => {
   const providerA = {
     source: "@fixture/a",
@@ -669,6 +1122,7 @@ test("degraded provider state remains visible while healthy instance inventory s
   assert.match(view.lastFrame(), /Healthy Provider/);
   assert.match(view.lastFrame(), /broken-plugin\.mjs/);
   assert.match(view.lastFrame(), /failed · incompatible/);
+  assert.match(view.lastFrame(), /Remediation: verify the installed module and compatibility/);
 });
 
 test("empty instance guidance reflects configured but degraded providers", async () => {

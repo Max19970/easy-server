@@ -27,6 +27,12 @@ test("read snapshot keeps healthy inventory beside degraded providers and plugin
               required: true,
               configured: true,
             },
+            {
+              name: "profile",
+              description: "Optional profile\u001b[31m",
+              required: false,
+              configured: false,
+            },
           ],
         },
         {
@@ -101,6 +107,20 @@ test("read snapshot keeps healthy inventory beside degraded providers and plugin
   );
   assert.equal(snapshot.providers.items[1].failure, "incompatible");
   assert.doesNotMatch(snapshot.providers.items[1].source, /\u001b/);
+  assert.deepEqual(snapshot.providers.items[0].credentials.items, [
+    {
+      name: "apiKey",
+      description: "API key",
+      required: true,
+      configured: true,
+    },
+    {
+      name: "profile",
+      description: "Optional profile\\u001b[31m",
+      required: false,
+      configured: false,
+    },
+  ]);
 
   assert.equal(snapshot.instances.status, "ready");
   assert.equal(snapshot.instances.complete, false);

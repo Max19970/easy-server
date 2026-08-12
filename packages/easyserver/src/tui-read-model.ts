@@ -44,6 +44,12 @@ export interface TuiProviderReadItem {
     readonly configured: number;
     readonly declared: number;
     readonly missingRequired: number;
+    readonly items: readonly {
+      readonly name: string;
+      readonly required: boolean;
+      readonly configured: boolean;
+      readonly description?: string;
+    }[];
   };
   readonly failure?: "incompatible" | "timeout" | "load-failed";
 }
@@ -290,6 +296,14 @@ function projectProvider(status: PluginStatus): TuiProviderReadItem {
       configured: credentials.filter((credential) => credential.configured).length,
       declared: credentials.length,
       missingRequired,
+      items: credentials.map((credential) => ({
+        name: escapeTerminalText(credential.name),
+        required: credential.required,
+        configured: credential.configured,
+        ...(credential.description === undefined
+          ? {}
+          : { description: escapeTerminalText(credential.description) }),
+      })),
     },
     ...(status.state !== "failed"
       ? {}
