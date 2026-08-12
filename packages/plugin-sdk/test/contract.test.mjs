@@ -11,6 +11,8 @@ import {
   parseAccessMethods,
   parsePluginManifest,
   parseProviderCliCommandResult,
+  parseProviderInteractiveScreen,
+  parseProviderInteractiveTransition,
   parseProviderInstanceList,
   parseProviderPlugin,
   parseSecretReference,
@@ -190,6 +192,263 @@ test("validates provider feature identities without interpreting feature payload
         features: [feature, feature],
       }),
     /duplicate id/,
+  );
+});
+
+test("validates provider-owned interactive flows without introducing provider domain fields", async () => {
+  const run = async () => ({
+    refreshProviderInventory: true,
+    affectedProviderExternalIds: ["nebula-42"],
+  });
+  const open = async () => ({
+    initialScreen: {
+      kind: "form",
+      id: "configure",
+      title: "Configure Nebula allocation",
+      fields: [
+        {
+          kind: "text",
+          id: "region",
+          label: "Region",
+          required: true,
+          value: "eu-north",
+        },
+      ],
+      actions: [{ id: "continue", label: "Continue", kind: "primary" }],
+    },
+    async dispatch() {
+      return { kind: "submit", args: ["--region", "eu-north"] };
+    },
+  });
+  const feature = {
+    id: "allocation",
+    displayName: "Allocation",
+    cli: {
+      commands: [
+        {
+          name: "provision",
+          description: "Provision a Nebula allocation",
+          operation: "mutation",
+          risks: ["billable"],
+          help: {
+            options: [
+              {
+                name: "--region",
+                valueName: "region",
+                description: "Nebula region",
+                required: true,
+              },
+            ],
+          },
+          run,
+        },
+      ],
+    },
+    interactive: {
+      flows: [
+        {
+          id: "provision-wizard",
+          commandName: "provision",
+          open,
+        },
+      ],
+    },
+  };
+
+  const plugin = parseProviderPlugin({
+    manifest: {
+      ...validManifest,
+      id: "nebula",
+      displayName: "Nebula Compute",
+      provider: {
+        id: "nebula",
+        displayName: "Nebula Compute",
+        capabilities: [],
+      },
+    },
+    provider: {
+      providerId: "nebula",
+      async listInstances() {
+        return [];
+      },
+      async getInstance() {
+        return undefined;
+      },
+    },
+    features: [feature],
+  });
+
+  assert.equal(plugin.features?.[0], feature);
+  assert.equal(plugin.features?.[0].interactive?.flows[0].open, open);
+
+  assert.throws(
+    () =>
+      parseProviderPlugin({
+        manifest: {
+          ...validManifest,
+          id: "nebula",
+          displayName: "Nebula Compute",
+          provider: {
+            id: "nebula",
+            displayName: "Nebula Compute",
+            capabilities: [],
+          },
+        },
+        provider: {
+          providerId: "nebula",
+          async listInstances() {
+            return [];
+          },
+          async getInstance() {
+            return undefined;
+          },
+        },
+        features: [
+          {
+            ...feature,
+            interactive: {
+              flows: [
+                {
+                  id: "orphan-wizard",
+                  commandName: "missing-command",
+                  open,
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    /must reference a declared CLI command/,
+  );
+});
+
+test("validates the generic interactive screen and submission vocabulary", () => {
+  const form = parseProviderInteractiveScreen({
+    kind: "form",
+    id: "configure",
+    title: "Configure resource",
+    description: "Provider-owned fields",
+    fields: [
+      {
+        kind: "text",
+        id: "label",
+        label: "Label",
+        required: false,
+        repeatable: true,
+        value: ["alpha", "beta"],
+      },
+      {
+        kind: "integer",
+        id: "count",
+        label: "Count",
+        required: true,
+        value: 2,
+      },
+      {
+        kind: "decimal",
+        id: "budget",
+        label: "Budget",
+        required: false,
+        value: 1.25,
+        validation: { state: "valid" },
+      },
+      {
+        kind: "boolean",
+        id: "verified-only",
+        label: "Verified only",
+        required: false,
+        value: true,
+      },
+      {
+        kind: "single-choice",
+        id: "zone",
+        label: "Zone",
+        required: true,
+        loading: false,
+        choices: [
+          { id: "zone-a", label: "Zone A" },
+          { id: "zone-b", label: "Zone B", disabled: true },
+        ],
+        value: "zone-a",
+      },
+      {
+        kind: "multiple-choice",
+        id: "tags",
+        label: "Tags",
+        required: false,
+        choices: [
+          { id: "fast", label: "Fast" },
+          { id: "cheap", label: "Cheap" },
+        ],
+        value: ["fast"],
+      },
+    ],
+    actions: [
+      { id: "refresh", label: "Refresh", kind: "refresh" },
+      { id: "review", label: "Review", kind: "primary" },
+    ],
+  });
+  assert.equal(form.kind, "form");
+  assert.equal(form.fields.length, 6);
+
+  const table = parseProviderInteractiveScreen({
+    kind: "table",
+    id: "results",
+    title: "Results",
+    columns: [
+      { id: "name", label: "Name" },
+      { id: "price", label: "Price" },
+    ],
+    rows: [
+      { id: "row-1", cells: { name: "One", price: 1.2 } },
+      { id: "row-2", cells: { name: "Two", price: 2.4 }, disabled: true },
+    ],
+    selection: "single",
+    selectedRowIds: ["row-1"],
+    actions: [{ id: "continue", label: "Continue", kind: "primary" }],
+  });
+  assert.equal(table.kind, "table");
+  assert.deepEqual(table.selectedRowIds, ["row-1"]);
+
+  const review = parseProviderInteractiveScreen({
+    kind: "review",
+    id: "review",
+    title: "Review",
+    items: [
+      { label: "Target", value: "row-1" },
+      { label: "Cost", value: "$1.20/hour" },
+    ],
+    actions: [
+      { id: "back", label: "Back", kind: "back" },
+      { id: "submit", label: "Create", kind: "submit" },
+    ],
+  });
+  assert.equal(review.kind, "review");
+
+  assert.deepEqual(
+    parseProviderInteractiveTransition({
+      kind: "submit",
+      args: ["--zone", "zone-a", "--count", "2"],
+    }),
+    {
+      kind: "submit",
+      args: ["--zone", "zone-a", "--count", "2"],
+    },
+  );
+
+  assert.throws(
+    () =>
+      parseProviderInteractiveScreen({
+        kind: "form",
+        id: "broken",
+        title: "Broken",
+        fields: [
+          { kind: "text", id: "same", label: "One", required: false },
+          { kind: "text", id: "same", label: "Two", required: false },
+        ],
+        actions: [],
+      }),
+    /duplicate field id/,
   );
 });
 

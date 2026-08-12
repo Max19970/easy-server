@@ -307,10 +307,214 @@ export interface ProviderCliContribution {
   readonly commands: readonly ProviderCliCommand[];
 }
 
+/**
+ * Presentation-neutral context for provider-owned interactive preparation.
+ * Interactive flows may inspect provider state and credentials, but remote
+ * mutations stay behind the linked CLI command so host safety semantics remain
+ * authoritative.
+ */
+export interface ProviderInteractiveContext extends OperationContext {
+  resolveCredential(name: string): Promise<string | undefined>;
+}
+
+export type ProviderInteractiveValidationState = "valid" | "invalid" | "pending";
+
+export interface ProviderInteractiveValidation {
+  readonly state: ProviderInteractiveValidationState;
+  readonly message?: string;
+}
+
+export interface ProviderInteractiveChoice {
+  /** Provider-owned stable identity; it is not interpreted by EasyServer. */
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly disabled?: boolean;
+}
+
+interface ProviderInteractiveFieldBase {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly required: boolean;
+  readonly disabled?: boolean;
+  readonly validation?: ProviderInteractiveValidation;
+}
+
+export interface ProviderInteractiveTextField extends ProviderInteractiveFieldBase {
+  readonly kind: "text";
+  readonly repeatable?: boolean;
+  readonly value?: string | readonly string[];
+}
+
+export interface ProviderInteractiveIntegerField extends ProviderInteractiveFieldBase {
+  readonly kind: "integer";
+  readonly repeatable?: boolean;
+  readonly value?: number | readonly number[];
+}
+
+export interface ProviderInteractiveDecimalField extends ProviderInteractiveFieldBase {
+  readonly kind: "decimal";
+  readonly repeatable?: boolean;
+  readonly value?: number | readonly number[];
+}
+
+export interface ProviderInteractiveBooleanField extends ProviderInteractiveFieldBase {
+  readonly kind: "boolean";
+  readonly value?: boolean;
+}
+
+export interface ProviderInteractiveSingleChoiceField extends ProviderInteractiveFieldBase {
+  readonly kind: "single-choice";
+  readonly choices: readonly ProviderInteractiveChoice[];
+  readonly loading?: boolean;
+  readonly value?: string;
+}
+
+export interface ProviderInteractiveMultipleChoiceField extends ProviderInteractiveFieldBase {
+  readonly kind: "multiple-choice";
+  readonly choices: readonly ProviderInteractiveChoice[];
+  readonly loading?: boolean;
+  readonly value?: readonly string[];
+}
+
+export type ProviderInteractiveField =
+  | ProviderInteractiveTextField
+  | ProviderInteractiveIntegerField
+  | ProviderInteractiveDecimalField
+  | ProviderInteractiveBooleanField
+  | ProviderInteractiveSingleChoiceField
+  | ProviderInteractiveMultipleChoiceField;
+
+export type ProviderInteractiveActionKind =
+  | "primary"
+  | "secondary"
+  | "submit"
+  | "back"
+  | "refresh";
+
+export interface ProviderInteractiveAction {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: ProviderInteractiveActionKind;
+  readonly disabled?: boolean;
+}
+
+interface ProviderInteractiveScreenBase {
+  readonly id: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly actions: readonly ProviderInteractiveAction[];
+}
+
+export interface ProviderInteractiveFormScreen extends ProviderInteractiveScreenBase {
+  readonly kind: "form";
+  /**
+   * Providers express dependencies by returning a new screen with fields
+   * omitted, disabled or revalidated after a field-change event.
+   */
+  readonly fields: readonly ProviderInteractiveField[];
+}
+
+export type ProviderInteractiveTableCell = string | number | boolean | null;
+
+export interface ProviderInteractiveTableColumn {
+  readonly id: string;
+  readonly label: string;
+}
+
+export interface ProviderInteractiveTableRow {
+  readonly id: string;
+  readonly cells: Readonly<Record<string, ProviderInteractiveTableCell>>;
+  readonly disabled?: boolean;
+}
+
+export interface ProviderInteractiveTableScreen extends ProviderInteractiveScreenBase {
+  readonly kind: "table";
+  readonly columns: readonly ProviderInteractiveTableColumn[];
+  readonly rows: readonly ProviderInteractiveTableRow[];
+  readonly selection: "single" | "multiple";
+  readonly selectedRowIds: readonly string[];
+  readonly loading?: boolean;
+}
+
+export interface ProviderInteractiveReviewItem {
+  readonly label: string;
+  /** Provider-formatted review text; EasyServer does not infer domain meaning. */
+  readonly value: string;
+}
+
+export interface ProviderInteractiveReviewScreen extends ProviderInteractiveScreenBase {
+  readonly kind: "review";
+  readonly items: readonly ProviderInteractiveReviewItem[];
+}
+
+export type ProviderInteractiveScreen =
+  | ProviderInteractiveFormScreen
+  | ProviderInteractiveTableScreen
+  | ProviderInteractiveReviewScreen;
+
+export type ProviderInteractiveFieldValue =
+  | string
+  | number
+  | boolean
+  | readonly string[]
+  | readonly number[]
+  | readonly boolean[];
+
+export type ProviderInteractiveEvent =
+  | {
+      readonly kind: "field-change";
+      readonly fieldId: string;
+      readonly value?: ProviderInteractiveFieldValue;
+    }
+  | {
+      readonly kind: "table-selection";
+      readonly rowIds: readonly string[];
+    }
+  | {
+      readonly kind: "action";
+      readonly actionId: string;
+    };
+
+export type ProviderInteractiveTransition =
+  | {
+      readonly kind: "screen";
+      readonly screen: ProviderInteractiveScreen;
+    }
+  | {
+      /**
+       * Final provider-owned argument assembly. The host executes these args
+       * through commandName's existing ProviderCliCommand and safety/handoff path.
+       */
+      readonly kind: "submit";
+      readonly args: readonly string[];
+    };
+
+export interface ProviderInteractiveSession {
+  readonly initialScreen: ProviderInteractiveScreen;
+  dispatch(
+    event: ProviderInteractiveEvent,
+    context: ProviderInteractiveContext,
+  ): Promise<ProviderInteractiveTransition>;
+}
+
+export interface ProviderInteractiveFlow {
+  readonly id: string;
+  /** Existing CLI command whose metadata, safety and execution stay authoritative. */
+  readonly commandName: string;
+  open(context: ProviderInteractiveContext): Promise<ProviderInteractiveSession>;
+}
+
+export interface ProviderInteractiveContribution {
+  readonly flows: readonly ProviderInteractiveFlow[];
+}
+
 export interface ProviderFeature {
   readonly id: string;
   readonly displayName: string;
   readonly cli?: ProviderCliContribution;
+  readonly interactive?: ProviderInteractiveContribution;
 }
 
 export type AccessMethodMode = "tcp-forward" | "interactive";
@@ -826,12 +1030,398 @@ function parseProviderFeatures(value: unknown): readonly ProviderFeature[] {
         `provider plugin.features[${index}].cli`,
       );
     }
+    if (feature.interactive !== undefined) {
+      parseProviderInteractiveContribution(
+        feature.interactive,
+        `provider plugin.features[${index}].interactive`,
+        feature.cli,
+      );
+    }
 
     seen.add(id);
     features.push(feature as unknown as ProviderFeature);
   }
 
   return features;
+}
+
+function parseProviderInteractiveContribution(
+  value: unknown,
+  path: string,
+  cliValue: unknown,
+): void {
+  const contribution = expectRecord(value, path);
+  if (!Array.isArray(contribution.flows)) {
+    throw new PluginContractError(`${path}.flows must be an array`);
+  }
+
+  const commandNames = new Set<string>();
+  if (cliValue !== undefined) {
+    const cli = expectRecord(cliValue, `${path} command source`);
+    if (Array.isArray(cli.commands)) {
+      for (const [index, commandValue] of cli.commands.entries()) {
+        const command = expectRecord(commandValue, `${path} command source.commands[${index}]`);
+        commandNames.add(
+          expectId(command.name, `${path} command source.commands[${index}].name`),
+        );
+      }
+    }
+  }
+
+  const seenIds = new Set<string>();
+  const seenCommands = new Set<string>();
+  for (const [index, candidate] of contribution.flows.entries()) {
+    const flowPath = `${path}.flows[${index}]`;
+    const flow = expectRecord(candidate, flowPath);
+    const id = expectId(flow.id, `${flowPath}.id`);
+    const commandName = expectId(flow.commandName, `${flowPath}.commandName`);
+    expectFunction(flow.open, `${flowPath}.open`);
+
+    if (!commandNames.has(commandName)) {
+      throw new PluginContractError(
+        `${flowPath}.commandName must reference a declared CLI command`,
+      );
+    }
+    if (seenIds.has(id)) {
+      throw new PluginContractError(`${path}.flows contains duplicate id: ${id}`);
+    }
+    if (seenCommands.has(commandName)) {
+      throw new PluginContractError(
+        `${path}.flows must not define multiple flows for CLI command: ${commandName}`,
+      );
+    }
+    seenIds.add(id);
+    seenCommands.add(commandName);
+  }
+}
+
+export function parseProviderInteractiveSession(
+  value: unknown,
+): ProviderInteractiveSession {
+  const session = expectRecord(value, "provider interactive session");
+  parseProviderInteractiveScreen(session.initialScreen);
+  expectFunction(session.dispatch, "provider interactive session.dispatch");
+  return session as unknown as ProviderInteractiveSession;
+}
+
+export function parseProviderInteractiveTransition(
+  value: unknown,
+): ProviderInteractiveTransition {
+  const transition = expectRecord(value, "provider interactive transition");
+  if (transition.kind === "screen") {
+    return {
+      kind: "screen",
+      screen: parseProviderInteractiveScreen(transition.screen),
+    };
+  }
+  if (transition.kind === "submit") {
+    if (!Array.isArray(transition.args)) {
+      throw new PluginContractError(
+        "provider interactive transition.args must be an array",
+      );
+    }
+    const args = transition.args.map((arg, index) => {
+      if (typeof arg !== "string") {
+        throw new PluginContractError(
+          `provider interactive transition.args[${index}] must be a string`,
+        );
+      }
+      return arg;
+    });
+    return { kind: "submit", args };
+  }
+  throw new PluginContractError(
+    "provider interactive transition.kind must be screen or submit",
+  );
+}
+
+export function parseProviderInteractiveScreen(
+  value: unknown,
+): ProviderInteractiveScreen {
+  const path = "provider interactive screen";
+  const screen = expectRecord(value, path);
+  expectId(screen.id, `${path}.id`);
+  expectNonEmptyString(screen.title, `${path}.title`);
+  if (screen.description !== undefined) {
+    expectNonEmptyString(screen.description, `${path}.description`);
+  }
+  parseProviderInteractiveActions(screen.actions, `${path}.actions`);
+
+  if (screen.kind === "form") {
+    if (!Array.isArray(screen.fields)) {
+      throw new PluginContractError(`${path}.fields must be an array`);
+    }
+    const seen = new Set<string>();
+    for (const [index, fieldValue] of screen.fields.entries()) {
+      const fieldPath = `${path}.fields[${index}]`;
+      const field = expectRecord(fieldValue, fieldPath);
+      const id = expectId(field.id, `${fieldPath}.id`);
+      if (seen.has(id)) {
+        throw new PluginContractError(`${path} contains duplicate field id: ${id}`);
+      }
+      seen.add(id);
+      parseProviderInteractiveField(field, fieldPath);
+    }
+    return screen as unknown as ProviderInteractiveFormScreen;
+  }
+
+  if (screen.kind === "table") {
+    parseProviderInteractiveTable(screen, path);
+    return screen as unknown as ProviderInteractiveTableScreen;
+  }
+
+  if (screen.kind === "review") {
+    if (!Array.isArray(screen.items)) {
+      throw new PluginContractError(`${path}.items must be an array`);
+    }
+    for (const [index, itemValue] of screen.items.entries()) {
+      const item = expectRecord(itemValue, `${path}.items[${index}]`);
+      expectNonEmptyString(item.label, `${path}.items[${index}].label`);
+      expectNonEmptyString(item.value, `${path}.items[${index}].value`);
+    }
+    return screen as unknown as ProviderInteractiveReviewScreen;
+  }
+
+  throw new PluginContractError(
+    `${path}.kind must be form, table or review`,
+  );
+}
+
+function parseProviderInteractiveActions(value: unknown, path: string): void {
+  if (!Array.isArray(value)) {
+    throw new PluginContractError(`${path} must be an array`);
+  }
+  const seen = new Set<string>();
+  const kinds = new Set<ProviderInteractiveActionKind>([
+    "primary",
+    "secondary",
+    "submit",
+    "back",
+    "refresh",
+  ]);
+  for (const [index, actionValue] of value.entries()) {
+    const actionPath = `${path}[${index}]`;
+    const action = expectRecord(actionValue, actionPath);
+    const id = expectId(action.id, `${actionPath}.id`);
+    expectNonEmptyString(action.label, `${actionPath}.label`);
+    if (!kinds.has(action.kind as ProviderInteractiveActionKind)) {
+      throw new PluginContractError(`${actionPath}.kind is not supported`);
+    }
+    if (action.disabled !== undefined && typeof action.disabled !== "boolean") {
+      throw new PluginContractError(`${actionPath}.disabled must be a boolean`);
+    }
+    if (seen.has(id)) {
+      throw new PluginContractError(`${path} contains duplicate id: ${id}`);
+    }
+    seen.add(id);
+  }
+}
+
+function parseProviderInteractiveField(
+  field: Record<string, unknown>,
+  path: string,
+): void {
+  expectNonEmptyString(field.label, `${path}.label`);
+  if (field.description !== undefined) {
+    expectNonEmptyString(field.description, `${path}.description`);
+  }
+  if (typeof field.required !== "boolean") {
+    throw new PluginContractError(`${path}.required must be a boolean`);
+  }
+  if (field.disabled !== undefined && typeof field.disabled !== "boolean") {
+    throw new PluginContractError(`${path}.disabled must be a boolean`);
+  }
+  if (field.validation !== undefined) {
+    parseProviderInteractiveValidation(field.validation, `${path}.validation`);
+  }
+
+  if (field.kind === "text") {
+    parseProviderInteractiveRepeatable(field, path, "string");
+    return;
+  }
+  if (field.kind === "integer") {
+    parseProviderInteractiveRepeatable(field, path, "integer");
+    return;
+  }
+  if (field.kind === "decimal") {
+    parseProviderInteractiveRepeatable(field, path, "number");
+    return;
+  }
+  if (field.kind === "boolean") {
+    if (field.value !== undefined && typeof field.value !== "boolean") {
+      throw new PluginContractError(`${path}.value must be a boolean`);
+    }
+    return;
+  }
+  if (field.kind === "single-choice" || field.kind === "multiple-choice") {
+    parseProviderInteractiveChoices(field.choices, `${path}.choices`);
+    if (field.loading !== undefined && typeof field.loading !== "boolean") {
+      throw new PluginContractError(`${path}.loading must be a boolean`);
+    }
+    if (field.kind === "single-choice") {
+      if (field.value !== undefined && typeof field.value !== "string") {
+        throw new PluginContractError(`${path}.value must be a string`);
+      }
+    } else if (field.value !== undefined) {
+      parseStringArray(field.value, `${path}.value`);
+    }
+    return;
+  }
+
+  throw new PluginContractError(`${path}.kind is not supported`);
+}
+
+function parseProviderInteractiveRepeatable(
+  field: Record<string, unknown>,
+  path: string,
+  scalar: "string" | "integer" | "number",
+): void {
+  if (field.repeatable !== undefined && typeof field.repeatable !== "boolean") {
+    throw new PluginContractError(`${path}.repeatable must be a boolean`);
+  }
+  if (field.value === undefined) {
+    return;
+  }
+  const values = field.repeatable === true ? field.value : [field.value];
+  if (field.repeatable === true && !Array.isArray(values)) {
+    throw new PluginContractError(`${path}.value must be an array when repeatable`);
+  }
+  if (field.repeatable !== true && Array.isArray(field.value)) {
+    throw new PluginContractError(`${path}.value must not be an array unless repeatable`);
+  }
+  const list = Array.isArray(values) ? values : [values];
+  for (const [index, candidate] of list.entries()) {
+    const valuePath = field.repeatable === true ? `${path}.value[${index}]` : `${path}.value`;
+    if (scalar === "string" && typeof candidate !== "string") {
+      throw new PluginContractError(`${valuePath} must be a string`);
+    }
+    if (scalar === "integer" && !Number.isInteger(candidate)) {
+      throw new PluginContractError(`${valuePath} must be an integer`);
+    }
+    if (
+      scalar === "number" &&
+      (typeof candidate !== "number" || !Number.isFinite(candidate))
+    ) {
+      throw new PluginContractError(`${valuePath} must be a finite number`);
+    }
+  }
+}
+
+function parseProviderInteractiveValidation(value: unknown, path: string): void {
+  const validation = expectRecord(value, path);
+  if (
+    validation.state !== "valid" &&
+    validation.state !== "invalid" &&
+    validation.state !== "pending"
+  ) {
+    throw new PluginContractError(`${path}.state is not supported`);
+  }
+  if (validation.message !== undefined) {
+    expectNonEmptyString(validation.message, `${path}.message`);
+  }
+}
+
+function parseProviderInteractiveChoices(value: unknown, path: string): void {
+  if (!Array.isArray(value)) {
+    throw new PluginContractError(`${path} must be an array`);
+  }
+  const seen = new Set<string>();
+  for (const [index, choiceValue] of value.entries()) {
+    const choicePath = `${path}[${index}]`;
+    const choice = expectRecord(choiceValue, choicePath);
+    const id = expectNonEmptyString(choice.id, `${choicePath}.id`);
+    expectNonEmptyString(choice.label, `${choicePath}.label`);
+    if (choice.description !== undefined) {
+      expectNonEmptyString(choice.description, `${choicePath}.description`);
+    }
+    if (choice.disabled !== undefined && typeof choice.disabled !== "boolean") {
+      throw new PluginContractError(`${choicePath}.disabled must be a boolean`);
+    }
+    if (seen.has(id)) {
+      throw new PluginContractError(`${path} contains duplicate id: ${id}`);
+    }
+    seen.add(id);
+  }
+}
+
+function parseProviderInteractiveTable(
+  table: Record<string, unknown>,
+  path: string,
+): void {
+  if (!Array.isArray(table.columns)) {
+    throw new PluginContractError(`${path}.columns must be an array`);
+  }
+  const columnIds = new Set<string>();
+  for (const [index, columnValue] of table.columns.entries()) {
+    const columnPath = `${path}.columns[${index}]`;
+    const column = expectRecord(columnValue, columnPath);
+    const id = expectId(column.id, `${columnPath}.id`);
+    expectNonEmptyString(column.label, `${columnPath}.label`);
+    if (columnIds.has(id)) {
+      throw new PluginContractError(`${path}.columns contains duplicate id: ${id}`);
+    }
+    columnIds.add(id);
+  }
+  if (!Array.isArray(table.rows)) {
+    throw new PluginContractError(`${path}.rows must be an array`);
+  }
+  const rowIds = new Set<string>();
+  for (const [index, rowValue] of table.rows.entries()) {
+    const rowPath = `${path}.rows[${index}]`;
+    const row = expectRecord(rowValue, rowPath);
+    const id = expectNonEmptyString(row.id, `${rowPath}.id`);
+    const cells = expectRecord(row.cells, `${rowPath}.cells`);
+    for (const [columnId, cell] of Object.entries(cells)) {
+      if (!columnIds.has(columnId)) {
+        throw new PluginContractError(
+          `${rowPath}.cells contains unknown column: ${columnId}`,
+        );
+      }
+      if (
+        cell !== null &&
+        typeof cell !== "string" &&
+        typeof cell !== "number" &&
+        typeof cell !== "boolean"
+      ) {
+        throw new PluginContractError(`${rowPath}.cells.${columnId} is not renderable`);
+      }
+    }
+    if (row.disabled !== undefined && typeof row.disabled !== "boolean") {
+      throw new PluginContractError(`${rowPath}.disabled must be a boolean`);
+    }
+    if (rowIds.has(id)) {
+      throw new PluginContractError(`${path}.rows contains duplicate id: ${id}`);
+    }
+    rowIds.add(id);
+  }
+  if (table.selection !== "single" && table.selection !== "multiple") {
+    throw new PluginContractError(`${path}.selection must be single or multiple`);
+  }
+  const selected = parseStringArray(table.selectedRowIds, `${path}.selectedRowIds`);
+  if (table.selection === "single" && selected.length > 1) {
+    throw new PluginContractError(`${path}.selectedRowIds must contain at most one row`);
+  }
+  for (const id of selected) {
+    if (!rowIds.has(id)) {
+      throw new PluginContractError(`${path}.selectedRowIds contains unknown row: ${id}`);
+    }
+  }
+  if (table.loading !== undefined && typeof table.loading !== "boolean") {
+    throw new PluginContractError(`${path}.loading must be a boolean`);
+  }
+}
+
+function parseStringArray(value: unknown, path: string): readonly string[] {
+  if (!Array.isArray(value)) {
+    throw new PluginContractError(`${path} must be an array`);
+  }
+  const parsed = value.map((candidate, index) =>
+    expectNonEmptyString(candidate, `${path}[${index}]`),
+  );
+  if (new Set(parsed).size !== parsed.length) {
+    throw new PluginContractError(`${path} must not contain duplicates`);
+  }
+  return parsed;
 }
 
 function parseProviderCliContribution(value: unknown, path: string): void {
