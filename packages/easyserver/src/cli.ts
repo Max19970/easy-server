@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
   INSTANCE_STATES,
@@ -14,12 +13,10 @@ import {
   type PluginCredentialDescriptor,
   type ProviderCliCommand,
 } from "@easyai101/easyserver-plugin-sdk";
-import { AccessAdapterRegistry } from "./access-adapter-registry.js";
 import {
   retryWithHostTrust,
   runForegroundConnect,
 } from "./connect-command.js";
-import { ConnectionGateway } from "./connection-gateway.js";
 import { collectDiagnostics } from "./diagnostics.js";
 import {
   acquireFilesystemLock,
@@ -29,16 +26,14 @@ import {
   requireMutationConfirmation,
   type MutationConfirmationPrompt,
 } from "./mutation-safety.js";
-import {
-  ComputeManager,
-  type InstanceWaitTarget,
-  type InventoryInstance,
+import type {
+  InstanceWaitTarget,
+  InventoryInstance,
 } from "./compute-manager.js";
 import {
   ProviderCommandRunner,
   type ProviderCommandExecutionResult,
 } from "./provider-command-runner.js";
-import { ProviderFeatureHost } from "./provider-feature-host.js";
 import {
   formatPluginStatuses,
   PluginHost,
@@ -49,8 +44,15 @@ import {
   setPluginCredential,
 } from "./plugin-credentials.js";
 import { ProviderRegistry } from "./provider-registry.js";
+import {
+  createHostRuntime,
+  resolveHostRuntimePaths,
+} from "./host-runtime.js";
 import { ReloadingEndpointOpener } from "./reloading-endpoint-opener.js";
-import { OsKeyringSecretStore } from "./secret-store.js";
+import {
+  OsKeyringSecretStore,
+  type SecretStore,
+} from "./secret-store.js";
 import { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
 import { JsonStateStore, type PluginRegistration } from "./state-store.js";
 import { escapeTerminalText } from "./terminal-text.js";
@@ -258,7 +260,8 @@ async function initializeDaemonForeground(): Promise<{
   readonly daemon: Awaited<ReturnType<typeof startLocalConnectionDaemon>>;
   readonly releaseDescriptor: () => Promise<void>;
 }> {
-  const descriptorPath = daemonFilePath();
+  const paths = resolveHostRuntimePaths();
+  const descriptorPath = paths.daemonFile;
   const lifecycleLock = await acquireFilesystemLock(
     `${descriptorPath}.lifecycle.lock`,
     { timeoutMs: 30_000 },
@@ -286,14 +289,19 @@ async function initializeDaemonForeground(): Promise<{
       await removeLocalDaemonDescriptor(descriptorPath);
     }
 
-    const store = new JsonStateStore(stateFilePath());
-    const secretStore = new OsKeyringSecretStore();
-    const gateway = new ReloadingEndpointOpener(store, secretStore);
+    const runtime = await createHostRuntime({
+      paths,
+      loadConfiguredPlugins: false,
+    });
+    const gateway = new ReloadingEndpointOpener(
+      runtime.stateStore,
+      runtime.secretStore,
+    );
     const authToken = randomBytes(32).toString("base64url");
     daemon = await startLocalConnectionDaemon({
       gateway,
       authToken,
-      stateStore: store,
+      stateStore: runtime.stateStore,
     });
     const releaseDescriptor = await claimLocalDaemonDescriptor(descriptorPath, {
       version: 1,
@@ -684,21 +692,8 @@ async function runConnect(args: readonly string[]): Promise<void> {
     localPort,
     accessMethodId,
   } = parseConnectArgs(args);
-  const store = new JsonStateStore(stateFilePath());
-  const state = await store.read();
-  const registry = new ProviderRegistry();
-  const secretStore = new OsKeyringSecretStore();
-  const host = new PluginHost(registry);
-  await host.load(configuredPluginLoads(state.plugins), secretStore);
-
-  const sshAdapter = new OpenSshAccessAdapter();
-  const accessAdapters = new AccessAdapterRegistry([sshAdapter]);
-  const gateway = new ConnectionGateway(
-    registry,
-    accessAdapters,
-    store,
-    secretStore,
-  );
+  const runtime = await createHostRuntime({ paths: resolveHostRuntimePaths() });
+  const { connectionGateway: gateway, sshAdapter } = runtime;
   const controller = new AbortController();
   const cancel = () => controller.abort();
   process.once("SIGINT", cancel);
@@ -893,13 +888,8 @@ function parseConnectArgs(
 
 async function runProvider(args: readonly string[]): Promise<void> {
   const [providerId, featureId, commandName, ...commandArgs] = args;
-  const store = new JsonStateStore(stateFilePath());
-  const state = await store.read();
-  const registry = new ProviderRegistry();
-  const featureHost = new ProviderFeatureHost();
-  const secretStore = new OsKeyringSecretStore();
-  const host = new PluginHost(registry, undefined, featureHost);
-  await host.load(configuredPluginLoads(state.plugins), secretStore);
+  const runtime = await createHostRuntime({ paths: resolveHostRuntimePaths() });
+  const featureHost = runtime.providerFeatureHost;
 
   if (providerId === undefined) {
     process.stdout.write(formatProviderFeatures(featureHost.listFeatures()));
@@ -974,7 +964,7 @@ async function runProvider(args: readonly string[]): Promise<void> {
         command,
         args: providerCommandArgs,
         admission,
-        inventory: new ComputeManager(registry, store),
+        inventory: runtime.computeManager,
         context,
         write(text) {
           process.stdout.write(text);
@@ -1000,13 +990,8 @@ async function runProvider(args: readonly string[]): Promise<void> {
 
 async function runInstances(args: readonly string[]): Promise<void> {
   const [command, instanceId, ...commandOptions] = args;
-  const store = new JsonStateStore(stateFilePath());
-  const state = await store.read();
-  const registry = new ProviderRegistry();
-  const secretStore = new OsKeyringSecretStore();
-  const host = new PluginHost(registry);
-  await host.load(configuredPluginLoads(state.plugins), secretStore);
-  const manager = new ComputeManager(registry, store);
+  const runtime = await createHostRuntime({ paths: resolveHostRuntimePaths() });
+  const { state, stateStore: store, computeManager: manager } = runtime;
   const controller = new AbortController();
   const cancel = () => controller.abort();
   process.once("SIGINT", cancel);
@@ -1046,14 +1031,10 @@ async function runInstances(args: readonly string[]): Promise<void> {
       instanceId !== undefined &&
       args.length === 2
     ) {
-      const gateway = new ConnectionGateway(
-        registry,
-        new AccessAdapterRegistry([new OpenSshAccessAdapter()]),
-        store,
-        secretStore,
-      );
       process.stdout.write(
-        formatAccessMethods(await gateway.listAccessMethods(instanceId, context)),
+        formatAccessMethods(
+          await runtime.connectionGateway.listAccessMethods(instanceId, context),
+        ),
       );
       return;
     }
@@ -1143,10 +1124,14 @@ async function runInstances(args: readonly string[]): Promise<void> {
 
 async function runPlugins(args: readonly string[]): Promise<void> {
   const [command] = args;
-  const store = new JsonStateStore(stateFilePath());
+  const runtime = await createHostRuntime({
+    paths: resolveHostRuntimePaths(),
+    loadConfiguredPlugins: false,
+  });
+  const { stateStore: store, secretStore } = runtime;
 
   if (command === "list") {
-    await listPlugins(store, parsePluginSources(args.slice(1)));
+    await listPlugins(store, parsePluginSources(args.slice(1)), secretStore);
     return;
   }
 
@@ -1161,7 +1146,7 @@ async function runPlugins(args: readonly string[]): Promise<void> {
   }
 
   if (command === "credential") {
-    await runPluginCredential(store, args.slice(1));
+    await runPluginCredential(store, secretStore, args.slice(1));
     return;
   }
 
@@ -1170,6 +1155,7 @@ async function runPlugins(args: readonly string[]): Promise<void> {
 
 async function runPluginCredential(
   store: JsonStateStore,
+  secretStore: SecretStore,
   args: readonly string[],
 ): Promise<void> {
   const [command, rawSource, name, option, variable] = args;
@@ -1192,7 +1178,7 @@ async function runPluginCredential(
     }
     const result = await setPluginCredential(
       store,
-      new OsKeyringSecretStore(),
+      secretStore,
       source,
       name,
       secret,
@@ -1222,7 +1208,7 @@ async function runPluginCredential(
     );
     const result = await removePluginCredential(
       store,
-      new OsKeyringSecretStore(),
+      secretStore,
       source,
       name,
       declaredCredentials,
@@ -1271,6 +1257,7 @@ async function configuredPluginCredentialDescriptors(
 async function listPlugins(
   store: JsonStateStore,
   explicitSources: readonly string[],
+  secretStore: Pick<SecretStore, "get">,
 ): Promise<void> {
   const canonicalExplicitSources = explicitSources.map(canonicalPluginSource);
   const explicitSourceSet = new Set(canonicalExplicitSources);
@@ -1286,7 +1273,7 @@ async function listPlugins(
         (source) => !configuredSourceSet.has(source),
       ),
     ],
-    new OsKeyringSecretStore(),
+    secretStore,
   );
 
   const disabledStatuses: PluginStatus[] = state.plugins
@@ -1974,17 +1961,11 @@ function isPathSpecifier(source: string): boolean {
 }
 
 function stateFilePath(): string {
-  return (
-    process.env.EASYSERVER_STATE_FILE ??
-    join(homedir(), ".easyserver", "state.json")
-  );
+  return resolveHostRuntimePaths().stateFile;
 }
 
 function daemonFilePath(): string {
-  return (
-    process.env.EASYSERVER_DAEMON_FILE ??
-    join(homedir(), ".easyserver", "daemon.json")
-  );
+  return resolveHostRuntimePaths().daemonFile;
 }
 
 function reportCliError(error: unknown): void {

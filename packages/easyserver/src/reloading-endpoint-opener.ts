@@ -1,11 +1,7 @@
 import { normalizedError, type OperationContext } from "@easyai101/easyserver-plugin-sdk";
-import { AccessAdapterRegistry } from "./access-adapter-registry.js";
-import {
-  ConnectionGateway,
-  type OpenEndpointResult,
-} from "./connection-gateway.js";
-import { PluginHost, type PluginStatus } from "./plugin-host.js";
-import { ProviderRegistry } from "./provider-registry.js";
+import type { OpenEndpointResult } from "./connection-gateway.js";
+import { createHostRuntime, type HostRuntime } from "./host-runtime.js";
+import type { PluginStatus } from "./plugin-host.js";
 import type { SecretStore } from "./secret-store.js";
 import {
   JsonStateStore,
@@ -15,7 +11,7 @@ import {
 
 interface RuntimeGeneration {
   readonly fingerprint: string;
-  readonly gateway: ConnectionGateway;
+  readonly runtime: HostRuntime;
   readonly providerIds: ReadonlySet<string>;
   readonly pluginStatuses: readonly PluginStatus[];
 }
@@ -64,7 +60,7 @@ export class ReloadingEndpointOpener {
         }
       }
 
-      return generation.gateway.openEndpoint(
+      return generation.runtime.connectionGateway.openEndpoint(
         instanceId,
         remotePort,
         remoteHost,
@@ -101,9 +97,11 @@ export class ReloadingEndpointOpener {
     for (;;) {
       const before = await this.stateStore.read();
       const fingerprint = pluginConfigurationFingerprint(before.plugins);
-      const registry = new ProviderRegistry();
-      const host = new PluginHost(registry);
-      await host.load(configuredPluginLoads(before.plugins), this.secretStore);
+      const runtime = await createHostRuntime({
+        stateStore: this.stateStore,
+        secretStore: this.secretStore,
+        state: before,
+      });
       const after = await this.stateStore.read();
       if (pluginConfigurationFingerprint(after.plugins) !== fingerprint) {
         continue;
@@ -111,31 +109,12 @@ export class ReloadingEndpointOpener {
 
       return {
         fingerprint,
-        gateway: new ConnectionGateway(
-          registry,
-          new AccessAdapterRegistry(),
-          this.stateStore,
-          this.secretStore,
-        ),
-        providerIds: new Set(registry.listProviderIds()),
-        pluginStatuses: host.listPlugins(),
+        runtime,
+        providerIds: new Set(runtime.providerRegistry.listProviderIds()),
+        pluginStatuses: runtime.pluginHost.listPlugins(),
       };
     }
   }
-}
-
-function configuredPluginLoads(
-  plugins: readonly PluginRegistration[],
-): readonly {
-  readonly source: string;
-  readonly credentials?: PluginRegistration["credentials"];
-}[] {
-  return plugins
-    .filter((plugin) => plugin.enabled)
-    .map((plugin) => ({
-      source: plugin.source,
-      ...(plugin.credentials === undefined ? {} : { credentials: plugin.credentials }),
-    }));
 }
 
 function pluginConfigurationFingerprint(
