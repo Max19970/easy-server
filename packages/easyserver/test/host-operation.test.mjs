@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { HostOperationRunner } from "../dist/host-operation.js";
+import {
+  HostOperationRunner,
+  isRetrySafeHostMutationFailure,
+} from "../dist/host-operation.js";
 
 function context(signal = new AbortController().signal) {
   return { signal };
@@ -64,6 +67,82 @@ test("host deadline while mutation callback is still pre-dispatch stays a timeou
     ),
     (error) => error?.code === "timeout",
   );
+});
+
+test("pre-dispatch mutation failures are host-certified as retry-safe", async () => {
+  const failure = new Error("credential lookup failed");
+  let observed;
+
+  await assert.rejects(
+    new HostOperationRunner(50).run(
+      "mutation",
+      "fixture mutation",
+      context(),
+      async () => {
+        throw failure;
+      },
+    ),
+    (error) => {
+      observed = error;
+      return error === failure;
+    },
+  );
+
+  assert.equal(isRetrySafeHostMutationFailure(observed), true);
+});
+
+test("provider-confirmed failures after dispatch keep their definite error and are not retry-certified", async () => {
+  const failure = {
+    kind: "easyserver-error",
+    code: "conflict",
+    message: "provider rejected the mutation",
+  };
+  let observed;
+
+  await assert.rejects(
+    new HostOperationRunner(50).run(
+      "mutation",
+      "fixture mutation",
+      context(),
+      async ({ markMutationDispatched }) => {
+        markMutationDispatched();
+        throw failure;
+      },
+    ),
+    (error) => {
+      observed = error;
+      return error === failure && error.code === "conflict";
+    },
+  );
+
+  assert.equal(isRetrySafeHostMutationFailure(observed), false);
+});
+
+test("post-dispatch reuse revokes stale pre-dispatch retry certification", async () => {
+  const failure = new Error("reused failure");
+  const runner = new HostOperationRunner(50);
+
+  await assert.rejects(
+    runner.run("mutation", "first attempt", context(), async () => {
+      throw failure;
+    }),
+    (error) => error === failure,
+  );
+  assert.equal(isRetrySafeHostMutationFailure(failure), true);
+
+  await assert.rejects(
+    runner.run(
+      "mutation",
+      "second attempt",
+      context(),
+      async ({ markMutationDispatched }) => {
+        markMutationDispatched();
+        throw failure;
+      },
+    ),
+    (error) => error === failure,
+  );
+  assert.equal(isRetrySafeHostMutationFailure(failure), false);
 });
 
 test("host deadline bounds a non-cooperative read", async () => {

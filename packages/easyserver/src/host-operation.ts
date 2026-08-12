@@ -11,6 +11,12 @@ export interface HostOperationContext extends OperationContext {
 
 export const DEFAULT_HOST_OPERATION_TIMEOUT_MS = 60_000;
 
+const retrySafeMutationFailures = new WeakSet<object>();
+
+export function isRetrySafeHostMutationFailure(error: unknown): boolean {
+  return isObject(error) && retrySafeMutationFailures.has(error);
+}
+
 export class HostOperationRunner {
   constructor(
     private readonly timeoutMs = DEFAULT_HOST_OPERATION_TIMEOUT_MS,
@@ -27,7 +33,9 @@ export class HostOperationRunner {
     invoke: (context: HostOperationContext) => Promise<T>,
   ): Promise<T> {
     if (context.signal.aborted) {
-      throw normalizedError("cancelled", `${label} was cancelled before dispatch`);
+      const error = normalizedError("cancelled", `${label} was cancelled before dispatch`);
+      certifyRetrySafeMutationFailure(kind, error);
+      throw error;
     }
 
     const timeout = new AbortController();
@@ -58,6 +66,11 @@ export class HostOperationRunner {
       return await Promise.race([invocation, aborted]);
     } catch (error) {
       if (!(error instanceof HostOperationAbort)) {
+        if (mutationDispatched) {
+          revokeRetrySafeMutationFailure(kind, error);
+        } else {
+          certifyRetrySafeMutationFailure(kind, error);
+        }
         throw error;
       }
 
@@ -69,16 +82,20 @@ export class HostOperationRunner {
       }
 
       if (timeout.signal.aborted && !context.signal.aborted) {
-        throw normalizedError(
+        const failure = normalizedError(
           "timeout",
           `${label} timed out${kind === "mutation" ? " before dispatch" : ""}`,
         );
+        certifyRetrySafeMutationFailure(kind, failure);
+        throw failure;
       }
 
-      throw normalizedError(
+      const failure = normalizedError(
         "cancelled",
         `${label} was cancelled${kind === "mutation" ? " before dispatch" : ""}`,
       );
+      certifyRetrySafeMutationFailure(kind, failure);
+      throw failure;
     } finally {
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
@@ -87,3 +104,25 @@ export class HostOperationRunner {
 }
 
 class HostOperationAbort extends Error {}
+
+function certifyRetrySafeMutationFailure(
+  kind: HostOperationKind,
+  error: unknown,
+): void {
+  if (kind === "mutation" && isObject(error)) {
+    retrySafeMutationFailures.add(error);
+  }
+}
+
+function revokeRetrySafeMutationFailure(
+  kind: HostOperationKind,
+  error: unknown,
+): void {
+  if (kind === "mutation" && isObject(error)) {
+    retrySafeMutationFailures.delete(error);
+  }
+}
+
+function isObject(value: unknown): value is object {
+  return typeof value === "object" && value !== null;
+}

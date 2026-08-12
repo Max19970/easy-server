@@ -8,6 +8,12 @@ import {
   useInput,
   useWindowSize,
 } from "ink";
+import { TuiOperationDrawer } from "./tui-operation-drawer.js";
+import {
+  isTuiOperationPresentation,
+  type TuiOperationActionKind,
+  type TuiOperationPresentation,
+} from "./tui-operation-model.js";
 import { EASYSERVER_VERSION } from "./version.js";
 
 interface TuiRoute {
@@ -54,13 +60,21 @@ export interface TuiShellProps {
   readonly width?: number;
   readonly colorEnabled?: boolean;
   readonly screenReader?: boolean;
+  readonly operation?: TuiOperationPresentation;
+  readonly onOperationAction?: (action: TuiOperationActionKind) => void;
 }
 
 export function TuiShell({
   width,
   colorEnabled = true,
   screenReader = false,
+  operation,
+  onOperationAction,
 }: TuiShellProps): React.ReactElement {
+  if (operation !== undefined && !isTuiOperationPresentation(operation)) {
+    throw new TypeError("TUI operation presentation must come from the presentation model");
+  }
+
   const { exit } = useApp();
   const windowSize = useWindowSize();
   const columns = width ?? windowSize.columns ?? 80;
@@ -70,6 +84,7 @@ export function TuiShell({
   const [helpOpen, setHelpOpen] = useState(false);
   const [status, setStatus] = useState("Ready.");
   const activeRoute = routes[activeIndex] ?? routes[0];
+  const operationInteractionOpen = operation?.interaction !== undefined;
 
   const navigation = useMemo(
     () =>
@@ -85,6 +100,17 @@ export function TuiShell({
     if ((key.ctrl && input === "c") || input === "q") {
       exit();
       return;
+    }
+
+    if (operation !== undefined) {
+      const action = operationActionForInput(operation, input, key);
+      if (action !== undefined) {
+        onOperationAction?.(action);
+        return;
+      }
+      if (operationInteractionOpen) {
+        return;
+      }
     }
 
     if (input === "?") {
@@ -191,9 +217,23 @@ export function TuiShell({
         </Box>
       </Box>
 
+      {operation === undefined ? null : (
+        <Box marginTop={1}>
+          <TuiOperationDrawer operation={operation} colorEnabled={colorEnabled} />
+        </Box>
+      )}
+
       <Box marginTop={1} flexDirection="column">
         <Text aria-label={`Status: ${status}`}>Status: {status}</Text>
-        {screenReader ? (
+        {operationInteractionOpen ? (
+          <Text color={muted} wrap="wrap">
+            Confirmation has focus · use the actions shown above · q quit
+          </Text>
+        ) : operation !== undefined ? (
+          <Text color={muted} wrap="wrap">
+            Operation status shown · Tab/Shift+Tab or arrows still navigate · drawer actions use the keys shown above · q quit
+          </Text>
+        ) : screenReader ? (
           <Text>
             Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; Q quits.
           </Text>
@@ -205,6 +245,45 @@ export function TuiShell({
       </Box>
     </Box>
   );
+}
+
+function operationActionForInput(
+  operation: TuiOperationPresentation,
+  input: string,
+  key: { readonly escape: boolean; readonly return: boolean },
+): TuiOperationActionKind | undefined {
+  const available = new Set(operation.actions.map((action) => action.kind));
+
+  if (key.return) {
+    if (available.has("confirm")) {
+      return "confirm";
+    }
+    if (available.has("trust")) {
+      return "trust";
+    }
+    return undefined;
+  }
+
+  if (key.escape && available.has("decline")) {
+    return "decline";
+  }
+
+  if (input === "c" && available.has("cancel")) {
+    return "cancel";
+  }
+  if (input === "x" && available.has("dismiss")) {
+    return "dismiss";
+  }
+  if (input === "o" && available.has("observe")) {
+    return "observe";
+  }
+  if (input === "R" && available.has("refresh")) {
+    return "refresh";
+  }
+  if (input === "R" && available.has("retry")) {
+    return "retry";
+  }
+  return undefined;
 }
 
 function HelpPanel({ colorEnabled }: { readonly colorEnabled: boolean }): React.ReactElement {
