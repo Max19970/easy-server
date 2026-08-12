@@ -465,6 +465,120 @@ test("TuiApp refreshes provider state after registration mutation succeeds", asy
   assert.match(view.lastFrame(), /Source: @fixture\/provider/);
 });
 
+test("Providers enable and disable the selected configured plugin by source", async () => {
+  const mutations = [];
+  const snapshot = readSnapshot({
+    providers: {
+      status: "ready",
+      items: [
+        {
+          source: "@fixture/enabled",
+          state: "loaded",
+          readiness: "ready",
+          displayName: "Enabled Provider",
+          providerId: "enabled",
+          credentials: { configured: 0, declared: 0, missingRequired: 0 },
+        },
+        {
+          source: "@fixture/disabled",
+          state: "disabled",
+          readiness: "disabled",
+          displayName: "Disabled Provider",
+          credentials: { configured: 0, declared: 0, missingRequired: 0 },
+        },
+      ],
+    },
+  });
+  const view = render(
+    shell({
+      width: 100,
+      readSnapshot: snapshot,
+      readStatus: "ready",
+      onProviderMutation(mutation) {
+        mutations.push(mutation);
+      },
+    }),
+  );
+
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /> Enabled Provider/);
+
+  view.stdin.write("e");
+  await tick();
+  assert.deepEqual(mutations, [
+    { kind: "set-enabled", source: "@fixture/enabled", enabled: false },
+  ]);
+
+  view.stdin.write("j");
+  await tick();
+  assert.match(view.lastFrame(), /> Disabled Provider/);
+  view.stdin.write("e");
+  await tick();
+  assert.deepEqual(mutations, [
+    { kind: "set-enabled", source: "@fixture/enabled", enabled: false },
+    { kind: "set-enabled", source: "@fixture/disabled", enabled: true },
+  ]);
+});
+
+test("provider selection is preserved by source across refreshed ordering", async () => {
+  const providerA = {
+    source: "@fixture/a",
+    state: "loaded",
+    readiness: "ready",
+    displayName: "Provider A",
+    providerId: "a",
+    credentials: { configured: 0, declared: 0, missingRequired: 0 },
+  };
+  const providerB = {
+    source: "@fixture/b",
+    state: "loaded",
+    readiness: "ready",
+    displayName: "Provider B",
+    providerId: "b",
+    credentials: { configured: 0, declared: 0, missingRequired: 0 },
+  };
+  const first = readSnapshot({
+    providers: { status: "ready", items: [providerA, providerB] },
+  });
+  const reordered = readSnapshot({
+    providers: { status: "ready", items: [providerB, providerA] },
+  });
+  const view = render(
+    shell({
+      width: 100,
+      readSnapshot: first,
+      readStatus: "ready",
+      onProviderMutation() {},
+    }),
+  );
+
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("j");
+  await tick();
+  assert.match(view.lastFrame(), /> Provider B/);
+
+  view.rerender(
+    shell({
+      width: 60,
+      readSnapshot: reordered,
+      readStatus: "ready",
+      onProviderMutation() {},
+    }),
+  );
+  await tick();
+  assert.match(view.lastFrame(), /> Provider B/);
+});
+
 test("degraded provider state remains visible while healthy instance inventory stays usable", async () => {
   const snapshot = readSnapshot({
     providers: {

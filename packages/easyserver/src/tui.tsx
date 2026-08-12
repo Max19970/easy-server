@@ -115,11 +115,23 @@ export function TuiShell({
   const [helpOpen, setHelpOpen] = useState(false);
   const [status, setStatus] = useState("Ready.");
   const [providerSourceInput, setProviderSourceInput] = useState<string | undefined>();
+  const [selectedProviderSource, setSelectedProviderSource] = useState<string | undefined>(
+    () => firstProviderSource(readSnapshot),
+  );
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | undefined>(
     () => firstInstanceId(readSnapshot),
   );
   const activeRoute = routes[activeIndex] ?? routes[0];
   const operationInteractionOpen = operation?.interaction !== undefined;
+  const providerItems =
+    readSnapshot?.providers.status === "ready"
+      ? readSnapshot.providers.items
+      : [];
+  const effectiveSelectedProviderSource =
+    selectedProviderSource !== undefined &&
+    providerItems.some((provider) => provider.source === selectedProviderSource)
+      ? selectedProviderSource
+      : providerItems[0]?.source;
   const inventoryItems =
     readSnapshot?.instances.status === "ready"
       ? readSnapshot.instances.items
@@ -131,6 +143,12 @@ export function TuiShell({
       : inventoryItems[0]?.id;
 
   useEffect(() => {
+    setSelectedProviderSource((current) =>
+      current !== undefined &&
+      providerItems.some((provider) => provider.source === current)
+        ? current
+        : providerItems[0]?.source,
+    );
     setSelectedInstanceId((current) =>
       current !== undefined &&
       inventoryItems.some((instance) => instance.id === current)
@@ -223,6 +241,50 @@ export function TuiShell({
     ) {
       setProviderSourceInput("");
       setStatus("Enter an installed provider module or path.");
+      return;
+    }
+
+    if (
+      activeRoute.id === "providers" &&
+      providerItems.length > 0 &&
+      (input === "j" || input === "k")
+    ) {
+      const currentIndex = Math.max(
+        0,
+        providerItems.findIndex(
+          (provider) => provider.source === effectiveSelectedProviderSource,
+        ),
+      );
+      const nextIndex =
+        input === "j"
+          ? (currentIndex + 1) % providerItems.length
+          : (currentIndex - 1 + providerItems.length) % providerItems.length;
+      const next = providerItems[nextIndex];
+      if (next !== undefined) {
+        setSelectedProviderSource(next.source);
+        setStatus(`Selected provider ${next.source}.`);
+      }
+      return;
+    }
+
+    if (
+      activeRoute.id === "providers" &&
+      input === "e" &&
+      onProviderMutation !== undefined
+    ) {
+      const selected = providerItems.find(
+        (provider) => provider.source === effectiveSelectedProviderSource,
+      );
+      if (selected !== undefined) {
+        onProviderMutation({
+          kind: "set-enabled",
+          source: selected.source,
+          enabled: selected.state === "disabled",
+        });
+        setStatus(
+          `${selected.state === "disabled" ? "Enabling" : "Disabling"} provider ${selected.source}.`,
+        );
+      }
       return;
     }
 
@@ -340,6 +402,7 @@ export function TuiShell({
                   narrow={narrow}
                   selectedInstanceId={effectiveSelectedInstanceId}
                   providerSourceInput={providerSourceInput}
+                  selectedProviderSource={effectiveSelectedProviderSource}
                   canRegisterProvider={onProviderMutation !== undefined}
                 />
               </Box>
@@ -370,7 +433,7 @@ export function TuiShell({
           </Text>
         ) : (
           <Text color={muted} wrap="wrap">
-            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? " · j/k select" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · a register" : ""} · q quit
+            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? " · j/k select" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · e toggle · a register" : ""} · q quit
           </Text>
         )}
       </Box>
@@ -385,6 +448,7 @@ interface RouteSurfaceProps {
   readonly narrow: boolean;
   readonly selectedInstanceId?: string;
   readonly providerSourceInput?: string;
+  readonly selectedProviderSource?: string;
   readonly canRegisterProvider: boolean;
 }
 
@@ -395,6 +459,7 @@ function RouteSurface({
   narrow,
   selectedInstanceId,
   providerSourceInput,
+  selectedProviderSource,
   canRegisterProvider,
 }: RouteSurfaceProps): React.ReactElement {
   if (
@@ -431,6 +496,7 @@ function RouteSurface({
     <ProvidersSurface
       snapshot={snapshot}
       sourceInput={providerSourceInput}
+      selectedSource={selectedProviderSource}
       canRegister={canRegisterProvider}
     />
   );
@@ -587,10 +653,12 @@ function InstancesSurface({
 function ProvidersSurface({
   snapshot,
   sourceInput,
+  selectedSource,
   canRegister,
 }: {
   readonly snapshot: TuiReadSnapshot;
   readonly sourceInput?: string;
+  readonly selectedSource?: string;
   readonly canRegister: boolean;
 }): React.ReactElement {
   if (sourceInput !== undefined) {
@@ -630,13 +698,15 @@ function ProvidersSurface({
     <Box flexDirection="column">
       {canRegister ? (
         <Box marginBottom={1}>
-          <Text>Press a to register another installed provider.</Text>
+          <Text>j/k select · e enable/disable · a register another installed provider</Text>
         </Box>
       ) : null}
-      {snapshot.providers.items.map((provider) => (
+      {snapshot.providers.items.map((provider) => {
+        const selected = provider.source === selectedSource;
+        return (
         <Box key={`${provider.source}:${provider.pluginId ?? "unloaded"}`} flexDirection="column" marginBottom={1}>
-          <Text bold>
-            {provider.displayName ?? provider.pluginId ?? provider.providerId ?? provider.source}
+          <Text bold={selected}>
+            {selected ? "> " : "  "}{provider.displayName ?? provider.pluginId ?? provider.providerId ?? provider.source}
           </Text>
           <Text>
             {provider.state} · {provider.failure ?? provider.readiness}
@@ -653,7 +723,8 @@ function ProvidersSurface({
               : ` · ${provider.credentials.missingRequired} required missing`}
           </Text>
         </Box>
-      ))}
+        );
+      })}
     </Box>
   );
 }
@@ -701,6 +772,14 @@ function instanceEmptyGuidance(snapshot: TuiReadSnapshot): string {
 
 function formatActions(actions: readonly string[]): string {
   return actions.length === 0 ? "none" : actions.join(", ");
+}
+
+function firstProviderSource(
+  snapshot: TuiReadSnapshot | undefined,
+): string | undefined {
+  return snapshot?.providers.status === "ready"
+    ? snapshot.providers.items[0]?.source
+    : undefined;
 }
 
 function firstInstanceId(snapshot: TuiReadSnapshot | undefined): string | undefined {
@@ -848,10 +927,19 @@ export function TuiApp({
         return;
       }
 
+      const title =
+        mutation.kind === "add-plugin"
+          ? "Register provider"
+          : mutation.enabled
+            ? "Enable provider"
+            : "Disable provider";
       setOperation(
         presentWorkingOperation({
-          title: "Register provider",
-          detail: `Validating ${mutation.source} before saving configuration.`,
+          title,
+          detail:
+            mutation.kind === "add-plugin"
+              ? `Validating ${mutation.source} before saving configuration.`
+              : `${title} ${mutation.source}.`,
           activity: "verifying-state",
         }),
       );
@@ -861,7 +949,7 @@ export function TuiApp({
       } catch (error) {
         setOperation(
           presentOperationError({
-            title: "Register provider",
+            title,
             operation: "mutation",
             error,
           }),

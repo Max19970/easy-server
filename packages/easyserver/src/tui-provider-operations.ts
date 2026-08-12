@@ -7,10 +7,16 @@ import {
   type HostRuntimePaths,
 } from "./host-runtime.js";
 
-export type TuiProviderMutation = {
-  readonly kind: "add-plugin";
-  readonly source: string;
-};
+export type TuiProviderMutation =
+  | {
+      readonly kind: "add-plugin";
+      readonly source: string;
+    }
+  | {
+      readonly kind: "set-enabled";
+      readonly source: string;
+      readonly enabled: boolean;
+    };
 
 export type TuiProviderMutationRunner = (
   mutation: TuiProviderMutation,
@@ -35,6 +41,8 @@ export function createDefaultTuiProviderMutationRunner(
   return async (mutation) => {
     if (mutation.kind === "add-plugin") {
       await operations.add(mutation.source);
+      return;
     }
+    await operations.setEnabled(mutation.source, mutation.enabled);
   };
 }
