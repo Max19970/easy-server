@@ -1986,7 +1986,16 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
     "fixture-loopback kind=daemon-fixture:loopback mode=tcp-forward\n",
   );
 
-  const echo = createServer((socket) => socket.pipe(socket));
+  const echo = createServer((socket) => {
+    socket.on("error", (error) => {
+      // The daemon is intentionally killed below; Windows can report that
+      // expected peer teardown as ECONNRESET on the remote fixture socket.
+      if (error?.code !== "ECONNRESET") {
+        throw error;
+      }
+    });
+    socket.pipe(socket);
+  });
   echo.listen({ host: "127.0.0.1", port: 0, exclusive: true });
   await once(echo, "listening");
   const echoAddress = echo.address();
