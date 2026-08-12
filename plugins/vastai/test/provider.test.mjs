@@ -489,6 +489,184 @@ test("Vast lifecycle mutation with an ambiguous success payload remains outcome-
   );
 });
 
+test("marketplace interactive flow searches, selects, reviews and submits through the existing rent command", async () => {
+  const calls = [];
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch(input, init) {
+      const url = new URL(input);
+      calls.push({ url, init });
+      if (init.method === "POST") {
+        return json({
+          offers: [
+            {
+              id: 901,
+              machine_id: 77,
+              gpu_name: "RTX 4090",
+              num_gpus: 2,
+              gpu_ram: 24576,
+              dph_total: 0.42,
+              reliability: 0.997,
+              geolocation: "DE",
+              rentable: true,
+            },
+          ],
+        });
+      }
+      return json({ success: true, new_contract: 777 });
+    },
+  });
+  const marketplace = plugin.features[0];
+  const flow = marketplace.interactive?.flows.find(
+    (candidate) => candidate.commandName === "rent",
+  );
+  assert.ok(flow);
+  const providerContext = context();
+  const interactiveContext = {
+    signal: providerContext.signal,
+    resolveCredential: providerContext.resolveCredential,
+  };
+  const session = await flow.open(interactiveContext);
+
+  assert.equal(session.initialScreen.kind, "form");
+  assert.match(session.initialScreen.title, /Vast.ai marketplace/i);
+  assert.deepEqual(
+    session.initialScreen.fields.map(({ id, kind }) => ({ id, kind })),
+    [
+      { id: "gpu", kind: "text" },
+      { id: "min-gpus", kind: "integer" },
+      { id: "max-hourly", kind: "decimal" },
+      { id: "min-reliability", kind: "decimal" },
+      { id: "verified", kind: "boolean" },
+      { id: "limit", kind: "integer" },
+    ],
+  );
+
+  await session.dispatch(
+    { kind: "field-change", fieldId: "gpu", value: "RTX 4090" },
+    interactiveContext,
+  );
+  await session.dispatch(
+    { kind: "field-change", fieldId: "min-gpus", value: 2 },
+    interactiveContext,
+  );
+  await session.dispatch(
+    { kind: "field-change", fieldId: "max-hourly", value: 0.5 },
+    interactiveContext,
+  );
+  await session.dispatch(
+    { kind: "field-change", fieldId: "min-reliability", value: 0.99 },
+    interactiveContext,
+  );
+  await session.dispatch(
+    { kind: "field-change", fieldId: "verified", value: true },
+    interactiveContext,
+  );
+  await session.dispatch(
+    { kind: "field-change", fieldId: "limit", value: 7 },
+    interactiveContext,
+  );
+  const results = await session.dispatch(
+    { kind: "action", actionId: "search" },
+    interactiveContext,
+  );
+  assert.equal(results.kind, "screen");
+  assert.equal(results.screen.kind, "table");
+  assert.deepEqual(
+    results.screen.columns.map(({ id }) => id),
+    ["offer", "gpu", "count", "memory", "hourly", "reliability", "location"],
+  );
+  assert.deepEqual(results.screen.rows.map(({ id }) => id), ["901"]);
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    gpu_name: { eq: "RTX 4090" },
+    num_gpus: { gte: 2 },
+    dph_total: { lte: 0.5 },
+    reliability: { gte: 0.99 },
+    verified: { eq: true },
+    rentable: { eq: true },
+    limit: 7,
+  });
+
+  await session.dispatch(
+    { kind: "table-selection", rowIds: ["901"] },
+    interactiveContext,
+  );
+  const rental = await session.dispatch(
+    { kind: "action", actionId: "continue" },
+    interactiveContext,
+  );
+  assert.equal(rental.kind, "screen");
+  assert.equal(rental.screen.kind, "form");
+  assert.deepEqual(
+    rental.screen.fields.map(({ id, kind }) => ({ id, kind })),
+    [
+      { id: "image", kind: "text" },
+      { id: "disk", kind: "decimal" },
+      { id: "runtype", kind: "single-choice" },
+      { id: "label", kind: "text" },
+    ],
+  );
+
+  await session.dispatch(
+    { kind: "field-change", fieldId: "image", value: "ubuntu:22.04" },
+    interactiveContext,
+  );
+  await session.dispatch(
+    { kind: "field-change", fieldId: "disk", value: 20 },
+    interactiveContext,
+  );
+  await session.dispatch(
+    { kind: "field-change", fieldId: "runtype", value: "ssh_direct" },
+    interactiveContext,
+  );
+  await session.dispatch(
+    { kind: "field-change", fieldId: "label", value: "tui-worker" },
+    interactiveContext,
+  );
+  const review = await session.dispatch(
+    { kind: "action", actionId: "review" },
+    interactiveContext,
+  );
+  assert.equal(review.kind, "screen");
+  assert.equal(review.screen.kind, "review");
+  assert.match(
+    review.screen.items.map(({ label, value }) => `${label}:${value}`).join("|"),
+    /Offer:901.*Image:ubuntu:22.04.*Runtype:ssh_direct/,
+  );
+
+  const submit = await session.dispatch(
+    { kind: "action", actionId: "rent" },
+    interactiveContext,
+  );
+  assert.deepEqual(submit, {
+    kind: "submit",
+    args: [
+      "901",
+      "--image",
+      "ubuntu:22.04",
+      "--disk",
+      "20",
+      "--runtype",
+      "ssh_direct",
+      "--label",
+      "tui-worker",
+    ],
+  });
+
+  const rent = marketplace.cli?.commands.find((command) => command.name === "rent");
+  assert.ok(rent);
+  const commandResult = await rent.run(submit.args, {
+    ...providerContext,
+    write() {},
+    writeError() {},
+  });
+  assert.equal(calls[1].init.method, "PUT");
+  assert.deepEqual(commandResult, {
+    refreshProviderInventory: true,
+    affectedProviderExternalIds: ["777"],
+  });
+});
+
 test("marketplace feature searches Vast offers with plugin-owned filters", async () => {
   const calls = [];
   const plugin = createVastProviderPlugin({

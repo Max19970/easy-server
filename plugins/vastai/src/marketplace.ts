@@ -5,6 +5,14 @@ import {
   type ProviderCliCommandResult,
   type ProviderCliContribution,
   type ProviderFeature,
+  type ProviderInteractiveContext,
+  type ProviderInteractiveContribution,
+  type ProviderInteractiveEvent,
+  type ProviderInteractiveField,
+  type ProviderInteractiveFieldValue,
+  type ProviderInteractiveScreen,
+  type ProviderInteractiveSession,
+  type ProviderInteractiveTransition,
   type ProviderOperationContext,
 } from "@easyai101/easyserver-plugin-sdk";
 import { VastApiClient } from "./api-client.js";
@@ -164,6 +172,15 @@ class MarketplaceFeature implements VastMarketplaceFeature {
       },
     ],
   };
+  readonly interactive: ProviderInteractiveContribution = {
+    flows: [
+      {
+        id: "rent-wizard",
+        commandName: "rent",
+        open: (context) => this.#openRentFlow(context),
+      },
+    ],
+  };
 
   constructor(private readonly client: VastApiClient) {}
 
@@ -216,6 +233,115 @@ class MarketplaceFeature implements VastMarketplaceFeature {
       affectedProviderExternalIds: [rental.providerExternalId],
     };
   }
+
+  async #openRentFlow(
+    _context: ProviderInteractiveContext,
+  ): Promise<ProviderInteractiveSession> {
+    return new VastRentInteractiveSession(this);
+  }
+}
+
+interface VastRentFlowState {
+  readonly search: VastOfferSearch;
+  readonly offers: readonly VastOffer[];
+  readonly selectedOfferId?: string;
+  readonly image: string;
+  readonly diskGb?: number;
+  readonly runtype?: VastRuntype;
+  readonly label?: string;
+}
+
+class VastRentInteractiveSession implements ProviderInteractiveSession {
+  readonly initialScreen: ProviderInteractiveScreen;
+  #state: VastRentFlowState = {
+    search: { limit: 10 },
+    offers: [],
+    image: "",
+  };
+
+  constructor(private readonly marketplace: MarketplaceFeature) {
+    this.initialScreen = vastSearchScreen(this.#state);
+  }
+
+  async dispatch(
+    event: ProviderInteractiveEvent,
+    context: ProviderInteractiveContext,
+  ): Promise<ProviderInteractiveTransition> {
+    if (event.kind === "field-change") {
+      this.#state = updateVastFlowField(this.#state, event.fieldId, event.value);
+      return {
+        kind: "screen",
+        screen: isVastRentalField(event.fieldId)
+          ? vastRentalScreen(this.#state)
+          : vastSearchScreen(this.#state),
+      };
+    }
+
+    if (event.kind === "table-selection") {
+      const selectedOfferId =
+        event.rowIds.length === 1 &&
+        this.#state.offers.some((offer) => offer.id === event.rowIds[0])
+          ? event.rowIds[0]
+          : undefined;
+      this.#state = { ...this.#state, selectedOfferId };
+      return { kind: "screen", screen: vastResultsScreen(this.#state) };
+    }
+
+    switch (event.actionId) {
+      case "search":
+      case "refresh": {
+        const validation = validateVastSearch(this.#state.search);
+        if (validation !== undefined) {
+          return {
+            kind: "screen",
+            screen: vastSearchScreen(this.#state, validation),
+          };
+        }
+        const offers = await this.marketplace.searchOffers(
+          this.#state.search,
+          providerReadContext(context),
+        );
+        this.#state = {
+          ...this.#state,
+          offers,
+          selectedOfferId: offers.some(
+            (offer) => offer.id === this.#state.selectedOfferId,
+          )
+            ? this.#state.selectedOfferId
+            : undefined,
+        };
+        return { kind: "screen", screen: vastResultsScreen(this.#state) };
+      }
+      case "back-search":
+        return { kind: "screen", screen: vastSearchScreen(this.#state) };
+      case "continue":
+        return {
+          kind: "screen",
+          screen:
+            this.#state.selectedOfferId === undefined
+              ? vastResultsScreen(this.#state)
+              : vastRentalScreen(this.#state),
+        };
+      case "back-results":
+        return { kind: "screen", screen: vastResultsScreen(this.#state) };
+      case "review": {
+        const validation = validateVastRental(this.#state);
+        if (validation !== undefined) {
+          return {
+            kind: "screen",
+            screen: vastRentalScreen(this.#state, validation),
+          };
+        }
+        return { kind: "screen", screen: vastReviewScreen(this.#state) };
+      }
+      case "back-rental":
+        return { kind: "screen", screen: vastRentalScreen(this.#state) };
+      case "rent":
+        return { kind: "submit", args: vastRentArgs(this.#state) };
+      default:
+        throw new Error(`Unknown Vast.ai marketplace flow action: ${event.actionId}`);
+    }
+  }
 }
 
 const VAST_RUNTYPES: readonly VastRuntype[] = [
@@ -227,6 +353,359 @@ const VAST_RUNTYPES: readonly VastRuntype[] = [
   "jupyter_proxy",
   "jupyter_direct",
 ];
+
+interface VastFlowValidation {
+  readonly fieldId: string;
+  readonly message: string;
+}
+
+function vastSearchScreen(
+  state: VastRentFlowState,
+  invalid?: VastFlowValidation,
+): ProviderInteractiveScreen {
+  const fields: ProviderInteractiveField[] = [
+    {
+      kind: "text",
+      id: "gpu",
+      label: "GPU model/name",
+      description: "Optional exact Vast.ai GPU name filter",
+      required: false,
+      ...(state.search.gpuName === undefined ? {} : { value: state.search.gpuName }),
+      ...fieldValidation("gpu", invalid),
+    },
+    {
+      kind: "integer",
+      id: "min-gpus",
+      label: "Minimum GPU count",
+      required: false,
+      ...(state.search.minGpuCount === undefined
+        ? {}
+        : { value: state.search.minGpuCount }),
+      ...fieldValidation("min-gpus", invalid),
+    },
+    {
+      kind: "decimal",
+      id: "max-hourly",
+      label: "Maximum hourly USD",
+      required: false,
+      ...(state.search.maxHourlyPrice === undefined
+        ? {}
+        : { value: state.search.maxHourlyPrice }),
+      ...fieldValidation("max-hourly", invalid),
+    },
+    {
+      kind: "decimal",
+      id: "min-reliability",
+      label: "Minimum reliability",
+      description: "Ratio from 0 to 1",
+      required: false,
+      ...(state.search.minReliability === undefined
+        ? {}
+        : { value: state.search.minReliability }),
+      ...fieldValidation("min-reliability", invalid),
+    },
+    {
+      kind: "boolean",
+      id: "verified",
+      label: "Verified hosts only",
+      required: false,
+      value: state.search.verifiedOnly ?? false,
+    },
+    {
+      kind: "integer",
+      id: "limit",
+      label: "Result limit",
+      required: false,
+      value: state.search.limit ?? 10,
+      ...fieldValidation("limit", invalid),
+    },
+  ];
+  return {
+    kind: "form",
+    id: "vast-marketplace-search",
+    title: "Vast.ai marketplace search",
+    description: "Filter currently rentable offers before choosing one to rent.",
+    fields,
+    actions: [{ id: "search", label: "Search offers", kind: "primary" }],
+  };
+}
+
+function vastResultsScreen(state: VastRentFlowState): ProviderInteractiveScreen {
+  return {
+    kind: "table",
+    id: "vast-marketplace-results",
+    title: "Vast.ai marketplace offers",
+    description:
+      state.offers.length === 0
+        ? "No rentable offers matched the current filters. Refresh or go back to change filters."
+        : "Select one offer, then continue to rental options.",
+    columns: [
+      { id: "offer", label: "Offer" },
+      { id: "gpu", label: "GPU" },
+      { id: "count", label: "Count" },
+      { id: "memory", label: "VRAM" },
+      { id: "hourly", label: "USD/hour" },
+      { id: "reliability", label: "Reliability" },
+      { id: "location", label: "Location" },
+    ],
+    rows: state.offers.map((offer) => ({
+      id: offer.id,
+      cells: {
+        offer: offer.id,
+        gpu: offer.gpuName,
+        count: offer.gpuCount,
+        memory: `${(offer.gpuRamMb / 1024).toFixed(1)} GiB`,
+        hourly: offer.hourlyPriceUsd,
+        reliability: `${(offer.reliability * 100).toFixed(1)}%`,
+        location: offer.location ?? "unknown",
+      },
+    })),
+    selection: "single",
+    selectedRowIds:
+      state.selectedOfferId === undefined ? [] : [state.selectedOfferId],
+    actions: [
+      { id: "back-search", label: "Change filters", kind: "back" },
+      { id: "refresh", label: "Refresh offers", kind: "refresh" },
+      {
+        id: "continue",
+        label: "Use selected offer",
+        kind: "primary",
+        disabled: state.selectedOfferId === undefined,
+      },
+    ],
+  };
+}
+
+function vastRentalScreen(
+  state: VastRentFlowState,
+  invalid?: VastFlowValidation,
+): ProviderInteractiveScreen {
+  return {
+    kind: "form",
+    id: "vast-rental-options",
+    title: "Vast.ai rental options",
+    description: `Selected offer: ${state.selectedOfferId ?? "none"}`,
+    fields: [
+      {
+        kind: "text",
+        id: "image",
+        label: "Container image",
+        required: true,
+        value: state.image,
+        ...fieldValidation("image", invalid),
+      },
+      {
+        kind: "decimal",
+        id: "disk",
+        label: "Disk size (GB)",
+        required: false,
+        ...(state.diskGb === undefined ? {} : { value: state.diskGb }),
+        ...fieldValidation("disk", invalid),
+      },
+      {
+        kind: "single-choice",
+        id: "runtype",
+        label: "Runtype",
+        required: false,
+        choices: VAST_RUNTYPES.map((runtype) => ({
+          id: runtype,
+          label: runtype,
+        })),
+        ...(state.runtype === undefined ? {} : { value: state.runtype }),
+      },
+      {
+        kind: "text",
+        id: "label",
+        label: "Instance label",
+        required: false,
+        ...(state.label === undefined ? {} : { value: state.label }),
+      },
+    ],
+    actions: [
+      { id: "back-results", label: "Back to offers", kind: "back" },
+      { id: "review", label: "Review rental", kind: "primary" },
+    ],
+  };
+}
+
+function vastReviewScreen(state: VastRentFlowState): ProviderInteractiveScreen {
+  const offer = state.offers.find((candidate) => candidate.id === state.selectedOfferId);
+  return {
+    kind: "review",
+    id: "vast-rental-review",
+    title: "Review Vast.ai rental",
+    description: "EasyServer will ask for billable confirmation before provider dispatch.",
+    items: [
+      { label: "Offer", value: state.selectedOfferId ?? "none" },
+      ...(offer === undefined
+        ? []
+        : [
+            { label: "GPU", value: `${offer.gpuCount} × ${offer.gpuName}` },
+            { label: "Hourly price", value: `$${offer.hourlyPriceUsd}/hour` },
+          ]),
+      { label: "Image", value: state.image },
+      { label: "Disk", value: state.diskGb === undefined ? "provider default" : `${state.diskGb} GB` },
+      { label: "Runtype", value: state.runtype ?? "provider default" },
+      { label: "Label", value: state.label ?? "none" },
+    ],
+    actions: [
+      { id: "back-rental", label: "Back", kind: "back" },
+      { id: "rent", label: "Rent selected offer", kind: "submit" },
+    ],
+  };
+}
+
+function updateVastFlowField(
+  state: VastRentFlowState,
+  fieldId: string,
+  value: ProviderInteractiveFieldValue | undefined,
+): VastRentFlowState {
+  switch (fieldId) {
+    case "gpu":
+      return {
+        ...state,
+        search: {
+          ...state.search,
+          gpuName: optionalText(value),
+        },
+      };
+    case "min-gpus":
+      return {
+        ...state,
+        search: { ...state.search, minGpuCount: optionalNumber(value) },
+      };
+    case "max-hourly":
+      return {
+        ...state,
+        search: { ...state.search, maxHourlyPrice: optionalNumber(value) },
+      };
+    case "min-reliability":
+      return {
+        ...state,
+        search: { ...state.search, minReliability: optionalNumber(value) },
+      };
+    case "verified":
+      return {
+        ...state,
+        search: { ...state.search, verifiedOnly: value === true },
+      };
+    case "limit":
+      return {
+        ...state,
+        search: { ...state.search, limit: optionalNumber(value) },
+      };
+    case "image":
+      return { ...state, image: typeof value === "string" ? value : "" };
+    case "disk":
+      return { ...state, diskGb: optionalNumber(value) };
+    case "runtype":
+      return {
+        ...state,
+        runtype:
+          typeof value === "string" && isVastRuntype(value)
+            ? value
+            : undefined,
+      };
+    case "label":
+      return { ...state, label: optionalText(value) };
+    default:
+      throw new Error(`Unknown Vast.ai marketplace flow field: ${fieldId}`);
+  }
+}
+
+function validateVastSearch(search: VastOfferSearch): VastFlowValidation | undefined {
+  if (
+    search.minGpuCount !== undefined &&
+    (!Number.isInteger(search.minGpuCount) || search.minGpuCount <= 0)
+  ) {
+    return { fieldId: "min-gpus", message: "Must be a positive integer" };
+  }
+  if (search.maxHourlyPrice !== undefined && search.maxHourlyPrice <= 0) {
+    return { fieldId: "max-hourly", message: "Must be greater than zero" };
+  }
+  if (
+    search.minReliability !== undefined &&
+    (search.minReliability < 0 || search.minReliability > 1)
+  ) {
+    return { fieldId: "min-reliability", message: "Must be between 0 and 1" };
+  }
+  if (
+    search.limit !== undefined &&
+    (!Number.isInteger(search.limit) || search.limit <= 0)
+  ) {
+    return { fieldId: "limit", message: "Must be a positive integer" };
+  }
+  return undefined;
+}
+
+function validateVastRental(state: VastRentFlowState): VastFlowValidation | undefined {
+  if (state.selectedOfferId === undefined) {
+    return { fieldId: "image", message: "Select an offer first" };
+  }
+  if (state.image.trim().length === 0) {
+    return { fieldId: "image", message: "Container image is required" };
+  }
+  if (state.diskGb !== undefined && state.diskGb <= 0) {
+    return { fieldId: "disk", message: "Disk size must be greater than zero" };
+  }
+  return undefined;
+}
+
+function vastRentArgs(state: VastRentFlowState): readonly string[] {
+  const validation = validateVastRental(state);
+  if (validation !== undefined || state.selectedOfferId === undefined) {
+    throw new Error(validation?.message ?? "Vast.ai rental is incomplete");
+  }
+  const args: string[] = [state.selectedOfferId, "--image", state.image.trim()];
+  if (state.diskGb !== undefined) {
+    args.push("--disk", String(state.diskGb));
+  }
+  if (state.runtype !== undefined) {
+    args.push("--runtype", state.runtype);
+  }
+  if (state.label !== undefined) {
+    args.push("--label", state.label);
+  }
+  parseRentalArgs(args);
+  return args;
+}
+
+function fieldValidation(
+  fieldId: string,
+  invalid?: VastFlowValidation,
+): { readonly validation?: { readonly state: "invalid"; readonly message: string } } {
+  return invalid?.fieldId === fieldId
+    ? { validation: { state: "invalid", message: invalid.message } }
+    : {};
+}
+
+function optionalText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function isVastRentalField(fieldId: string): boolean {
+  return fieldId === "image" || fieldId === "disk" || fieldId === "runtype" || fieldId === "label";
+}
+
+function providerReadContext(
+  context: ProviderInteractiveContext,
+): ProviderOperationContext {
+  return {
+    signal: context.signal,
+    resolveCredential: context.resolveCredential,
+    markMutationDispatched() {
+      throw new Error("Vast.ai interactive preparation cannot dispatch mutations");
+    },
+  };
+}
 
 function parseRentalArgs(args: readonly string[]): VastRentalRequest {
   const [offerId, ...options] = args;
