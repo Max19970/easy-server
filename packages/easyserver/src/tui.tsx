@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Text,
@@ -11,13 +11,28 @@ import {
 import { TuiOperationDrawer } from "./tui-operation-drawer.js";
 import {
   isTuiOperationPresentation,
+  presentOperationError,
+  presentWorkingOperation,
   type TuiOperationActionKind,
   type TuiOperationPresentation,
 } from "./tui-operation-model.js";
+import {
+  loadDefaultTuiReadSnapshot,
+  type TuiInstanceReadItem,
+  type TuiReadSnapshot,
+} from "./tui-read-model.js";
+import type { OperationContext } from "@easyai101/easyserver-plugin-sdk";
 import { EASYSERVER_VERSION } from "./version.js";
 
+type TuiRouteId =
+  | "overview"
+  | "instances"
+  | "providers"
+  | "sessions"
+  | "diagnostics";
+
 interface TuiRoute {
-  readonly id: string;
+  readonly id: TuiRouteId;
   readonly label: string;
   readonly description: string;
   readonly body: string;
@@ -56,12 +71,17 @@ const routes: readonly TuiRoute[] = [
   },
 ];
 
+export type TuiReadStatus = "idle" | "loading" | "ready" | "stale" | "failed";
+
 export interface TuiShellProps {
   readonly width?: number;
   readonly colorEnabled?: boolean;
   readonly screenReader?: boolean;
   readonly operation?: TuiOperationPresentation;
   readonly onOperationAction?: (action: TuiOperationActionKind) => void;
+  readonly readSnapshot?: TuiReadSnapshot;
+  readonly readStatus?: TuiReadStatus;
+  readonly onRefresh?: (routeId: TuiRouteId) => void;
 }
 
 export function TuiShell({
@@ -70,6 +90,9 @@ export function TuiShell({
   screenReader = false,
   operation,
   onOperationAction,
+  readSnapshot,
+  readStatus = "idle",
+  onRefresh,
 }: TuiShellProps): React.ReactElement {
   if (operation !== undefined && !isTuiOperationPresentation(operation)) {
     throw new TypeError("TUI operation presentation must come from the presentation model");
@@ -83,8 +106,29 @@ export function TuiShell({
   const [activeIndex, setActiveIndex] = useState(0);
   const [helpOpen, setHelpOpen] = useState(false);
   const [status, setStatus] = useState("Ready.");
+  const [selectedInstanceId, setSelectedInstanceId] = useState<string | undefined>(
+    () => firstInstanceId(readSnapshot),
+  );
   const activeRoute = routes[activeIndex] ?? routes[0];
   const operationInteractionOpen = operation?.interaction !== undefined;
+  const inventoryItems =
+    readSnapshot?.instances.status === "ready"
+      ? readSnapshot.instances.items
+      : [];
+  const effectiveSelectedInstanceId =
+    selectedInstanceId !== undefined &&
+    inventoryItems.some((instance) => instance.id === selectedInstanceId)
+      ? selectedInstanceId
+      : inventoryItems[0]?.id;
+
+  useEffect(() => {
+    setSelectedInstanceId((current) =>
+      current !== undefined &&
+      inventoryItems.some((instance) => instance.id === current)
+        ? current
+        : inventoryItems[0]?.id,
+    );
+  }, [readSnapshot]);
 
   const navigation = useMemo(
     () =>
@@ -133,8 +177,32 @@ export function TuiShell({
       return;
     }
 
+    if (
+      activeRoute.id === "instances" &&
+      inventoryItems.length > 0 &&
+      (input === "j" || input === "k")
+    ) {
+      const currentIndex = Math.max(
+        0,
+        inventoryItems.findIndex(
+          (instance) => instance.id === effectiveSelectedInstanceId,
+        ),
+      );
+      const nextIndex =
+        input === "j"
+          ? (currentIndex + 1) % inventoryItems.length
+          : (currentIndex - 1 + inventoryItems.length) % inventoryItems.length;
+      const next = inventoryItems[nextIndex];
+      if (next !== undefined) {
+        setSelectedInstanceId(next.id);
+        setStatus(`Selected ${next.id}.`);
+      }
+      return;
+    }
+
     if (input === "r") {
       setStatus(`Refresh requested for ${activeRoute.label}.`);
+      onRefresh?.(activeRoute.id);
       return;
     }
 
@@ -209,8 +277,20 @@ export function TuiShell({
             <Box flexDirection="column">
               <Text bold>{activeRoute.label}</Text>
               <Text color={muted}>{activeRoute.description}</Text>
-              <Box marginTop={1}>
-                <Text wrap="wrap">{activeRoute.body}</Text>
+              <Box marginTop={1} flexDirection="column">
+                {readSnapshot !== undefined && readStatus === "stale" ? (
+                  <Box flexDirection="column" marginBottom={1}>
+                    <Text bold>Last refresh failed.</Text>
+                    <Text>Showing the previous snapshot; press r to try again.</Text>
+                  </Box>
+                ) : null}
+                <RouteSurface
+                  route={activeRoute}
+                  snapshot={readSnapshot}
+                  readStatus={readStatus}
+                  narrow={narrow}
+                  selectedInstanceId={effectiveSelectedInstanceId}
+                />
               </Box>
             </Box>
           )}
@@ -235,16 +315,309 @@ export function TuiShell({
           </Text>
         ) : screenReader ? (
           <Text>
-            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; Q quits.
+            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; J and K select instances; Q quits.
           </Text>
         ) : (
           <Text color={muted} wrap="wrap">
-            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh · q quit
+            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? " · j/k select" : ""} · q quit
           </Text>
         )}
       </Box>
     </Box>
   );
+}
+
+interface RouteSurfaceProps {
+  readonly route: TuiRoute;
+  readonly snapshot?: TuiReadSnapshot;
+  readonly readStatus: TuiReadStatus;
+  readonly narrow: boolean;
+  readonly selectedInstanceId?: string;
+}
+
+function RouteSurface({
+  route,
+  snapshot,
+  readStatus,
+  narrow,
+  selectedInstanceId,
+}: RouteSurfaceProps): React.ReactElement {
+  if (
+    route.id !== "overview" &&
+    route.id !== "instances" &&
+    route.id !== "providers"
+  ) {
+    return <Text wrap="wrap">{route.body}</Text>;
+  }
+
+  if (snapshot === undefined) {
+    if (readStatus === "loading") {
+      return <Text>Loading EasyServer status…</Text>;
+    }
+    if (readStatus === "failed") {
+      return <Text>Status snapshot unavailable. Use Retry in the operation drawer.</Text>;
+    }
+    return <Text wrap="wrap">{route.body}</Text>;
+  }
+
+  if (route.id === "overview") {
+    return <OverviewSurface snapshot={snapshot} />;
+  }
+  if (route.id === "instances") {
+    return (
+      <InstancesSurface
+        snapshot={snapshot}
+        narrow={narrow}
+        selectedInstanceId={selectedInstanceId}
+      />
+    );
+  }
+  return <ProvidersSurface snapshot={snapshot} />;
+}
+
+function OverviewSurface({ snapshot }: { readonly snapshot: TuiReadSnapshot }): React.ReactElement {
+  const providers = snapshot.providers;
+  const instances = snapshot.instances;
+  const providerItems = providers.status === "ready" ? providers.items : [];
+  const instanceItems = instances.status === "ready" ? instances.items : [];
+  const failedProviderOutcomes =
+    instances.status === "ready"
+      ? instances.providerOutcomes.filter((provider) => provider.status === "failed")
+      : [];
+  const readyProviders = providerItems.filter((provider) => provider.readiness === "ready").length;
+  const missingCredentials = providerItems.filter(
+    (provider) => provider.readiness === "credentials-missing",
+  ).length;
+  const failedPlugins = providerItems.filter((provider) => provider.state === "failed").length;
+  const disabledPlugins = providerItems.filter((provider) => provider.state === "disabled").length;
+  const runningInstances = instanceItems.filter((instance) => instance.state === "running").length;
+  const staleInstances = instanceItems.filter((instance) => instance.freshness === "stale").length;
+  const unobservedInstances = instanceItems.filter(
+    (instance) => instance.freshness === "unobserved",
+  ).length;
+
+  return (
+    <Box flexDirection="column">
+      <Text bold>Readiness</Text>
+      {providers.status === "failed" ? (
+        <Text>Providers unavailable: {providers.message}</Text>
+      ) : providerItems.length === 0 ? (
+        <Text>No provider plugins configured. Open Providers for the next setup step.</Text>
+      ) : (
+        <Text>
+          Providers: {providerItems.length} configured · {readyProviders} ready · {missingCredentials} credentials missing · {disabledPlugins} disabled · {failedPlugins} failed
+        </Text>
+      )}
+
+      <Box marginTop={1} flexDirection="column">
+        <Text bold>Instances</Text>
+        {instances.status === "failed" ? (
+          <Text>Instance inventory unavailable: {instances.message}</Text>
+        ) : instanceItems.length === 0 ? (
+          <Text>{instanceEmptyGuidance(snapshot)}</Text>
+        ) : (
+          <Text>
+            Instances: {instanceItems.length} total · {runningInstances} running · {staleInstances} stale · {unobservedInstances} unobserved
+          </Text>
+        )}
+      </Box>
+
+      <Box marginTop={1} flexDirection="column">
+        <Text bold>Daemon and connections</Text>
+        <Text>Daemon: {snapshot.daemon.status}</Text>
+        {snapshot.daemon.status !== "running" ? null : (
+          <>
+            <Text>
+              Live sessions: {snapshot.daemon.sessions.status === "ready" ? snapshot.daemon.sessions.live : "unavailable"}
+            </Text>
+            <Text>
+              Live Endpoint intents: {snapshot.daemon.endpointIntents.status === "ready" ? snapshot.daemon.endpointIntents.live : "unavailable"}
+            </Text>
+          </>
+        )}
+      </Box>
+
+      {failedProviderOutcomes.length === 0 ? null : (
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>Provider issues</Text>
+          {failedProviderOutcomes.map((provider) => (
+            <Text key={provider.providerId}>
+              {provider.providerId} · {provider.error.code} · {provider.error.message}
+            </Text>
+          ))}
+          <Text>Healthy provider inventory remains available above.</Text>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+interface InstancesSurfaceProps {
+  readonly snapshot: TuiReadSnapshot;
+  readonly narrow: boolean;
+  readonly selectedInstanceId?: string;
+}
+
+function InstancesSurface({
+  snapshot,
+  narrow,
+  selectedInstanceId,
+}: InstancesSurfaceProps): React.ReactElement {
+  if (snapshot.instances.status === "failed") {
+    return (
+      <Box flexDirection="column">
+        <Text>Instance inventory unavailable: {snapshot.instances.message}</Text>
+        <Text>Press r to refresh. Other TUI sections remain available.</Text>
+      </Box>
+    );
+  }
+
+  const items = snapshot.instances.items;
+  const failedProviderOutcomes = snapshot.instances.providerOutcomes.filter(
+    (provider) => provider.status === "failed",
+  );
+  if (items.length === 0) {
+    return (
+      <Box flexDirection="column">
+        {snapshot.instances.complete ? null : (
+          <PartialInventoryNotice failedProviders={failedProviderOutcomes} />
+        )}
+        <Text>{instanceEmptyGuidance(snapshot)}</Text>
+      </Box>
+    );
+  }
+
+  const selected =
+    items.find((instance) => instance.id === selectedInstanceId) ?? items[0]!;
+
+  return (
+    <Box flexDirection="column">
+      {snapshot.instances.complete ? null : (
+        <PartialInventoryNotice failedProviders={failedProviderOutcomes} />
+      )}
+      <Text>j/k select instance · r refresh</Text>
+      <Box marginTop={1} flexDirection="column">
+        {items.map((instance) => (
+          <Text key={instance.id} bold={instance.id === selected.id}>
+            {instance.id === selected.id ? "> " : "  "}
+            {narrow
+              ? `${instance.name ?? instance.id} · ${instance.state ?? "unobserved"}`
+              : `${instance.name ?? instance.id} · state=${instance.state ?? "unobserved"} · provider=${instance.providerId} · management=${instance.management} · actions=${formatActions(instance.availableActions)}`}
+          </Text>
+        ))}
+      </Box>
+      <Box marginTop={1} flexDirection="column">
+        <Text bold>Instance detail</Text>
+        <Text>EasyServer ID: {selected.id}</Text>
+        <Text>Provider: {selected.providerId}</Text>
+        <Text>Provider ID: {selected.providerExternalId}</Text>
+        <Text>Normalized state: {selected.state ?? "unobserved"}</Text>
+        {selected.rawState === undefined ? null : (
+          <Text>Provider state: {String(selected.rawState)}</Text>
+        )}
+        <Text>Freshness: {selected.freshness}</Text>
+        <Text>Management: {selected.management}</Text>
+        <Text>Available actions: {formatActions(selected.availableActions)}</Text>
+      </Box>
+    </Box>
+  );
+}
+
+function ProvidersSurface({ snapshot }: { readonly snapshot: TuiReadSnapshot }): React.ReactElement {
+  if (snapshot.providers.status === "failed") {
+    return (
+      <Box flexDirection="column">
+        <Text>Provider configuration unavailable: {snapshot.providers.message}</Text>
+        <Text>Press r to retry. Instance inventory may still be available.</Text>
+      </Box>
+    );
+  }
+
+  if (snapshot.providers.items.length === 0) {
+    return (
+      <Box flexDirection="column">
+        <Text>No provider plugins configured.</Text>
+        <Text>For now, add one with: easyserver plugins add &lt;module&gt;</Text>
+      </Box>
+    );
+  }
+
+  return (
+    <Box flexDirection="column">
+      {snapshot.providers.items.map((provider) => (
+        <Box key={`${provider.source}:${provider.pluginId ?? "unloaded"}`} flexDirection="column" marginBottom={1}>
+          <Text bold>
+            {provider.displayName ?? provider.pluginId ?? provider.providerId ?? provider.source}
+          </Text>
+          <Text>
+            {provider.state} · {provider.failure ?? provider.readiness}
+          </Text>
+          <Text>Source: {provider.source}</Text>
+          {provider.providerId === undefined ? null : (
+            <Text>Provider ID: {provider.providerId}</Text>
+          )}
+          {provider.version === undefined ? null : <Text>Version: {provider.version}</Text>}
+          <Text>
+            Credentials: {provider.credentials.configured}/{provider.credentials.declared} configured
+            {provider.credentials.missingRequired === 0
+              ? ""
+              : ` · ${provider.credentials.missingRequired} required missing`}
+          </Text>
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+function PartialInventoryNotice({
+  failedProviders,
+}: {
+  readonly failedProviders: readonly Extract<
+    TuiReadSnapshot["instances"],
+    { readonly status: "ready" }
+  >["providerOutcomes"][number][];
+}): React.ReactElement {
+  return (
+    <Box flexDirection="column" marginBottom={1}>
+      <Text bold>Inventory is partial.</Text>
+      <Text>Available provider results remain usable.</Text>
+      {failedProviders.map((provider) =>
+        provider.status === "failed" ? (
+          <Text key={provider.providerId}>
+            {provider.providerId} · {provider.error.code} · {provider.error.message}
+          </Text>
+        ) : null,
+      )}
+      <Text>Review the provider issue and press r to refresh.</Text>
+    </Box>
+  );
+}
+
+function instanceEmptyGuidance(snapshot: TuiReadSnapshot): string {
+  if (snapshot.providers.status === "failed") {
+    return "No compute instances are visible. Provider configuration could not be inspected; resolve provider setup and press r to refresh.";
+  }
+  if (snapshot.providers.items.length === 0) {
+    return "No compute instances yet. Configure a provider first, then acquisition can create one.";
+  }
+  if (
+    snapshot.instances.status === "ready" &&
+    !snapshot.instances.complete &&
+    snapshot.instances.providerOutcomes.some((provider) => provider.status === "failed")
+  ) {
+    return "No compute instances are currently visible because provider inventory is incomplete. Review the provider issue above and press r to refresh.";
+  }
+  return "No compute instances yet. Providers are configured; use New instance when acquisition is enabled.";
+}
+
+function formatActions(actions: readonly string[]): string {
+  return actions.length === 0 ? "none" : actions.join(", ");
+}
+
+function firstInstanceId(snapshot: TuiReadSnapshot | undefined): string | undefined {
+  return snapshot?.instances.status === "ready"
+    ? snapshot.instances.items[0]?.id
+    : undefined;
 }
 
 function operationActionForInput(
@@ -303,8 +676,124 @@ function HelpPanel({ colorEnabled }: { readonly colorEnabled: boolean }): React.
       <Text>Esc — close help or return to Overview</Text>
       <Text>? — toggle this help</Text>
       <Text>r — refresh current section</Text>
+      <Text>j / k — select next / previous instance on Instances</Text>
       <Text>q / Ctrl+C — quit EasyServer</Text>
     </Box>
+  );
+}
+
+export type TuiReadLoader = (
+  context: OperationContext,
+) => Promise<TuiReadSnapshot>;
+
+export interface TuiAppProps {
+  readonly colorEnabled?: boolean;
+  readonly screenReader?: boolean;
+  readonly readLoader?: TuiReadLoader;
+}
+
+export function TuiApp({
+  colorEnabled = true,
+  screenReader = false,
+  readLoader,
+}: TuiAppProps): React.ReactElement {
+  const [snapshot, setSnapshot] = useState<TuiReadSnapshot | undefined>();
+  const [operation, setOperation] = useState<TuiOperationPresentation | undefined>();
+  const [snapshotStale, setSnapshotStale] = useState(false);
+  const controllerRef = useRef<AbortController | undefined>(undefined);
+
+  const refresh = useCallback(async () => {
+    if (readLoader === undefined) {
+      return;
+    }
+
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setOperation(
+      presentWorkingOperation({
+        title: "Refresh EasyServer status",
+        detail: "Reading provider, instance and daemon state.",
+        activity: "loading",
+        cancellable: true,
+      }),
+    );
+
+    try {
+      const next = await readLoader({ signal: controller.signal });
+      if (controllerRef.current !== controller || controller.signal.aborted) {
+        return;
+      }
+      setSnapshot(next);
+      setSnapshotStale(false);
+      setOperation(undefined);
+    } catch (error) {
+      if (controllerRef.current !== controller || controller.signal.aborted) {
+        return;
+      }
+      setSnapshotStale(true);
+      setOperation(
+        presentOperationError({
+          title: "Refresh EasyServer status",
+          operation: "read",
+          error,
+        }),
+      );
+    }
+  }, [readLoader]);
+
+  useEffect(() => {
+    if (readLoader !== undefined) {
+      void refresh();
+    }
+    return () => {
+      controllerRef.current?.abort();
+    };
+  }, [readLoader, refresh]);
+
+  const handleOperationAction = useCallback(
+    (action: TuiOperationActionKind) => {
+      if (action === "cancel") {
+        const controller = controllerRef.current;
+        controllerRef.current = undefined;
+        controller?.abort();
+        setOperation(undefined);
+        return;
+      }
+      if (action === "retry" || action === "refresh") {
+        void refresh();
+        return;
+      }
+      if (action === "dismiss") {
+        setOperation(undefined);
+      }
+    },
+    [refresh],
+  );
+
+  const readStatus: TuiReadStatus =
+    snapshot !== undefined
+      ? snapshotStale
+        ? "stale"
+        : "ready"
+      : operation?.phase === "working"
+        ? "loading"
+        : operation === undefined
+          ? "idle"
+          : "failed";
+
+  return (
+    <TuiShell
+      colorEnabled={colorEnabled}
+      screenReader={screenReader}
+      readSnapshot={snapshot}
+      readStatus={readStatus}
+      operation={operation}
+      onOperationAction={handleOperationAction}
+      onRefresh={() => {
+        void refresh();
+      }}
+    />
   );
 }
 
@@ -313,6 +802,7 @@ export interface TuiRuntimeOptions {
   readonly stdout?: NodeJS.WriteStream;
   readonly stderr?: NodeJS.WriteStream;
   readonly env?: NodeJS.ProcessEnv;
+  readonly readLoader?: TuiReadLoader;
 }
 
 export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
@@ -320,7 +810,11 @@ export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
   const screenReader = env.INK_SCREEN_READER === "true";
   const colorEnabled = env.NO_COLOR === undefined;
   return render(
-    <TuiShell colorEnabled={colorEnabled} screenReader={screenReader} />,
+    <TuiApp
+      colorEnabled={colorEnabled}
+      screenReader={screenReader}
+      readLoader={options.readLoader}
+    />,
     {
       stdin: options.stdin ?? process.stdin,
       stdout: options.stdout ?? process.stdout,
@@ -335,6 +829,6 @@ export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
 }
 
 export async function runTui(): Promise<void> {
-  const app = renderTui();
+  const app = renderTui({ readLoader: loadDefaultTuiReadSnapshot });
   await app.waitUntilExit();
 }
