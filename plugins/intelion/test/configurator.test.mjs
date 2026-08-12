@@ -95,6 +95,239 @@ test("server configurator rejects invalid provider-specific creation values", ()
   );
 });
 
+test("server configurator interactive flow loads catalogs, validates and submits through the existing create command", async () => {
+  const calls = [];
+  const plugin = createIntelionProviderPlugin({
+    baseUrl: "https://fixture.intelion.test",
+    async fetch(input, init = {}) {
+      const url = new URL(input);
+      calls.push({ url, init });
+      if (url.pathname === "/api/v2/flavors/") {
+        return new Response(
+          JSON.stringify({
+            count: 2,
+            next: null,
+            previous: null,
+            results: [
+              {
+                id: 12,
+                name: "1x RTX 4090 / 16 vCPU / 64 GB",
+                cpu_count: 16,
+                ram_count: 64,
+                gpu_count: 1,
+                flavor_monthly_price_rub_cents: 7600000,
+                flavor_hourly_price_rub_cents: 12900,
+                max_available: 3,
+              },
+              {
+                id: 13,
+                name: "2x RTX 4090 / 32 vCPU / 128 GB",
+                cpu_count: 32,
+                ram_count: 128,
+                gpu_count: 2,
+                flavor_monthly_price_rub_cents: 14500000,
+                flavor_hourly_price_rub_cents: 24500,
+                max_available: 1,
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.pathname === "/api/v2/os-images/") {
+        const flavorId = Number(url.searchParams.get("flavor_id"));
+        return new Response(
+          JSON.stringify({
+            count: 1,
+            next: null,
+            previous: null,
+            results: [
+              {
+                id: flavorId === 13 ? 8 : 7,
+                name: flavorId === 13 ? "Ubuntu 24.04 GPU" : "Ubuntu 24.04 LTS",
+                type: "linux",
+                description: "CUDA-ready Ubuntu",
+                ssh_enabled: true,
+                rdp_enabled: false,
+                compatible_flavor_ids: [flavorId],
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.pathname === "/api/v2/ssh-keys/") {
+        return new Response(
+          JSON.stringify([
+            {
+              id: 246,
+              name: "easyserver@fixture",
+              public_key: "ssh-ed25519 AAAAC3fixture",
+              key_type: "ssh-ed25519",
+              fingerprint_sha256: "SHA256:fixture",
+            },
+          ]),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.pathname === "/api/v2/cloud-servers/" && init.method === "POST") {
+        return new Response(
+          JSON.stringify({ id: 501, name: "tui-box", status: -2 }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      throw new Error(`Unexpected Intelion request: ${url}`);
+    },
+  });
+  const feature = plugin.features[0];
+  const flow = feature.interactive?.flows.find(
+    (candidate) => candidate.commandName === "create",
+  );
+  assert.ok(flow);
+  const operationContext = {
+    signal: new AbortController().signal,
+    async resolveCredential(name) {
+      assert.equal(name, INTELION_API_TOKEN_CREDENTIAL);
+      return "fixture-token";
+    },
+  };
+  const session = await flow.open(operationContext);
+
+  assert.equal(session.initialScreen.kind, "form");
+  const initialKinds = new Map(
+    session.initialScreen.fields.map((field) => [field.id, field.kind]),
+  );
+  assert.equal(initialKinds.get("flavor"), "single-choice");
+  assert.equal(initialKinds.get("os"), "single-choice");
+  assert.equal(initialKinds.get("ssh-keys"), "multiple-choice");
+  assert.equal(initialKinds.get("addons"), "integer");
+  assert.equal(
+    session.initialScreen.fields.find((field) => field.id === "addons")?.repeatable,
+    true,
+  );
+
+  const afterFlavor = await session.dispatch(
+    { kind: "field-change", fieldId: "flavor", value: "13" },
+    operationContext,
+  );
+  assert.equal(afterFlavor.kind, "screen");
+  assert.equal(afterFlavor.screen.kind, "form");
+  const osField = afterFlavor.screen.fields.find((field) => field.id === "os");
+  assert.equal(osField.kind, "single-choice");
+  assert.deepEqual(osField.choices.map(({ id }) => id), ["8"]);
+  assert.equal(
+    calls.filter(
+      ({ url }) =>
+        url.pathname === "/api/v2/os-images/" &&
+        url.searchParams.get("flavor_id") === "13",
+    ).length,
+    1,
+  );
+
+  const changes = [
+    ["name", "tui-box"],
+    ["disk", 64],
+    ["price-plan", 1],
+    ["promocode", 3],
+    ["queue", true],
+    ["addons", [9, 4]],
+    ["ssh-keys", ["246"]],
+  ];
+  for (const [fieldId, value] of changes) {
+    await session.dispatch(
+      { kind: "field-change", fieldId, value },
+      operationContext,
+    );
+  }
+  const review = await session.dispatch(
+    { kind: "action", actionId: "review" },
+    operationContext,
+  );
+  assert.equal(review.kind, "screen");
+  assert.equal(review.screen.kind, "review");
+  assert.match(
+    review.screen.items.map(({ label, value }) => `${label}:${value}`).join("|"),
+    /Name:tui-box.*Flavor:.*13.*OS:.*8.*Disk:64 GB/,
+  );
+
+  const submit = await session.dispatch(
+    { kind: "action", actionId: "create" },
+    operationContext,
+  );
+  assert.deepEqual(submit, {
+    kind: "submit",
+    args: [
+      "--name", "tui-box",
+      "--flavor", "13",
+      "--disk", "64",
+      "--os", "8",
+      "--price-plan", "1",
+      "--promocode", "3",
+      "--queue",
+      "--addon", "9",
+      "--addon", "4",
+      "--ssh-key", "246",
+    ],
+  });
+
+  const create = feature.cli?.commands.find((command) => command.name === "create");
+  assert.ok(create);
+  const commandResult = await create.run(submit.args, {
+    ...operationContext,
+    markMutationDispatched() {},
+    write() {},
+    writeError() {},
+  });
+  assert.deepEqual(commandResult, {
+    refreshProviderInventory: true,
+    affectedProviderExternalIds: ["501"],
+  });
+});
+
+test("server configurator interactive flow degrades missing choice catalogs to typed IDs", async () => {
+  const plugin = createIntelionProviderPlugin({
+    baseUrl: "https://fixture.intelion.test",
+    async fetch(input) {
+      const url = new URL(input);
+      if (url.pathname === "/api/v2/flavors/") {
+        return new Response(
+          JSON.stringify({ count: 0, next: null, previous: null, results: [] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.pathname === "/api/v2/ssh-keys/") {
+        return new Response("[]", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.pathname === "/api/v2/os-images/") {
+        return new Response(
+          JSON.stringify({ count: 0, next: null, previous: null, results: [] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      throw new Error(`Unexpected Intelion request: ${url}`);
+    },
+  });
+  const flow = plugin.features[0].interactive?.flows[0];
+  assert.ok(flow);
+  const session = await flow.open({
+    signal: new AbortController().signal,
+    async resolveCredential() {
+      return "fixture-token";
+    },
+  });
+  assert.equal(session.initialScreen.kind, "form");
+  const fields = new Map(
+    session.initialScreen.fields.map((field) => [field.id, field]),
+  );
+  assert.equal(fields.get("flavor")?.kind, "integer");
+  assert.equal(fields.get("os")?.kind, "integer");
+  assert.equal(fields.get("ssh-keys")?.kind, "integer");
+  assert.equal(fields.get("ssh-keys")?.repeatable, true);
+});
+
 test("server configurator lists Intelion OS images through the provider-scoped CLI seam", async () => {
   const calls = [];
   const plugin = createIntelionProviderPlugin({
