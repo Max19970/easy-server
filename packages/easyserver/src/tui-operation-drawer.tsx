@@ -59,6 +59,26 @@ export function TuiOperationDrawer({
         </Box>
       ) : null}
 
+      {operation.instanceResults === undefined || operation.instanceResults.length === 0 ? null : (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold>Instance results</Text>
+          {operation.instanceResults.map((item) => (
+            <Text key={item.instanceId} wrap="wrap">
+              {item.instanceId} · {item.status}
+              {item.error === undefined
+                ? ""
+                : ` · ${item.error.code} · ${item.error.message}`}
+              {item.observedState === undefined
+                ? ""
+                : ` · observed=${item.observedState}`}
+              {item.observationError === undefined
+                ? ""
+                : ` · observation=${item.observationError.code} · ${item.observationError.message}`}
+            </Text>
+          ))}
+        </Box>
+      )}
+
       {operation.providerOutput === undefined || operation.providerOutput.length === 0 ? null : (
         <Box flexDirection="column" marginTop={1}>
           <Text bold>Provider output</Text>

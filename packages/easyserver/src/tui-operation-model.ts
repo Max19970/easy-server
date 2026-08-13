@@ -10,6 +10,7 @@ import type { MutationConfirmationPrompt } from "./mutation-safety.js";
 import type { PersistentConnectionSession } from "./local-daemon.js";
 import type { ProviderCommandExecutionResult } from "./provider-command-runner.js";
 import type { ProviderTranscriptEvent } from "./provider-feature-operations.js";
+import type { TuiBulkInstanceMutationResult } from "./tui-instance-operations.js";
 import { escapeTerminalText } from "./terminal-text.js";
 
 export type TuiOperationPhase =
@@ -69,6 +70,14 @@ export interface TuiProviderTranscriptLine {
   readonly text: string;
 }
 
+export interface TuiOperationInstanceResult {
+  readonly instanceId: string;
+  readonly status: "requested" | "completed" | "failed" | "outcome-unknown";
+  readonly error?: { readonly code: string; readonly message: string };
+  readonly observedState?: string;
+  readonly observationError?: { readonly code: string; readonly message: string };
+}
+
 const presentationTypeBrand: unique symbol = Symbol("EasyServerTuiOperationPresentation");
 const trustedPresentations = new WeakSet<object>();
 const DEFAULT_PROVIDER_TRANSCRIPT_CHARACTERS = 4_096;
@@ -85,6 +94,7 @@ export interface TuiOperationPresentation {
   readonly detail?: string;
   readonly actions: readonly TuiOperationAction[];
   readonly interaction?: TuiOperationInteraction;
+  readonly instanceResults?: readonly TuiOperationInstanceResult[];
   readonly providerOutput?: readonly TuiProviderTranscriptLine[];
 }
 
@@ -98,6 +108,7 @@ export interface PresentWorkingOperationInput {
   readonly activity: TuiOperationActivity;
   readonly detail?: string;
   readonly cancellable?: boolean;
+  readonly instanceResults?: readonly TuiOperationInstanceResult[];
 }
 
 export interface PresentOperationErrorInput {
@@ -162,6 +173,9 @@ export function presentWorkingOperation(
     tone: "info",
     title: input.title,
     ...(input.detail === undefined ? {} : { detail: input.detail }),
+    ...(input.instanceResults === undefined
+      ? {}
+      : { instanceResults: input.instanceResults }),
     actions: input.cancellable
       ? [{ kind: "cancel", label: "Cancel" }]
       : [],
@@ -177,6 +191,59 @@ export function presentCompletedOperation(
     title: input.title,
     ...(input.detail === undefined ? {} : { detail: input.detail }),
     actions: [DISMISS_ACTION],
+  });
+}
+
+export function presentBulkInstanceResult(
+  title: string,
+  result: TuiBulkInstanceMutationResult,
+): TuiOperationPresentation {
+  const observationFailures = result.results.filter(
+    (item) => item.status === "completed" && item.observationError !== undefined,
+  ).length;
+  const hasOutcomeUnknown = result.summary.outcomeUnknown > 0;
+  const hasFailures = result.summary.failed > 0;
+  const phase: TuiOperationPhase = hasOutcomeUnknown
+    ? "outcome-unknown"
+    : hasFailures
+      ? "failed"
+      : "completed";
+  const tone: TuiOperationTone = hasOutcomeUnknown || hasFailures || observationFailures > 0
+    ? result.summary.completed > 0
+      ? "warning"
+      : "danger"
+    : "success";
+  const suffix = hasOutcomeUnknown
+    ? "completed with uncertain outcomes"
+    : hasFailures
+      ? "completed with failures"
+      : observationFailures > 0
+        ? "completed; observation incomplete"
+        : "completed";
+  const actions = hasOutcomeUnknown
+    ? [OBSERVE_ACTION, REFRESH_ACTION, DISMISS_ACTION]
+    : [DISMISS_ACTION];
+
+  return createPresentation({
+    phase,
+    tone,
+    title: `${title} ${suffix}`,
+    detail: `requested=${result.summary.requested} completed=${result.summary.completed} failed=${result.summary.failed} outcome-unknown=${result.summary.outcomeUnknown}${observationFailures === 0 ? "" : ` observation-failed=${observationFailures}`}`,
+    instanceResults: result.results.map((item) => ({
+      instanceId: item.instanceId,
+      status: item.status,
+      ...(item.status === "completed"
+        ? {
+            ...(item.observedState === undefined
+              ? {}
+              : { observedState: item.observedState }),
+            ...(item.observationError === undefined
+              ? {}
+              : { observationError: item.observationError }),
+          }
+        : { error: item.error }),
+    })),
+    actions,
   });
 }
 
@@ -349,6 +416,9 @@ export function appendOperationProviderTranscript(
     ...(operation.interaction === undefined
       ? {}
       : { interaction: operation.interaction }),
+    ...(operation.instanceResults === undefined
+      ? {}
+      : { instanceResults: operation.instanceResults }),
     providerOutput: appendProviderTranscript(
       operation.providerOutput ?? [],
       event,
@@ -394,6 +464,7 @@ function createPresentation(
     ),
   );
   const interaction = sanitizeInteraction(data.interaction);
+  const instanceResults = sanitizeInstanceResults(data.instanceResults);
   const providerOutput =
     data.providerOutput === undefined
       ? undefined
@@ -412,6 +483,7 @@ function createPresentation(
       : { detail: safeText(data.detail, MAX_PRESENTATION_TEXT_CHARACTERS) }),
     actions,
     ...(interaction === undefined ? {} : { interaction }),
+    ...(instanceResults === undefined ? {} : { instanceResults }),
     ...(providerOutput === undefined ? {} : { providerOutput }),
   } as TuiOperationPresentation;
 
@@ -454,6 +526,47 @@ function sanitizeInteraction(
     keyType: safeText(interaction.keyType, MAX_PRESENTATION_TEXT_CHARACTERS),
     fingerprint: safeText(interaction.fingerprint, MAX_PRESENTATION_TEXT_CHARACTERS),
   });
+}
+
+function sanitizeInstanceResults(
+  results: readonly TuiOperationInstanceResult[] | undefined,
+): readonly TuiOperationInstanceResult[] | undefined {
+  if (results === undefined) {
+    return undefined;
+  }
+  return Object.freeze(
+    results.map((item) =>
+      Object.freeze({
+        instanceId: safeText(item.instanceId, MAX_PRESENTATION_TEXT_CHARACTERS),
+        status: item.status,
+        ...(item.error === undefined
+          ? {}
+          : {
+              error: Object.freeze({
+                code: safeText(item.error.code, MAX_ACTION_LABEL_CHARACTERS),
+                message: safeText(item.error.message, MAX_PRESENTATION_TEXT_CHARACTERS),
+              }),
+            }),
+        ...(item.observedState === undefined
+          ? {}
+          : { observedState: safeText(item.observedState, MAX_ACTION_LABEL_CHARACTERS) }),
+        ...(item.observationError === undefined
+          ? {}
+          : {
+              observationError: Object.freeze({
+                code: safeText(
+                  item.observationError.code,
+                  MAX_ACTION_LABEL_CHARACTERS,
+                ),
+                message: safeText(
+                  item.observationError.message,
+                  MAX_PRESENTATION_TEXT_CHARACTERS,
+                ),
+              }),
+            }),
+      }),
+    ),
+  );
 }
 
 function boundProviderOutput(

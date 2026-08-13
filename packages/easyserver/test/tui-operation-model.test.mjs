@@ -4,6 +4,7 @@ import { HostOperationRunner } from "../dist/host-operation.js";
 import {
   appendProviderTranscript,
   isTuiOperationPresentation,
+  presentBulkInstanceResult,
   presentHostTrustRequest,
   presentMutationConfirmation,
   presentOperationError,
@@ -51,6 +52,73 @@ test("outcome-unknown is a distinct warning and never offers blind mutation retr
     /retry/,
   );
   assert.match(presentation.detail, /do not repeat/i);
+});
+
+test("bulk instance presentation preserves every mixed target outcome without generic retry", () => {
+  const presentation = presentBulkInstanceResult("Stop selected instances", {
+    action: "instance.stop",
+    results: [
+      {
+        instanceId: "instance:a",
+        status: "completed",
+        observedState: "stopped",
+      },
+      {
+        instanceId: "instance:b",
+        status: "failed",
+        error: { code: "unsupported-operation", message: "stop unsupported" },
+      },
+      {
+        instanceId: "instance:c",
+        status: "outcome-unknown",
+        error: {
+          code: "outcome-unknown",
+          message: "provider response lost after dispatch",
+        },
+      },
+    ],
+    summary: { requested: 3, completed: 1, failed: 1, outcomeUnknown: 1 },
+  });
+
+  assert.equal(presentation.phase, "outcome-unknown");
+  assert.equal(presentation.tone, "warning");
+  assert.match(presentation.detail, /requested=3 completed=1 failed=1 outcome-unknown=1/);
+  assert.deepEqual(
+    presentation.instanceResults.map(({ instanceId, status }) => ({ instanceId, status })),
+    [
+      { instanceId: "instance:a", status: "completed" },
+      { instanceId: "instance:b", status: "failed" },
+      { instanceId: "instance:c", status: "outcome-unknown" },
+    ],
+  );
+  assert.equal(presentation.instanceResults[0].observedState, "stopped");
+  assert.equal(presentation.instanceResults[1].error.code, "unsupported-operation");
+  assert.deepEqual(
+    presentation.actions.map((action) => action.kind),
+    ["observe", "refresh", "dismiss"],
+  );
+  assert.equal(presentation.actions.some((action) => action.kind === "retry"), false);
+});
+
+test("working bulk presentation can expose exact requested targets before dispatch", () => {
+  const presentation = presentWorkingOperation({
+    title: "Restart selected instances",
+    detail: "3 explicit targets",
+    activity: "requested",
+    cancellable: true,
+    instanceResults: [
+      { instanceId: "instance:a", status: "requested" },
+      { instanceId: "instance:b", status: "requested" },
+      { instanceId: "instance:c", status: "requested" },
+    ],
+  });
+
+  assert.deepEqual(
+    presentation.instanceResults.map((item) => item.instanceId),
+    ["instance:a", "instance:b", "instance:c"],
+  );
+  assert.ok(presentation.instanceResults.every((item) => item.status === "requested"));
+  assert.deepEqual(presentation.actions.map((action) => action.kind), ["cancel"]);
 });
 
 test("confirmed mutation success remains success when reconciliation fails", () => {
