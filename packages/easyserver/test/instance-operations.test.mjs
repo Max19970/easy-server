@@ -291,3 +291,194 @@ test("destroy declines before cleanup or provider mutation and unmanaged resourc
     (error) => error?.code === "conflict" && /adopt/.test(error.message),
   );
 });
+
+test("bulk lifecycle bounds concurrency and preserves partial and outcome-unknown results", async () => {
+  let active = 0;
+  let maxActive = 0;
+  const operations = new InstanceOperations({
+    manager: {
+      async adoptInstance() {},
+      async performAction(instanceId) {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        active -= 1;
+        if (instanceId === "instance:unsupported") {
+          throw normalizedError(
+            "unsupported-operation",
+            "provider does not support this lifecycle action",
+          );
+        }
+        if (instanceId === "instance:uncertain") {
+          throw normalizedError(
+            "outcome-unknown",
+            "provider mutation may have been dispatched",
+          );
+        }
+      },
+    },
+    async readBinding() {
+      throw new Error("ordinary bulk actions must not pre-read bindings");
+    },
+    async acquireDestroyGuard() {
+      throw new Error("ordinary bulk actions must not acquire destroy guards");
+    },
+  });
+
+  const result = await operations.performBulk({
+    instanceIds: [
+      "instance:alpha",
+      "instance:unsupported",
+      "instance:beta",
+      "instance:uncertain",
+    ],
+    action: "instance.stop",
+    concurrency: 2,
+    context: context(),
+  });
+
+  assert.equal(maxActive, 2);
+  assert.deepEqual(result.summary, {
+    requested: 4,
+    completed: 2,
+    failed: 1,
+    outcomeUnknown: 1,
+  });
+  assert.deepEqual(result.results, [
+    { instanceId: "instance:alpha", status: "completed" },
+    {
+      instanceId: "instance:unsupported",
+      status: "failed",
+      error: {
+        code: "unsupported-operation",
+        message: "provider does not support this lifecycle action",
+      },
+    },
+    { instanceId: "instance:beta", status: "completed" },
+    {
+      instanceId: "instance:uncertain",
+      status: "outcome-unknown",
+      error: {
+        code: "outcome-unknown",
+        message: "provider mutation may have been dispatched",
+      },
+    },
+  ]);
+});
+
+test("bulk destroy confirms the exact mixed-provider target set once before dispatch", async () => {
+  const dispatched = [];
+  const guarded = [];
+  const confirmations = [];
+  const operations = new InstanceOperations({
+    manager: {
+      async adoptInstance() {},
+      async performAction(instanceId, action) {
+        dispatched.push([instanceId, action]);
+      },
+    },
+    async readBinding(instanceId) {
+      return {
+        id: instanceId,
+        providerId: instanceId.endsWith("alpha") ? "nebula" : "quasar",
+        providerExternalId: `remote-${instanceId.slice("instance:".length)}`,
+        management: "managed",
+      };
+    },
+    async acquireDestroyGuard(instanceId) {
+      guarded.push(instanceId);
+      return {
+        sessionIds: [],
+        endpointIntentNames: [],
+        pendingCleanupCount: 0,
+        affectedCount: 0,
+        async closeAffectedConnections() {},
+        async release() {},
+      };
+    },
+  });
+
+  const result = await operations.performBulk({
+    instanceIds: ["instance:alpha", "instance:beta", "instance:alpha"],
+    action: "instance.destroy",
+    closeConnections: true,
+    context: context(),
+    interaction: {
+      async confirm(prompt, details) {
+        confirmations.push({ prompt, details });
+        return true;
+      },
+    },
+  });
+
+  assert.equal(confirmations.length, 1);
+  assert.match(confirmations[0].prompt.summary, /instance:alpha \(provider=nebula\)/);
+  assert.match(confirmations[0].prompt.summary, /instance:beta \(provider=quasar\)/);
+  assert.deepEqual(confirmations[0].details, {
+    targets: [
+      {
+        instanceId: "instance:alpha",
+        providerId: "nebula",
+        management: "managed",
+      },
+      {
+        instanceId: "instance:beta",
+        providerId: "quasar",
+        management: "managed",
+      },
+    ],
+    closeConnections: true,
+  });
+  assert.deepEqual(dispatched, [
+    ["instance:alpha", "instance.destroy"],
+    ["instance:beta", "instance.destroy"],
+  ]);
+  assert.deepEqual(guarded.sort(), ["instance:alpha", "instance:beta"]);
+  assert.deepEqual(result.summary, {
+    requested: 2,
+    completed: 2,
+    failed: 0,
+    outcomeUnknown: 0,
+  });
+});
+
+test("bulk destroy refusal stops the whole target set before any guard or provider dispatch", async () => {
+  let guarded = 0;
+  let dispatched = 0;
+  const operations = new InstanceOperations({
+    manager: {
+      async adoptInstance() {},
+      async performAction() {
+        dispatched += 1;
+      },
+    },
+    async readBinding(instanceId) {
+      return {
+        id: instanceId,
+        providerId: "nebula",
+        providerExternalId: instanceId,
+        management: "managed",
+      };
+    },
+    async acquireDestroyGuard() {
+      guarded += 1;
+      throw new Error("must not acquire guard before bulk confirmation");
+    },
+  });
+
+  await assert.rejects(
+    operations.performBulk({
+      instanceIds: ["instance:alpha", "instance:beta"],
+      action: "instance.destroy",
+      context: context(),
+      interaction: {
+        async confirm() {
+          return false;
+        },
+      },
+    }),
+    (error) => error?.code === "cancelled",
+  );
+  assert.equal(guarded, 0);
+  assert.equal(dispatched, 0);
+});

@@ -1,6 +1,8 @@
 import {
+  isNormalizedError,
   normalizedError,
   type AvailableAction,
+  type NormalizedErrorCode,
   type OperationContext,
 } from "@easyai101/easyserver-plugin-sdk";
 import type { ComputeManager } from "./compute-manager.js";
@@ -55,6 +57,61 @@ export interface PerformInstanceActionRequest {
   readonly interaction?: InstanceOperationInteraction;
 }
 
+export interface BulkInstanceDestroyTarget {
+  readonly instanceId: string;
+  readonly providerId?: string;
+  readonly management?: InstanceBinding["management"];
+}
+
+export interface BulkInstanceDestroyConfirmationDetails {
+  readonly targets: readonly BulkInstanceDestroyTarget[];
+  readonly closeConnections: boolean;
+}
+
+export interface BulkInstanceOperationInteraction {
+  readonly assumeYes?: boolean;
+  warning?(message: string): void;
+  confirm?(
+    prompt: MutationConfirmationPrompt,
+    details: BulkInstanceDestroyConfirmationDetails,
+    context: OperationContext,
+  ): Promise<boolean>;
+}
+
+export interface PerformBulkInstanceActionRequest {
+  readonly instanceIds: readonly string[];
+  readonly action: AvailableAction;
+  readonly context: OperationContext;
+  readonly closeConnections?: boolean;
+  readonly concurrency?: number;
+  readonly interaction?: BulkInstanceOperationInteraction;
+}
+
+export type BulkInstanceActionItemResult =
+  | {
+      readonly instanceId: string;
+      readonly status: "completed";
+    }
+  | {
+      readonly instanceId: string;
+      readonly status: "failed" | "outcome-unknown";
+      readonly error: {
+        readonly code: NormalizedErrorCode;
+        readonly message: string;
+      };
+    };
+
+export interface BulkInstanceActionResult {
+  readonly action: AvailableAction;
+  readonly results: readonly BulkInstanceActionItemResult[];
+  readonly summary: {
+    readonly requested: number;
+    readonly completed: number;
+    readonly failed: number;
+    readonly outcomeUnknown: number;
+  };
+}
+
 export interface InstanceDestroyConnectionGuard extends InstanceDestroyImpact {
   closeAffectedConnections(): Promise<void>;
   release(): Promise<void>;
@@ -88,6 +145,94 @@ export class InstanceOperations {
 
   async adopt(instanceId: string): Promise<void> {
     await this.manager.adoptInstance(instanceId);
+  }
+
+  async performBulk(
+    request: PerformBulkInstanceActionRequest,
+  ): Promise<BulkInstanceActionResult> {
+    const instanceIds = uniqueInstanceIds(request.instanceIds);
+    if (instanceIds.length === 0) {
+      throw new TypeError("Bulk instance action requires at least one instance ID");
+    }
+
+    if (request.action === "instance.destroy") {
+      const targets = await Promise.all(
+        instanceIds.map((instanceId) => this.describeDestroyTarget(instanceId)),
+      );
+      const confirmation = request.interaction;
+      await requireMutationConfirmation(
+        bulkDestroySummary(targets),
+        ["destructive"],
+        request.context,
+        {
+          assumeYes: confirmation?.assumeYes === true,
+          interactive: confirmation?.confirm !== undefined,
+          ...(confirmation?.confirm === undefined
+            ? {}
+            : {
+                confirm: (prompt, context) =>
+                  confirmation.confirm!(
+                    prompt,
+                    {
+                      targets,
+                      closeConnections: request.closeConnections === true,
+                    },
+                    context,
+                  ),
+              }),
+        },
+      );
+    }
+
+    const results = await boundedMap(
+      instanceIds,
+      request.concurrency ?? 4,
+      async (instanceId): Promise<BulkInstanceActionItemResult> => {
+        if (request.context.signal.aborted) {
+          return bulkFailure(
+            instanceId,
+            normalizedError(
+              "cancelled",
+              `${request.action} for Compute Instance ${instanceId} was cancelled before dispatch`,
+            ),
+          );
+        }
+        try {
+          await this.perform({
+            instanceId,
+            action: request.action,
+            context: request.context,
+            ...(request.action !== "instance.destroy"
+              ? {}
+              : {
+                  closeConnections: request.closeConnections,
+                  interaction: {
+                    assumeYes: true,
+                    ...(request.interaction?.warning === undefined
+                      ? {}
+                      : { warning: request.interaction.warning }),
+                  },
+                }),
+          });
+          return { instanceId, status: "completed" };
+        } catch (error) {
+          return bulkFailure(instanceId, error);
+        }
+      },
+    );
+
+    return {
+      action: request.action,
+      results,
+      summary: {
+        requested: results.length,
+        completed: results.filter((result) => result.status === "completed").length,
+        failed: results.filter((result) => result.status === "failed").length,
+        outcomeUnknown: results.filter(
+          (result) => result.status === "outcome-unknown",
+        ).length,
+      },
+    };
   }
 
   async perform(request: PerformInstanceActionRequest): Promise<void> {
@@ -177,6 +322,23 @@ export class InstanceOperations {
           // A frontend warning sink must never overwrite the mutation outcome.
         }
       }
+    }
+  }
+
+  private async describeDestroyTarget(
+    instanceId: string,
+  ): Promise<BulkInstanceDestroyTarget> {
+    try {
+      const binding = await this.#readBinding(instanceId);
+      return binding === undefined
+        ? { instanceId }
+        : {
+            instanceId,
+            providerId: binding.providerId,
+            management: binding.management,
+          };
+    } catch {
+      return { instanceId };
     }
   }
 }
@@ -424,4 +586,67 @@ function withDestroyImpact(
 
 function plural(count: number, singular: string, pluralValue: string): string {
   return count === 1 ? singular : pluralValue;
+}
+
+function uniqueInstanceIds(instanceIds: readonly string[]): readonly string[] {
+  return [...new Set(instanceIds)];
+}
+
+function bulkDestroySummary(targets: readonly BulkInstanceDestroyTarget[]): string {
+  const formatted = targets.map((target) =>
+    target.providerId === undefined
+      ? target.instanceId
+      : `${target.instanceId} (provider=${target.providerId})`,
+  );
+  return `Destroy ${targets.length} Compute ${plural(targets.length, "Instance", "Instances")}: ${formatted.join(", ")}`;
+}
+
+function bulkFailure(
+  instanceId: string,
+  error: unknown,
+): BulkInstanceActionItemResult {
+  const normalized = isNormalizedError(error)
+    ? error
+    : normalizedError(
+        "plugin-failure",
+        error instanceof Error ? error.message : "Instance operation failed",
+        error,
+      );
+  return {
+    instanceId,
+    status: normalized.code === "outcome-unknown" ? "outcome-unknown" : "failed",
+    error: {
+      code: normalized.code,
+      message: normalized.message,
+    },
+  };
+}
+
+async function boundedMap<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  worker: (value: T) => Promise<R>,
+): Promise<readonly R[]> {
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) {
+    throw new TypeError("Bulk instance action concurrency must be an integer between 1 and 16");
+  }
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const runWorker = async (): Promise<void> => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= values.length) {
+        return;
+      }
+      results[index] = await worker(values[index]!);
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(concurrency, values.length) },
+      () => runWorker(),
+    ),
+  );
+  return results;
 }
