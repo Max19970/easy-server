@@ -8,6 +8,7 @@ import {
   type AvailableAction,
   type HostTrustRequiredError,
   type InstanceState,
+  type OperationContext,
 } from "@easyai101/easyserver-plugin-sdk";
 import {
   retryWithHostTrust,
@@ -23,6 +24,7 @@ import type {
   InstanceWaitTarget,
   InventoryInstance,
 } from "./compute-manager.js";
+import type { BulkInstanceActionResult } from "./instance-operations.js";
 import type { ProviderCommandExecutionResult } from "./provider-command-runner.js";
 import { formatPluginStatuses } from "./plugin-host.js";
 import type { PluginOperations } from "./plugin-operations.js";
@@ -72,10 +74,10 @@ Usage:
   easyserver instances inspect <instance-id>
   easyserver instances access-methods <instance-id>
   easyserver instances adopt <instance-id>
-  easyserver instances start <instance-id>
-  easyserver instances stop <instance-id>
-  easyserver instances restart <instance-id>
-  easyserver instances destroy <instance-id> [--close-sessions] [--yes]
+  easyserver instances start <instance-id>...
+  easyserver instances stop <instance-id>...
+  easyserver instances restart <instance-id>...
+  easyserver instances destroy <instance-id>... [--close-sessions] [--yes]
   easyserver instances wait <instance-id> --state <state|absent> [--timeout <seconds>]
   easyserver connect <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>] [--access-method <id>]
   easyserver daemon run
@@ -883,33 +885,60 @@ async function runInstances(args: readonly string[]): Promise<void> {
     }
 
     const action = instanceAction(command);
-    if (action !== undefined && instanceId !== undefined) {
-      const actionOptions = parseInstanceActionOptions(action, commandOptions);
-      if (action === "instance.destroy") {
-        const interactive = isInteractiveTerminal();
-        await instanceOperations.perform({
-          instanceId,
-          action,
-          closeConnections: actionOptions.closeSessions,
-          context,
-          interaction: {
-            assumeYes: actionOptions.assumeYes,
-            warning(message) {
-              process.stderr.write(`Warning: ${escapeTerminalText(message)}\n`);
-            },
-            ...(interactive
-              ? {
-                  confirm: (prompt, _details, confirmContext) =>
-                    confirmRiskyMutationInteractively(prompt, confirmContext),
-                }
-              : {}),
-          },
-        });
-      } else {
-        await instanceOperations.perform({ instanceId, action, context });
+    if (action !== undefined) {
+      const { instanceIds, actionOptions } = parseInstanceActionRequest(
+        action,
+        args.slice(1),
+      );
+      const interactive = isInteractiveTerminal();
+      const interaction = {
+        assumeYes: actionOptions.assumeYes,
+        warning(message: string) {
+          process.stderr.write(`Warning: ${escapeTerminalText(message)}\n`);
+        },
+        ...(interactive
+          ? {
+              confirm: (
+                prompt: MutationConfirmationPrompt,
+                _details: unknown,
+                confirmContext: OperationContext,
+              ) => confirmRiskyMutationInteractively(prompt, confirmContext),
+            }
+          : {}),
+      };
+
+      if (instanceIds.length === 1) {
+        const target = instanceIds[0]!;
+        if (action === "instance.destroy") {
+          await instanceOperations.perform({
+            instanceId: target,
+            action,
+            closeConnections: actionOptions.closeSessions,
+            context,
+            interaction,
+          });
+        } else {
+          await instanceOperations.perform({ instanceId: target, action, context });
+        }
+        process.stdout.write(`Requested ${action} for ${escapeTerminalText(target)}\n`);
+        return;
       }
 
-      process.stdout.write(`Requested ${action} for ${escapeTerminalText(instanceId)}\n`);
+      const result = await instanceOperations.performBulk({
+        instanceIds,
+        action,
+        context,
+        ...(action !== "instance.destroy"
+          ? {}
+          : {
+              closeConnections: actionOptions.closeSessions,
+              interaction,
+            }),
+      });
+      process.stdout.write(formatBulkInstanceActionResult(result));
+      if (result.summary.failed + result.summary.outcomeUnknown > 0) {
+        process.exitCode = result.summary.completed > 0 ? 2 : 1;
+      }
       return;
     }
 
@@ -1259,6 +1288,34 @@ interface InstanceActionOptions {
   readonly closeSessions: boolean;
 }
 
+function parseInstanceActionRequest(
+  action: AvailableAction,
+  args: readonly string[],
+): {
+  readonly instanceIds: readonly string[];
+  readonly actionOptions: InstanceActionOptions;
+} {
+  const instanceIds: string[] = [];
+  const options: string[] = [];
+  for (const value of args) {
+    if (value.startsWith("--")) {
+      options.push(value);
+    } else {
+      instanceIds.push(value);
+    }
+  }
+  if (instanceIds.length === 0) {
+    throw new CliUsageError(`${action} requires at least one instance ID`);
+  }
+  if (new Set(instanceIds).size !== instanceIds.length) {
+    throw new CliUsageError(`${action} accepts each instance ID only once`);
+  }
+  return {
+    instanceIds,
+    actionOptions: parseInstanceActionOptions(action, options),
+  };
+}
+
 function parseInstanceActionOptions(
   action: AvailableAction,
   options: readonly string[],
@@ -1294,6 +1351,20 @@ function parseInstanceActionOptions(
     );
   }
   return { assumeYes, closeSessions };
+}
+
+function formatBulkInstanceActionResult(
+  result: BulkInstanceActionResult,
+): string {
+  const lines = result.results.map((item) =>
+    item.status === "completed"
+      ? `${escapeTerminalText(item.instanceId)} status=completed`
+      : `${escapeTerminalText(item.instanceId)} status=${item.status} code=${item.error.code} message=${JSON.stringify(escapeTerminalText(item.error.message))}`,
+  );
+  lines.push(
+    `Summary action=${result.action} requested=${result.summary.requested} completed=${result.summary.completed} failed=${result.summary.failed} outcome-unknown=${result.summary.outcomeUnknown}`,
+  );
+  return `${lines.join("\n")}\n`;
 }
 
 function formatAccessMethods(

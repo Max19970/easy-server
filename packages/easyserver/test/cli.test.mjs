@@ -1036,6 +1036,38 @@ test("lists and inspects compute instances through configured providers", () => 
   assert.match(start.stderr, /conflict: instance\.start is not available/);
 });
 
+test("bulk lifecycle accepts multiple explicit instance IDs and reports partial results", () => {
+  const stateFile = join(testDirectory, "bulk-instance-state.json");
+  assert.equal(
+    runWithState(stateFile, "plugins", "add", inventoryPlugin).status,
+    0,
+  );
+  const listed = runWithState(stateFile, "instances", "list");
+  assert.equal(listed.status, 0, listed.stderr);
+  const [instanceId] = listed.stdout.match(/instance:[0-9a-f-]+/i) ?? [];
+  assert.ok(instanceId);
+  const missingId = "instance:00000000-0000-4000-8000-000000000000";
+
+  const result = runWithState(
+    stateFile,
+    "instances",
+    "stop",
+    instanceId,
+    missingId,
+  );
+
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stdout, new RegExp(`${instanceId} status=completed`));
+  assert.match(
+    result.stdout,
+    new RegExp(`${missingId} status=failed code=not-found`),
+  );
+  assert.match(
+    result.stdout,
+    /Summary action=instance\.stop requested=2 completed=1 failed=1 outcome-unknown=0/,
+  );
+});
+
 test("non-interactive destroy requires --yes before provider dispatch", async () => {
   const stateFile = join(testDirectory, "destroy-confirmation-state.json");
   const pluginPath = join(testDirectory, "destroy-confirmation-plugin.mjs");
