@@ -401,7 +401,7 @@ async function retryWindowsEperm<T>(
 
 async function removeEmptyDirectory(lockPath: string): Promise<void> {
   try {
-    await rmdir(lockPath);
+    await retryWindowsEperm(() => rmdir(lockPath), DEFAULT_RETRY_MS);
   } catch (error) {
     if (
       !isErrno(error, "ENOENT") &&
