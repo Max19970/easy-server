@@ -1900,7 +1900,7 @@ test("managed daemon startup timeout terminates its detached child", async () =>
     const start = runWithDaemonEnv(
       stateFile,
       daemonFile,
-      { EASYSERVER_DAEMON_START_TIMEOUT_MS: "200" },
+      { EASYSERVER_DAEMON_START_TIMEOUT_MS: "2000" },
       "daemon",
       "start",
     );
