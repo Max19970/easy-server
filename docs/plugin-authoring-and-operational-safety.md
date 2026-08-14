@@ -244,13 +244,66 @@ The CLI command must declare `operation: "read" | "mutation"` so the host can ap
 
 Risky mutations may additionally declare host-owned `risks: ["billable" | "destructive", ...]`. Do this only when explicit user consent is warranted; ordinary reversible mutations should not gain confirmation prompts merely because they mutate state. EasyServer owns the confirmation policy and non-interactive `--yes` opt-in, while the plugin owns only the truthful risk classification. Risk metadata is valid only on mutation commands.
 
-Commands may also declare lightweight `help` metadata for positional arguments, options and examples. This metadata is descriptive only: Provider Plugins still own argument parsing and semantics, and EasyServer does not reinterpret it as a universal provisioning schema. When metadata exists, users can run:
+Commands may also declare lightweight `help` metadata for positional arguments, options and examples. This metadata is descriptive only: Provider Plugins still own argument parsing and semantics, and EasyServer does not reinterpret it as a universal provisioning schema.
+
+For **side-effect-free CLI help**, package-based Provider Plugins should additionally export the SDK's declarative `ProviderCliHelpContribution` from the dedicated `./easyserver-help` package subpath:
+
+```ts
+// src/easyserver-help.ts
+import type { ProviderCliHelpContribution } from "@easyai101/easyserver-plugin-sdk";
+
+export const easyserverCliHelp: ProviderCliHelpContribution = {
+  pluginId: "example.plugin",
+  providerId: "example",
+  displayName: "Example Provider",
+  features: [
+    {
+      id: "marketplace",
+      displayName: "Marketplace",
+      commands: [
+        {
+          name: "rent",
+          description: "Rent one provider offer",
+          operation: "mutation",
+          risks: ["billable"],
+          help: {
+            arguments: [
+              {
+                name: "offer-id",
+                description: "Provider marketplace offer ID",
+                required: true,
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ],
+};
+```
+
+Expose that file without routing through the normal plugin entrypoint:
+
+```json
+{
+  "exports": {
+    ".": "./dist/index.js",
+    "./easyserver-help": "./dist/easyserver-help.js"
+  }
+}
+```
+
+The `./easyserver-help` entrypoint is a strict Provider Plugin contract: evaluating it must not resolve credentials, read Secret Store values, contact provider APIs, mutate EasyServer Local State or dispatch provider work. Keep the metadata in shared constants used by both the runtime feature and this help-only export so the two surfaces cannot silently drift.
+
+Users can then inspect provider help at every level without loading the executable plugin runtime:
 
 ```text
+easyserver provider <provider-id> --help
+easyserver provider <provider-id> <feature-id> --help
 easyserver provider <provider-id> <feature-id> <command> --help
 ```
 
-The host renders that help without calling the command's `run()` function, so asking for help never dispatches Provider work or a mutation. Plugins without `help` metadata remain compatible; EasyServer shows the command description plus a `[provider-args...]` fallback instead of inventing argument details.
+EasyServer validates the help-only contribution with the SDK before rendering it. The host never calls a command's `run()` function for help and never falls back to importing the normal plugin entrypoint merely to obtain metadata. Legacy/local-file plugins without a dedicated help-only package export remain loadable and executable; their provider-specific `--help` degrades explicitly instead of guessing or evaluating executable plugin code.
 
 ### Acquisition handoff to canonical EasyServer identity
 

@@ -1,6 +1,6 @@
 # EasyServer
 
-EasyServer is a provider-independent control plane for rented compute: one CLI for acquiring provider resources, managing their normalized lifecycle and exposing arbitrary remote TCP services through local loopback Endpoints. It owns the compute resource and connectivity boundary — not the workload running on the machine.
+EasyServer is a provider-independent control plane for rented compute: an interactive TUI plus an automation-oriented CLI for acquiring provider resources, managing their normalized lifecycle and exposing arbitrary remote TCP services through local loopback Endpoints. It owns the compute resource and connectivity boundary — not the workload running on the machine.
 
 ```text
 Provider
@@ -138,7 +138,11 @@ Provider billing semantics remain provider-specific; `stopped` does not universa
 
 ## Core commands
 
+Plain `easyserver` is the preferred interactive entrypoint. `easyserver --help` opens the descriptive command-mode hierarchy; every core group and command has its own contextual `--help` page.
+
 ```text
+easyserver                             interactive TUI
+easyserver --help                      CLI/automation help entrypoint
 easyserver plugins ...                 install-state / credentials / enable-disable
 easyserver provider ...                provider-specific acquisition/features
 easyserver instances list|inspect ...  normalized inventory
@@ -148,7 +152,7 @@ easyserver daemon run                  local session owner
 easyserver sessions create|list|close ...
 ```
 
-Run `easyserver --help` for the exact command surface.
+Run `easyserver --help` for the command groups, then append `--help` to the relevant path (for example `easyserver instances destroy --help`). Package-based Provider Plugins may also publish side-effect-free provider-specific help through their dedicated `./easyserver-help` contribution.
 
 ## What EasyServer deliberately does not do
 

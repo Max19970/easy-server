@@ -1,6 +1,6 @@
 # Getting started with EasyServer
 
-EasyServer is a provider-independent CLI for acquiring, managing and locally accessing rented compute. Provider-specific acquisition stays in separately installed Provider Plugins; after a resource exists, EasyServer exposes a shared inventory/lifecycle/connectivity surface.
+EasyServer is a provider-independent control surface for acquiring, managing and locally accessing rented compute. The interactive TUI is the preferred human-facing entrypoint, while the CLI remains the explicit automation and advanced-command surface. Provider-specific acquisition stays in separately installed Provider Plugins; after a resource exists, EasyServer exposes a shared inventory/lifecycle/connectivity surface.
 
 ## Requirements
 
@@ -25,6 +25,30 @@ easyserver plugins list
 ```
 
 The expected initial result is `No provider plugins configured.`
+
+## Choose interactive or command mode
+
+On an interactive terminal, plain `easyserver` opens the TUI. Use `easyserver --help` when you deliberately want the command-mode interface for scripts, automation or advanced workflows. Nested help is available at the same path as the command it documents:
+
+```sh
+easyserver plugins --help
+easyserver plugins credential set --help
+easyserver instances destroy --help
+easyserver connect --help
+easyserver sessions intents --help
+```
+
+Usage errors point back to the nearest relevant `--help` page instead of dumping unrelated global usage.
+
+Provider-specific commands remain Provider Plugin owned. Package-based plugins can publish a dedicated side-effect-free `./easyserver-help` contribution, which allows discovery without loading the normal plugin runtime, resolving credentials or contacting provider APIs:
+
+```sh
+easyserver provider vastai --help
+easyserver provider vastai marketplace --help
+easyserver provider vastai marketplace rent --help
+```
+
+A legacy or local-file plugin without that dedicated help-only contribution still remains executable, but provider-specific `--help` degrades explicitly instead of evaluating its normal entrypoint just to obtain metadata.
 
 For an npm-installed CLI, install selected providers into the same global npm environment. For example:
 
