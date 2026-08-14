@@ -119,6 +119,24 @@ export interface TuiSessionSummary {
   readonly items: readonly TuiPersistentSessionReadItem[];
 }
 
+export interface TuiEndpointIntentReadItem {
+  readonly name: string;
+  readonly enabled: boolean;
+  readonly state: EndpointIntentStatus["state"];
+  readonly instanceId: string;
+  readonly remoteHost: string;
+  readonly remotePort: number;
+  readonly requestedLocalPort?: number;
+  readonly requestedAccessMethodId?: string;
+  readonly endpoint?: { readonly host: "127.0.0.1"; readonly port: number };
+  readonly accessMethod?: {
+    readonly id: string;
+    readonly kind: string;
+    readonly mode: Extract<EndpointIntentStatus, { readonly state: "live" }>["accessMethod"]["mode"];
+  };
+  readonly failure?: { readonly code: string; readonly message: string };
+}
+
 export interface TuiEndpointIntentSummary {
   readonly status: "ready";
   readonly total: number;
@@ -126,6 +144,7 @@ export interface TuiEndpointIntentSummary {
   readonly starting: number;
   readonly error: number;
   readonly disabled: number;
+  readonly items: readonly TuiEndpointIntentReadItem[];
 }
 
 export type TuiDaemonReadSnapshot =
@@ -527,6 +546,42 @@ function summarizeEndpointIntents(
     starting: intents.filter((intent) => intent.state === "starting").length,
     error: intents.filter((intent) => intent.state === "error").length,
     disabled: intents.filter((intent) => intent.state === "disabled").length,
+    items: intents.map(projectEndpointIntent),
+  };
+}
+
+function projectEndpointIntent(intent: EndpointIntentStatus): TuiEndpointIntentReadItem {
+  return {
+    name: escapeTerminalText(intent.name),
+    enabled: intent.enabled,
+    state: intent.state,
+    instanceId: escapeTerminalText(intent.instanceId),
+    remoteHost: escapeTerminalText(intent.remoteHost),
+    remotePort: intent.remotePort,
+    ...(intent.localPort === undefined
+      ? {}
+      : { requestedLocalPort: intent.localPort }),
+    ...(intent.accessMethodId === undefined
+      ? {}
+      : { requestedAccessMethodId: escapeTerminalText(intent.accessMethodId) }),
+    ...(intent.state === "live"
+      ? {
+          endpoint: intent.endpoint,
+          accessMethod: {
+            id: escapeTerminalText(intent.accessMethod.id),
+            kind: escapeTerminalText(intent.accessMethod.kind),
+            mode: intent.accessMethod.mode,
+          },
+        }
+      : {}),
+    ...(intent.state === "error"
+      ? {
+          failure: {
+            code: escapeTerminalText(intent.failure.code),
+            message: escapeTerminalText(intent.failure.message),
+          },
+        }
+      : {}),
   };
 }
 

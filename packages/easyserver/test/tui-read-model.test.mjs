@@ -232,6 +232,84 @@ test("invalid daemon descriptor is projected as stale rather than healthy or sto
   assert.deepEqual(snapshot, { status: "stale" });
 });
 
+test("daemon read snapshot projects durable Endpoint intents separately from live sessions", async () => {
+  const snapshot = await collectDaemonReadSnapshot("fixture-daemon.json", {
+    async readDescriptor() {
+      return {
+        version: 1,
+        address: { host: "127.0.0.1", port: 43210 },
+        authToken: "private-token",
+      };
+    },
+    createClient() {
+      return {
+        async ping() {},
+        async listSessions() {
+          return [];
+        },
+        async listEndpointIntents() {
+          return [
+            {
+              name: "comfy\u001b[2J",
+              enabled: true,
+              state: "live",
+              instanceId: "instance:one",
+              remoteHost: "127.0.0.1",
+              remotePort: 8188,
+              localPort: 48188,
+              accessMethodId: "ssh",
+              endpoint: { host: "127.0.0.1", port: 48188 },
+              accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+            },
+            {
+              name: "web",
+              enabled: true,
+              state: "error",
+              instanceId: "instance:two",
+              remoteHost: "127.0.0.1",
+              remotePort: 7860,
+              failure: {
+                code: "conflict",
+                message: "Requested local port is occupied\u001b[31m",
+              },
+            },
+          ];
+        },
+      };
+    },
+  });
+
+  assert.equal(snapshot.status, "running");
+  assert.equal(snapshot.sessions.total, 0);
+  assert.deepEqual(snapshot.endpointIntents.items, [
+    {
+      name: "comfy\\u001b[2J",
+      enabled: true,
+      state: "live",
+      instanceId: "instance:one",
+      remoteHost: "127.0.0.1",
+      remotePort: 8188,
+      requestedLocalPort: 48188,
+      requestedAccessMethodId: "ssh",
+      endpoint: { host: "127.0.0.1", port: 48188 },
+      accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+    },
+    {
+      name: "web",
+      enabled: true,
+      state: "error",
+      instanceId: "instance:two",
+      remoteHost: "127.0.0.1",
+      remotePort: 7860,
+      failure: {
+        code: "conflict",
+        message: "Requested local port is occupied\\u001b[31m",
+      },
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify(snapshot), /private-token/);
+});
+
 test("daemon read snapshot never exposes descriptor credentials and tolerates detail failure", async () => {
   const descriptor = {
     version: 1,
