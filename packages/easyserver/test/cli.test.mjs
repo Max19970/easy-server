@@ -595,9 +595,36 @@ test("first-party provider command help needs no configured credentials or provi
     0,
   );
   assert.equal(
-    runWithState(stateFile, "plugins", "add", intelionPlugin).status,
+    runWithState(
+      stateFile,
+      "plugins",
+      "add",
+      "@easyai101/easyserver-plugin-intelion",
+    ).status,
     0,
   );
+
+  const vastProviderHelp = runWithState(
+    stateFile,
+    "provider",
+    "vastai",
+    "--help",
+  );
+  assert.equal(vastProviderHelp.status, 0, vastProviderHelp.stderr);
+  assert.match(vastProviderHelp.stdout, /Vast\.ai \(vastai\)/);
+  assert.match(vastProviderHelp.stdout, /^  marketplace\s+Marketplace$/m);
+
+  const vastFeatureHelp = runWithState(
+    stateFile,
+    "provider",
+    "vastai",
+    "marketplace",
+    "--help",
+  );
+  assert.equal(vastFeatureHelp.status, 0, vastFeatureHelp.stderr);
+  assert.match(vastFeatureHelp.stdout, /Provider-owned CLI commands/);
+  assert.match(vastFeatureHelp.stdout, /^  search\s+Search Vast\.ai marketplace offers$/m);
+  assert.match(vastFeatureHelp.stdout, /^  rent\s+Rent a Vast\.ai marketplace offer$/m);
 
   const vastHelp = runWithState(
     stateFile,
@@ -633,6 +660,19 @@ test("first-party provider command help needs no configured credentials or provi
   assert.match(intelionHelp.stdout, /--addon <id> \(optional, repeatable\)/);
   assert.match(intelionHelp.stdout, /Risks: billable/);
   assert.doesNotMatch(intelionHelp.stderr, /credential|authentication/i);
+
+  const unknownCommand = runWithState(
+    stateFile,
+    "provider",
+    "vastai",
+    "marketplace",
+    "not-a-command",
+  );
+  assert.equal(unknownCommand.status, 1);
+  assert.match(
+    unknownCommand.stderr,
+    /See: easyserver provider vastai marketplace --help/,
+  );
 });
 
 test("lists zero configured plugins", () => {
@@ -1624,9 +1664,9 @@ test("mounts provider feature commands and reconciles requested inventory change
     "--help",
   );
   assert.equal(legacyHelp.status, 0);
-  assert.match(legacyHelp.stdout, /Echo provider-owned arguments/);
-  assert.match(legacyHelp.stdout, /\[provider-args\.\.\.\]/);
-  assert.match(legacyHelp.stdout, /does not declare structured argument help/);
+  assert.match(legacyHelp.stdout, /Provider-specific help is unavailable for provider-cli/);
+  assert.match(legacyHelp.stdout, /did not import the normal Provider Plugin entrypoint/);
+  assert.match(legacyHelp.stdout, /dedicated side-effect-free \.\/easyserver-help contribution/);
   assert.doesNotMatch(legacyHelp.stdout, /provider-owned:/);
 
   const mutationHelp = runWithState(
@@ -1638,26 +1678,7 @@ test("mounts provider feature commands and reconciles requested inventory change
     "--help",
   );
   assert.equal(mutationHelp.status, 0);
-  assert.match(mutationHelp.stdout, /^Create a provider-owned resource$/m);
-  assert.match(mutationHelp.stdout, /^Operation: mutation$/m);
-  assert.match(
-    mutationHelp.stdout,
-    /Usage:\n  easyserver provider provider-cli marketplace create \[--yes\] <resource-name> \[--tag <value>\.\.\.\]/,
-  );
-  assert.match(
-    mutationHelp.stdout,
-    /<resource-name> \(required\) Provider-owned resource name/,
-  );
-  assert.match(
-    mutationHelp.stdout,
-    /--tag <value> \(optional, repeatable\) Provider-owned tag/,
-  );
-  assert.match(
-    mutationHelp.stdout,
-    /easyserver provider provider-cli marketplace create gpu-box --tag team --tag demo/,
-  );
-  assert.match(mutationHelp.stdout, /Risks: billable/);
-  assert.match(mutationHelp.stdout, /non-interactive calls require --yes/);
+  assert.match(mutationHelp.stdout, /Provider-specific help is unavailable for provider-cli/);
   const stateAfterHelp = JSON.parse(await readFile(stateFile, "utf8"));
   assert.equal(stateAfterHelp.instances, undefined);
 

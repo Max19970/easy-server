@@ -290,13 +290,16 @@ export interface ProviderCliCommandHelp {
   readonly examples?: readonly string[];
 }
 
-export interface ProviderCliCommand {
+export interface ProviderCliCommandMetadata {
   readonly name: string;
   readonly description: string;
   readonly operation: ProviderCliOperation;
   /** Host-owned safety classification for mutations that need explicit consent. */
   readonly risks?: readonly ProviderMutationRisk[];
   readonly help?: ProviderCliCommandHelp;
+}
+
+export interface ProviderCliCommand extends ProviderCliCommandMetadata {
   run(
     args: readonly string[],
     context: ProviderCliCommandContext,
@@ -305,6 +308,27 @@ export interface ProviderCliCommand {
 
 export interface ProviderCliContribution {
   readonly commands: readonly ProviderCliCommand[];
+}
+
+/**
+ * Declarative provider CLI metadata exported from the dedicated
+ * `./easyserver-help` package subpath. This help-only entrypoint must not
+ * resolve credentials, contact provider APIs, mutate Local State or dispatch
+ * provider work during module evaluation.
+ */
+export interface ProviderCliHelpContribution {
+  readonly pluginId: string;
+  readonly providerId: string;
+  readonly displayName?: string;
+  readonly features: readonly {
+    readonly id: string;
+    readonly displayName: string;
+    readonly commands: readonly ProviderCliCommandMetadata[];
+  }[];
+}
+
+export interface ProviderCliHelpModule {
+  readonly easyserverCliHelp: ProviderCliHelpContribution;
 }
 
 /**
@@ -814,6 +838,74 @@ export function parseProviderPlugin(value: unknown): ProviderPlugin {
     ...parsed,
     ...(features.length === 0 ? {} : { features }),
     ...(accessAdapters.length === 0 ? {} : { accessAdapters }),
+  };
+}
+
+export function parseProviderCliHelpModule(value: unknown): ProviderCliHelpContribution {
+  const module = expectRecord(value, "provider CLI help module");
+  const contribution = expectRecord(
+    module.easyserverCliHelp,
+    "provider CLI help module.easyserverCliHelp",
+  );
+  const pluginId = expectId(
+    contribution.pluginId,
+    "provider CLI help module.easyserverCliHelp.pluginId",
+  );
+  const providerId = expectId(
+    contribution.providerId,
+    "provider CLI help module.easyserverCliHelp.providerId",
+  );
+  const displayName =
+    contribution.displayName === undefined
+      ? undefined
+      : expectNonEmptyString(
+          contribution.displayName,
+          "provider CLI help module.easyserverCliHelp.displayName",
+        );
+  if (!Array.isArray(contribution.features)) {
+    throw new PluginContractError(
+      "provider CLI help module.easyserverCliHelp.features must be an array",
+    );
+  }
+
+  const seenFeatures = new Set<string>();
+  const features = contribution.features.map((candidate, index) => {
+    const path = `provider CLI help module.easyserverCliHelp.features[${index}]`;
+    const feature = expectRecord(candidate, path);
+    const id = expectId(feature.id, `${path}.id`);
+    if (seenFeatures.has(id)) {
+      throw new PluginContractError(
+        "provider CLI help module.easyserverCliHelp.features must not contain duplicate IDs",
+      );
+    }
+    seenFeatures.add(id);
+    const featureDisplayName = expectNonEmptyString(
+      feature.displayName,
+      `${path}.displayName`,
+    );
+    if (!Array.isArray(feature.commands)) {
+      throw new PluginContractError(`${path}.commands must be an array`);
+    }
+    const seenCommands = new Set<string>();
+    const commands = feature.commands.map((command, commandIndex) => {
+      const commandPath = `${path}.commands[${commandIndex}]`;
+      const parsed = parseProviderCliCommandMetadata(command, commandPath);
+      if (seenCommands.has(parsed.name)) {
+        throw new PluginContractError(
+          `${path}.commands must not contain duplicate names`,
+        );
+      }
+      seenCommands.add(parsed.name);
+      return parsed;
+    });
+    return { id, displayName: featureDisplayName, commands };
+  });
+
+  return {
+    pluginId,
+    providerId,
+    ...(displayName === undefined ? {} : { displayName }),
+    features,
   };
 }
 
@@ -1432,39 +1524,47 @@ function parseProviderCliContribution(value: unknown, path: string): void {
 
   const seen = new Set<string>();
   for (const [index, candidate] of contribution.commands.entries()) {
-    const command = expectRecord(candidate, `${path}.commands[${index}]`);
-    const name = expectId(command.name, `${path}.commands[${index}].name`);
-    expectNonEmptyString(
-      command.description,
-      `${path}.commands[${index}].description`,
-    );
-    if (command.operation !== "read" && command.operation !== "mutation") {
-      throw new PluginContractError(
-        `${path}.commands[${index}].operation must be read or mutation`,
-      );
-    }
-    if (command.risks !== undefined) {
-      parseProviderMutationRisks(
-        command.risks,
-        `${path}.commands[${index}].risks`,
-        command.operation,
-      );
-    }
-    if (command.help !== undefined) {
-      parseProviderCliCommandHelp(
-        command.help,
-        `${path}.commands[${index}].help`,
-      );
-    }
-    expectFunction(command.run, `${path}.commands[${index}].run`);
+    const commandPath = `${path}.commands[${index}]`;
+    const command = expectRecord(candidate, commandPath);
+    const metadata = parseProviderCliCommandMetadata(command, commandPath);
+    expectFunction(command.run, `${commandPath}.run`);
 
-    if (seen.has(name)) {
+    if (seen.has(metadata.name)) {
       throw new PluginContractError(
-        `${path}.commands contains duplicate name: ${name}`,
+        `${path}.commands contains duplicate name: ${metadata.name}`,
       );
     }
-    seen.add(name);
+    seen.add(metadata.name);
   }
+}
+
+function parseProviderCliCommandMetadata(
+  value: unknown,
+  path: string,
+): ProviderCliCommandMetadata {
+  const command = expectRecord(value, path);
+  const name = expectId(command.name, `${path}.name`);
+  const description = expectNonEmptyString(command.description, `${path}.description`);
+  if (command.operation !== "read" && command.operation !== "mutation") {
+    throw new PluginContractError(`${path}.operation must be read or mutation`);
+  }
+  if (command.risks !== undefined) {
+    parseProviderMutationRisks(command.risks, `${path}.risks`, command.operation);
+  }
+  if (command.help !== undefined) {
+    parseProviderCliCommandHelp(command.help, `${path}.help`);
+  }
+  return {
+    name,
+    description,
+    operation: command.operation,
+    ...(command.risks === undefined
+      ? {}
+      : { risks: command.risks as readonly ProviderMutationRisk[] }),
+    ...(command.help === undefined
+      ? {}
+      : { help: command.help as unknown as ProviderCliCommandHelp }),
+  };
 }
 
 function parseProviderMutationRisks(

@@ -9,6 +9,8 @@ import {
   type HostTrustRequiredError,
   type InstanceState,
   type OperationContext,
+  type ProviderCliCommandMetadata,
+  type ProviderCliHelpContribution,
 } from "@easyai101/easyserver-plugin-sdk";
 import {
   retryWithHostTrust,
@@ -34,6 +36,7 @@ import {
   formatCoreHelp,
   formatHelpHint,
 } from "./cli-help.js";
+import { loadProviderCliHelp } from "./provider-cli-help.js";
 import {
   createHostRuntime,
   resolveHostRuntimePaths,
@@ -57,7 +60,10 @@ import {
 
 
 class CliUsageError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly helpCommand?: string,
+  ) {
     super(message);
     this.name = "CliUsageError";
   }
@@ -93,9 +99,18 @@ async function run(args: readonly string[]): Promise<void> {
 
   const helpFlag = args.at(-1);
   if (helpFlag === "--help" || helpFlag === "-h") {
-    const page = formatCoreHelp(args.slice(0, -1));
+    const helpPath = args.slice(0, -1);
+    const page = formatCoreHelp(helpPath);
     if (page !== undefined) {
       process.stdout.write(page);
+      return;
+    }
+    if (helpPath[0] === "provider") {
+      try {
+        await runProviderHelp(helpPath.slice(1));
+      } catch (error) {
+        reportCliError(error, helpPath);
+      }
       return;
     }
   }
@@ -718,6 +733,51 @@ function parseConnectArgs(
   };
 }
 
+async function runProviderHelp(args: readonly string[]): Promise<void> {
+  const [providerId, featureId, commandName, ...extra] = args;
+  if (providerId === undefined || extra.length > 0) {
+    throw new CliUsageError(
+      "provider help expects <provider-id>, optionally followed by <feature-id> and <command>",
+    );
+  }
+
+  const contribution = await loadProviderCliHelp(providerId, {
+    stateFile: stateFilePath(),
+  });
+  if (contribution === undefined) {
+    process.stdout.write(formatProviderHelpUnavailable(providerId));
+    return;
+  }
+
+  if (featureId === undefined) {
+    process.stdout.write(formatProviderHelpContribution(contribution));
+    return;
+  }
+
+  const feature = contribution.features.find((candidate) => candidate.id === featureId);
+  if (feature === undefined) {
+    throw new CliUsageError(
+      `Provider help feature not found: ${providerId}/${featureId}`,
+      `easyserver provider ${providerId} --help`,
+    );
+  }
+  if (commandName === undefined) {
+    process.stdout.write(
+      formatProviderHelpFeature(providerId, feature.id, feature.displayName, feature.commands),
+    );
+    return;
+  }
+
+  const command = feature.commands.find((candidate) => candidate.name === commandName);
+  if (command === undefined) {
+    throw new CliUsageError(
+      `Provider help command not found: ${providerId}/${featureId}/${commandName}`,
+      `easyserver provider ${providerId} ${featureId} --help`,
+    );
+  }
+  process.stdout.write(formatProviderCommandHelp(providerId, featureId, command));
+}
+
 async function runProvider(args: readonly string[]): Promise<void> {
   const [providerId, featureId, commandName, ...commandArgs] = args;
   const runtime = await createHostRuntime({ paths: resolveHostRuntimePaths() });
@@ -743,21 +803,12 @@ async function runProvider(args: readonly string[]): Promise<void> {
   if (command === undefined) {
     throw new CliUsageError(
       `Provider command not found: ${providerId}/${featureId}/${commandName}`,
+      `easyserver provider ${providerId} ${featureId} --help`,
     );
   }
 
   const assumeYes = command.risks.length > 0 && commandArgs[0] === "--yes";
   const providerCommandArgs = assumeYes ? commandArgs.slice(1) : commandArgs;
-
-  if (
-    providerCommandArgs.length === 1 &&
-    (providerCommandArgs[0] === "--help" || providerCommandArgs[0] === "-h")
-  ) {
-    process.stdout.write(
-      formatProviderCommandHelp(providerId, featureId, command),
-    );
-    return;
-  }
 
   const controller = new AbortController();
   const cancel = () => controller.abort();
@@ -1038,6 +1089,69 @@ function formatProviderFeatures(
     .join("\n")}\n`;
 }
 
+function formatProviderHelpUnavailable(providerId: string): string {
+  const safeProviderId = escapeTerminalText(providerId);
+  return `Provider-specific help is unavailable for ${safeProviderId}.\n\nEasyServer intentionally did not import the normal Provider Plugin entrypoint for --help. The configured plugin must publish a dedicated side-effect-free ./easyserver-help contribution to expose provider-specific help without credentials or provider work.\n\nYou can still use \`easyserver provider\` to inspect features through the normal runtime path.\n`;
+}
+
+function formatProviderHelpContribution(
+  contribution: ProviderCliHelpContribution,
+): string {
+  const providerId = escapeTerminalText(contribution.providerId);
+  const lines = [
+    contribution.displayName === undefined
+      ? `Provider ${providerId}`
+      : `${escapeTerminalText(contribution.displayName)} (${providerId})`,
+    "",
+    "Side-effect-free Provider Plugin help metadata.",
+    "",
+    "Features:",
+  ];
+  if (contribution.features.length === 0) {
+    lines.push("  No provider features declare CLI help.");
+  } else {
+    for (const feature of contribution.features) {
+      lines.push(
+        `  ${escapeTerminalText(feature.id).padEnd(20)} ${escapeTerminalText(feature.displayName)}`,
+      );
+    }
+    lines.push(
+      "",
+      `Run \`easyserver provider ${providerId} <feature-id> --help\` to list provider-owned commands.`,
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function formatProviderHelpFeature(
+  providerId: string,
+  featureId: string,
+  displayName: string,
+  commands: readonly ProviderCliCommandMetadata[],
+): string {
+  const safeProviderId = escapeTerminalText(providerId);
+  const safeFeatureId = escapeTerminalText(featureId);
+  const lines = [
+    `${escapeTerminalText(displayName)} (${safeProviderId}/${safeFeatureId})`,
+    "",
+    "Provider-owned CLI commands:",
+  ];
+  if (commands.length === 0) {
+    lines.push("  No CLI commands declared.");
+  } else {
+    for (const command of commands) {
+      lines.push(
+        `  ${escapeTerminalText(command.name).padEnd(16)} ${escapeTerminalText(command.description)}`,
+      );
+    }
+    lines.push(
+      "",
+      `Run \`easyserver provider ${safeProviderId} ${safeFeatureId} <command> --help\` for arguments and safety semantics.`,
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 function formatProviderCommands(
   providerId: string,
   featureId: string,
@@ -1058,7 +1172,7 @@ function formatProviderCommands(
 function formatProviderCommandHelp(
   providerId: string,
   featureId: string,
-  command: ProviderFeatureCommandDescriptor,
+  command: ProviderCliCommandMetadata,
 ): string {
   const commandPath = `easyserver provider ${escapeTerminalText(providerId)} ${escapeTerminalText(featureId)} ${escapeTerminalText(command.name)}`;
   const risks = command.risks ?? [];
@@ -1410,7 +1524,7 @@ function daemonFilePath(): string {
 function reportCliError(error: unknown, args: readonly string[]): void {
   process.stderr.write(
     error instanceof CliUsageError
-      ? `${escapeTerminalText(errorMessage(error))}\n\n${formatHelpHint(findContextualHelpPath(args))}\n`
+      ? `${escapeTerminalText(errorMessage(error))}\n\n${error.helpCommand === undefined ? formatHelpHint(findContextualHelpPath(args)) : `See: ${escapeTerminalText(error.helpCommand)}`}\n`
       : `${escapeTerminalText(errorMessage(error))}\n`,
   );
   process.exitCode = 1;

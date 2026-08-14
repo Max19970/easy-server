@@ -30,6 +30,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./easyserver-help": {
+      "types": "./dist/easyserver-help.d.ts",
+      "default": "./dist/easyserver-help.js"
     }
   },
   "publishConfig": {

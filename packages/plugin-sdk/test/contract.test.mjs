@@ -11,6 +11,7 @@ import {
   parseAccessMethods,
   parsePluginManifest,
   parseProviderCliCommandResult,
+  parseProviderCliHelpModule,
   parseProviderInteractiveScreen,
   parseProviderInteractiveTransition,
   parseProviderInstanceList,
@@ -668,6 +669,68 @@ test("validates provider mutation risk metadata", () => {
       pattern,
     );
   }
+});
+
+test("validates dedicated provider CLI help-only contributions without executable command functions", () => {
+  const contribution = parseProviderCliHelpModule({
+    easyserverCliHelp: {
+      pluginId: "fixture.plugin",
+      providerId: "fixture",
+      displayName: "Fixture Provider",
+      features: [
+        {
+          id: "marketplace",
+          displayName: "Marketplace",
+          commands: [
+            {
+              name: "rent",
+              description: "Rent one provider resource",
+              operation: "mutation",
+              risks: ["billable"],
+              help: {
+                arguments: [
+                  {
+                    name: "offer-id",
+                    description: "Provider offer ID",
+                    required: true,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  assert.equal(contribution.providerId, "fixture");
+  assert.equal(contribution.features[0].commands[0].name, "rent");
+  assert.equal("run" in contribution.features[0].commands[0], false);
+
+  assert.throws(
+    () =>
+      parseProviderCliHelpModule({
+        easyserverCliHelp: {
+          pluginId: "fixture.plugin",
+          providerId: "fixture",
+          features: [
+            {
+              id: "marketplace",
+              displayName: "Marketplace",
+              commands: [
+                {
+                  name: "read",
+                  description: "Read",
+                  operation: "read",
+                  risks: ["billable"],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    /only for mutation commands/,
+  );
 });
 
 test("validates provider CLI affected identities for host reconciliation", () => {
