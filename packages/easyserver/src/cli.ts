@@ -993,7 +993,7 @@ async function runInstances(args: readonly string[]): Promise<void> {
     if (command === "inspect" && instanceId !== undefined && args.length === 2) {
       const instance = await manager.inspectInstance(instanceId, context);
       if (instance === undefined) {
-        throw new Error(`Compute Instance not found: ${instanceId}`);
+        throw normalizedError("not-found", `Compute Instance not found: ${instanceId}`);
       }
 
       writeCliSuccess({ instance }, `${JSON.stringify(instance, null, 2)}\n`);

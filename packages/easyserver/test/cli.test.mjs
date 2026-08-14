@@ -1275,6 +1275,25 @@ test("global JSON mode exposes stable core plugin, inventory, lifecycle and erro
   assert.equal(inspected.data.instance.id, instanceId);
   assert.equal(inspected.data.instance.providerExternalId, "remote-1");
 
+  const missingId = "instance:00000000-0000-4000-8000-000000000000";
+  const missing = runWithState(
+    stateFile,
+    "--json",
+    "instances",
+    "inspect",
+    missingId,
+  );
+  assert.equal(missing.status, 1);
+  assert.equal(missing.stdout, "");
+  assert.deepEqual(JSON.parse(missing.stderr), {
+    schemaVersion: 1,
+    ok: false,
+    error: {
+      code: "not-found",
+      message: `Compute Instance not found: ${missingId}`,
+    },
+  });
+
   const unavailable = runWithState(
     stateFile,
     "--json",
