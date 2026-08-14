@@ -12,6 +12,7 @@ import { TuiOperationDrawer } from "./tui-operation-drawer.js";
 import { ProviderInteractiveSurface } from "./tui-provider-interactive.js";
 import {
   isTuiOperationPresentation,
+  presentBulkInstanceResult,
   presentCompletedOperation,
   presentHostTrustRequest,
   presentMutationConfirmation,
@@ -42,11 +43,17 @@ import {
   type TuiProviderMutationRunner,
 } from "./tui-provider-operations.js";
 import {
+  createDefaultTuiBulkInstanceMutationRunner,
   createDefaultTuiInstanceMutationRunner,
+  type TuiBulkInstanceMutation,
+  type TuiBulkInstanceMutationRunner,
   type TuiInstanceMutation,
   type TuiInstanceMutationRunner,
 } from "./tui-instance-operations.js";
-import type { InstanceDestroyConfirmationDetails } from "./instance-operations.js";
+import type {
+  BulkInstanceDestroyConfirmationDetails,
+  InstanceDestroyConfirmationDetails,
+} from "./instance-operations.js";
 import type { AccessMethodDescriptor } from "./connection-gateway.js";
 import {
   createDefaultTuiForegroundConnectionOperations,
@@ -62,6 +69,8 @@ import {
 } from "./tui-daemon-operations.js";
 import {
   normalizedError,
+  PROVIDER_CAPABILITIES,
+  type AvailableAction,
   type OperationContext,
   type ProviderInteractiveEvent,
   type ProviderInteractiveScreen,
@@ -155,6 +164,7 @@ interface PendingProviderFlowConfirmation {
 interface PendingInstanceConfirmation {
   readonly resolve: (accepted: boolean) => void;
   readonly workingTitle: string;
+  readonly bulkTargetIds?: readonly string[];
 }
 
 interface PendingHostTrustConfirmation {
@@ -195,6 +205,7 @@ export interface TuiShellProps {
   readonly readStatus?: TuiReadStatus;
   readonly onRefresh?: (routeId: TuiRouteId) => void;
   readonly onInstanceMutation?: (mutation: TuiInstanceMutation) => void;
+  readonly onBulkInstanceMutation?: (mutation: TuiBulkInstanceMutation) => void;
   readonly foregroundConnections?: readonly TuiForegroundConnection[];
   readonly onListForegroundAccessMethods?: (
     instanceId: string,
@@ -230,6 +241,7 @@ export function TuiShell({
   readStatus = "idle",
   onRefresh,
   onInstanceMutation,
+  onBulkInstanceMutation,
   foregroundConnections = [],
   onListForegroundAccessMethods,
   onOpenForegroundConnection,
@@ -269,6 +281,7 @@ export function TuiShell({
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | undefined>(
     () => firstInstanceId(readSnapshot),
   );
+  const [bulkSelectedInstanceIds, setBulkSelectedInstanceIds] = useState<readonly string[]>([]);
   const [selectedWorkflowKey, setSelectedWorkflowKey] = useState<string | undefined>(
     () => firstWorkflowKey(readSnapshot),
   );
@@ -328,6 +341,12 @@ export function TuiShell({
     inventoryItems.some((instance) => instance.id === selectedInstanceId)
       ? selectedInstanceId
       : undefined;
+  const bulkSelectedInstances = inventoryItems.filter((instance) =>
+    bulkSelectedInstanceIds.includes(instance.id),
+  );
+  const missingBulkSelectedInstanceIds = bulkSelectedInstanceIds.filter(
+    (instanceId) => !inventoryItems.some((instance) => instance.id === instanceId),
+  );
   const effectiveSelectedForegroundConnectionId =
     selectedForegroundConnectionId !== undefined &&
     foregroundConnections.some(
@@ -1198,6 +1217,75 @@ export function TuiShell({
 
     if (
       activeRoute.id === "instances" &&
+      input === "0" &&
+      bulkSelectedInstanceIds.length > 0
+    ) {
+      setBulkSelectedInstanceIds([]);
+      setStatus("Cleared bulk instance targets.");
+      return;
+    }
+
+    if (
+      activeRoute.id === "instances" &&
+      input === " " &&
+      effectiveSelectedInstanceId !== undefined &&
+      onBulkInstanceMutation !== undefined
+    ) {
+      const selected = inventoryItems.find(
+        (instance) => instance.id === effectiveSelectedInstanceId,
+      );
+      if (selected === undefined) {
+        return;
+      }
+      if (selected.freshness !== "fresh") {
+        setStatus(`Cannot mark ${selected.id}; refresh stale or unobserved state first.`);
+        return;
+      }
+      setBulkSelectedInstanceIds((current) =>
+        current.includes(selected.id)
+          ? current.filter((instanceId) => instanceId !== selected.id)
+          : [...current, selected.id],
+      );
+      setStatus(
+        bulkSelectedInstanceIds.includes(selected.id)
+          ? `Removed ${selected.id} from bulk targets.`
+          : `Added ${selected.id} to bulk targets.`,
+      );
+      return;
+    }
+
+    if (
+      activeRoute.id === "instances" &&
+      bulkSelectedInstanceIds.length > 0 &&
+      /^[1-9]$/.test(input)
+    ) {
+      if (onBulkInstanceMutation === undefined) {
+        return;
+      }
+      if (missingBulkSelectedInstanceIds.length > 0) {
+        setStatus(
+          `Bulk targets changed during refresh; clear or reselect ${missingBulkSelectedInstanceIds.join(", ")}.`,
+        );
+        return;
+      }
+      if (bulkSelectedInstances.some((instance) => instance.freshness !== "fresh")) {
+        setStatus("Bulk targets include stale state; refresh before dispatching a mutation.");
+        return;
+      }
+      const action = bulkAvailableInstanceActions(bulkSelectedInstances)[Number(input) - 1];
+      if (action !== undefined) {
+        const mutation = {
+          instanceIds: [...bulkSelectedInstanceIds],
+          action,
+        } satisfies TuiBulkInstanceMutation;
+        onBulkInstanceMutation(mutation);
+        setStatus(bulkInstanceMutationStatus(mutation));
+      }
+      return;
+    }
+
+    if (
+      activeRoute.id === "instances" &&
       effectiveSelectedInstanceId !== undefined &&
       onInstanceMutation !== undefined
     ) {
@@ -1303,7 +1391,9 @@ export function TuiShell({
                   readStatus={readStatus}
                   narrow={narrow}
                   selectedInstanceId={selectedInstanceId}
+                  bulkSelectedInstanceIds={bulkSelectedInstanceIds}
                   canMutateInstances={onInstanceMutation !== undefined}
+                  canBulkMutateInstances={onBulkInstanceMutation !== undefined}
                   foregroundConnectionFlow={foregroundConnectionFlow}
                   foregroundConnectionBusy={foregroundConnectionBusy}
                   foregroundConnections={foregroundConnections}
@@ -1358,11 +1448,11 @@ export function TuiShell({
           </Text>
         ) : screenReader ? (
           <Text>
-            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; on Instances, J and K select and number keys run lifecycle actions; on Connections, N starts a foreground Endpoint, P creates a persistent Endpoint, D starts or stops the daemon, lowercase J/K and X manage foreground Endpoints, uppercase J/K and C manage persistent Sessions; Q quits.
+            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; on Instances, J and K select, Space marks bulk targets, 0 clears marks, and number keys run lifecycle actions; on Connections, N starts a foreground Endpoint, P creates a persistent Endpoint, D starts or stops the daemon, lowercase J/K and X manage foreground Endpoints, uppercase J/K and C manage persistent Sessions; Q quits.
           </Text>
         ) : (
           <Text color={muted} wrap="wrap">
-            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? onInstanceMutation === undefined ? " · j/k select" : " · j/k select · a adopt · 1-4 actions" : activeRoute.id === "sessions" ? " · n foreground · p persistent · d daemon · j/k/x foreground · J/K/c persistent" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : ""} · q quit
+            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? onInstanceMutation === undefined ? " · j/k select" : onBulkInstanceMutation === undefined ? " · j/k select · a adopt · 1-4 actions" : " · j/k select · Space mark · 0 clear · a adopt · 1-4 actions" : activeRoute.id === "sessions" ? " · n foreground · p persistent · d daemon · j/k/x foreground · J/K/c persistent" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : ""} · q quit
           </Text>
         )}
       </Box>
@@ -1376,7 +1466,9 @@ interface RouteSurfaceProps {
   readonly readStatus: TuiReadStatus;
   readonly narrow: boolean;
   readonly selectedInstanceId?: string;
+  readonly bulkSelectedInstanceIds: readonly string[];
   readonly canMutateInstances: boolean;
+  readonly canBulkMutateInstances: boolean;
   readonly foregroundConnectionFlow?: ForegroundConnectionFlow;
   readonly foregroundConnectionBusy: boolean;
   readonly foregroundConnections: readonly TuiForegroundConnection[];
@@ -1402,7 +1494,9 @@ function RouteSurface({
   readStatus,
   narrow,
   selectedInstanceId,
+  bulkSelectedInstanceIds,
   canMutateInstances,
+  canBulkMutateInstances,
   foregroundConnectionFlow,
   foregroundConnectionBusy,
   foregroundConnections,
@@ -1469,7 +1563,9 @@ function RouteSurface({
         snapshot={snapshot}
         narrow={narrow}
         selectedInstanceId={selectedInstanceId}
+        bulkSelectedInstanceIds={bulkSelectedInstanceIds}
         canMutate={canMutateInstances}
+        canBulkMutate={canBulkMutateInstances}
       />
     );
   }
@@ -1580,14 +1676,18 @@ interface InstancesSurfaceProps {
   readonly snapshot: TuiReadSnapshot;
   readonly narrow: boolean;
   readonly selectedInstanceId?: string;
+  readonly bulkSelectedInstanceIds: readonly string[];
   readonly canMutate: boolean;
+  readonly canBulkMutate: boolean;
 }
 
 function InstancesSurface({
   snapshot,
   narrow,
   selectedInstanceId,
+  bulkSelectedInstanceIds,
   canMutate,
+  canBulkMutate,
 }: InstancesSurfaceProps): React.ReactElement {
   if (snapshot.instances.status === "failed") {
     return (
@@ -1618,6 +1718,11 @@ function InstancesSurface({
       ? items[0]
       : items.find((instance) => instance.id === selectedInstanceId);
   const selectionMissing = selectedInstanceId !== undefined && selected === undefined;
+  const marked = new Set(bulkSelectedInstanceIds);
+  const markedInstances = items.filter((instance) => marked.has(instance.id));
+  const missingMarkedIds = bulkSelectedInstanceIds.filter(
+    (instanceId) => !items.some((instance) => instance.id === instanceId),
+  );
 
   return (
     <Box flexDirection="column">
@@ -1625,18 +1730,26 @@ function InstancesSurface({
         <PartialInventoryNotice failedProviders={failedProviderOutcomes} />
       )}
       <Text>
-        j/k select instance{canMutate ? " · a adopt · 1-4 lifecycle actions" : ""} · r refresh
+        j/k select instance{canBulkMutate ? " · Space mark/unmark · 0 clear marks" : ""}{canMutate ? " · a adopt · 1-4 lifecycle actions" : ""} · r refresh
       </Text>
       <Box marginTop={1} flexDirection="column">
         {items.map((instance) => (
           <Text key={instance.id} bold={instance.id === selected?.id}>
             {instance.id === selected?.id ? "> " : "  "}
+            {canBulkMutate ? (marked.has(instance.id) ? "[x] " : "[ ] ") : ""}
             {narrow
-              ? `${instance.name ?? instance.id} · ${instance.state ?? "unobserved"}`
-              : `${instance.name ?? instance.id} · state=${instance.state ?? "unobserved"} · provider=${instance.providerId} · management=${instance.management} · actions=${formatActions(availableInstanceActions(instance))}`}
+              ? `${instance.name ?? instance.id} · ${instance.state ?? "unobserved"} · ${instance.freshness}`
+              : `${instance.name ?? instance.id} · state=${instance.state ?? "unobserved"} · freshness=${instance.freshness} · provider=${instance.providerId} · management=${instance.management} · actions=${formatActions(availableInstanceActions(instance))}`}
           </Text>
         ))}
       </Box>
+      {bulkSelectedInstanceIds.length === 0 ? null : (
+        <BulkInstanceSelection
+          instanceIds={bulkSelectedInstanceIds}
+          instances={markedInstances}
+          missingInstanceIds={missingMarkedIds}
+        />
+      )}
       {selectionMissing ? (
         <Box marginTop={1} flexDirection="column">
           <Text bold>Selected instance is no longer visible.</Text>
@@ -1655,9 +1768,24 @@ function InstancesSurface({
             <Text>Provider state: {String(selected.rawState)}</Text>
           )}
           <Text>Freshness: {selected.freshness}</Text>
+          {selected.observedAt === undefined ? null : (
+            <Text>Last observed: {selected.observedAt}</Text>
+          )}
+          {selected.freshness === "stale" ? (
+            <Text>Observation: retained last-known state; the current provider refresh failed.</Text>
+          ) : selected.freshness === "unobserved" ? (
+            <Text>Observation: identity is known, but no current provider state is available.</Text>
+          ) : null}
           <Text>Management: {selected.management}</Text>
           <Text>Available actions: {formatActions(availableInstanceActions(selected))}</Text>
-          {canMutate ? <InstanceActionGuidance instance={selected} /> : null}
+          {bulkSelectedInstanceIds.length > 0 && canBulkMutate ? (
+            <BulkInstanceActionGuidance
+              instances={markedInstances}
+              missingInstanceIds={missingMarkedIds}
+            />
+          ) : canMutate ? (
+            <InstanceActionGuidance instance={selected} />
+          ) : null}
         </Box>
       )}
     </Box>
@@ -2199,6 +2327,23 @@ function availableInstanceActions(
   );
 }
 
+function bulkAvailableInstanceActions(
+  instances: readonly TuiInstanceReadItem[],
+): readonly AvailableAction[] {
+  return PROVIDER_CAPABILITIES.filter((action) =>
+    instances.some((instance) => availableInstanceActions(instance).includes(action)),
+  );
+}
+
+function bulkActionSupportCount(
+  instances: readonly TuiInstanceReadItem[],
+  action: AvailableAction,
+): number {
+  return instances.filter((instance) =>
+    availableInstanceActions(instance).includes(action),
+  ).length;
+}
+
 function instanceMutationForInput(
   instance: TuiInstanceReadItem,
   input: string,
@@ -2225,6 +2370,10 @@ function instanceMutationStatus(mutation: TuiInstanceMutation): string {
     : `Requested ${mutation.action} for ${mutation.instanceId}.`;
 }
 
+function bulkInstanceMutationStatus(mutation: TuiBulkInstanceMutation): string {
+  return `Requested ${mutation.action} for ${mutation.instanceIds.length} marked ${mutation.instanceIds.length === 1 ? "instance" : "instances"}.`;
+}
+
 function instanceMutationTitle(mutation: TuiInstanceMutation): string {
   if (mutation.kind === "adopt") {
     return "Adopt instance";
@@ -2237,6 +2386,27 @@ function instanceConfirmationTarget(
   details: InstanceDestroyConfirmationDetails,
 ): string {
   return `${escapeTerminalText(details.instanceId)} · provider=${escapeTerminalText(details.providerId)} · management=${details.management}`;
+}
+
+function bulkInstanceMutationTitle(mutation: TuiBulkInstanceMutation): string {
+  const action = mutation.action.slice("instance.".length);
+  return `${action[0]?.toUpperCase() ?? ""}${action.slice(1)} selected instances`;
+}
+
+function bulkInstanceConfirmationResources(
+  details: BulkInstanceDestroyConfirmationDetails,
+): readonly string[] {
+  return details.targets.map((target) => {
+    const provider =
+      target.providerId === undefined
+        ? "provider=unknown"
+        : `provider=${escapeTerminalText(target.providerId)}`;
+    const management =
+      target.management === undefined
+        ? "management=unknown"
+        : `management=${target.management}`;
+    return `${escapeTerminalText(target.instanceId)} · ${provider} · ${management}`;
+  });
 }
 
 function destroyAffectedResources(
@@ -2253,6 +2423,64 @@ function destroyAffectedResources(
       ? []
       : [`${details.impact.pendingCleanupCount} pending connection cleanup(s)`]),
   ];
+}
+
+function BulkInstanceSelection({
+  instanceIds,
+  instances,
+  missingInstanceIds,
+}: {
+  readonly instanceIds: readonly string[];
+  readonly instances: readonly TuiInstanceReadItem[];
+  readonly missingInstanceIds: readonly string[];
+}): React.ReactElement {
+  return (
+    <Box marginTop={1} flexDirection="column">
+      <Text bold>
+        Bulk targets ({instanceIds.length})
+      </Text>
+      {instanceIds.map((instanceId) => {
+        const instance = instances.find((item) => item.id === instanceId);
+        return instance === undefined ? (
+          <Text key={instanceId}>{instanceId} · no longer visible</Text>
+        ) : (
+          <Text key={instanceId}>
+            {instance.id} · provider={instance.providerId} · freshness={instance.freshness} · management={instance.management}
+          </Text>
+        );
+      })}
+      {missingInstanceIds.length === 0 ? null : (
+        <Text>Bulk mutation is blocked until missing targets are cleared or visible again.</Text>
+      )}
+    </Box>
+  );
+}
+
+function BulkInstanceActionGuidance({
+  instances,
+  missingInstanceIds,
+}: {
+  readonly instances: readonly TuiInstanceReadItem[];
+  readonly missingInstanceIds: readonly string[];
+}): React.ReactElement {
+  if (missingInstanceIds.length > 0) {
+    return <Text>Bulk actions are blocked because part of the exact target set is no longer visible.</Text>;
+  }
+  if (instances.some((instance) => instance.freshness !== "fresh")) {
+    return <Text>Refresh before bulk mutation; stale or unobserved targets are read-only.</Text>;
+  }
+  const actions = bulkAvailableInstanceActions(instances);
+  if (actions.length === 0) {
+    return <Text>No normalized lifecycle action is currently advertised by the marked targets.</Text>;
+  }
+  return (
+    <Box flexDirection="column">
+      <Text>
+        Bulk actions: {actions.map((action, index) => `${index + 1} ${action.slice("instance.".length)} (${bulkActionSupportCount(instances, action)}/${instances.length} advertise)`).join(" · ")}
+      </Text>
+      <Text>Unsupported, failed and outcome-unknown targets stay visible independently; no target is retried blindly.</Text>
+    </Box>
+  );
 }
 
 function InstanceActionGuidance({
@@ -2319,6 +2547,20 @@ function firstInstanceId(snapshot: TuiReadSnapshot | undefined): string | undefi
     : undefined;
 }
 
+function canStartInstanceMutation(
+  operation: TuiOperationPresentation | undefined,
+): boolean {
+  if (operation?.instanceResults !== undefined) {
+    return false;
+  }
+  return (
+    operation === undefined ||
+    operation.phase === "completed" ||
+    operation.phase === "failed" ||
+    operation.phase === "cancelled"
+  );
+}
+
 function operationActionForInput(
   operation: TuiOperationPresentation,
   input: string,
@@ -2376,8 +2618,10 @@ function HelpPanel({ colorEnabled }: { readonly colorEnabled: boolean }): React.
       <Text>? — toggle this help</Text>
       <Text>r — refresh current section</Text>
       <Text>j / k — select next / previous instance on Instances</Text>
+      <Text>Space — mark or unmark the selected fresh instance for a bulk lifecycle action</Text>
+      <Text>0 — clear the exact bulk target set</Text>
       <Text>a — adopt the selected discovered instance when offered</Text>
-      <Text>1-4 — run the shown lifecycle action on the selected instance</Text>
+      <Text>1-4 — run the shown lifecycle action on the selected instance, or on all marked targets</Text>
       <Text>n — start a TUI-owned foreground Endpoint on Connections</Text>
       <Text>p — create a daemon-owned persistent Endpoint</Text>
       <Text>d — start or stop the managed daemon</Text>
@@ -2397,6 +2641,7 @@ export interface TuiAppProps {
   readonly screenReader?: boolean;
   readonly readLoader?: TuiReadLoader;
   readonly instanceMutationRunner?: TuiInstanceMutationRunner;
+  readonly bulkInstanceMutationRunner?: TuiBulkInstanceMutationRunner;
   readonly foregroundConnectionOperations?: TuiForegroundConnectionOperations;
   readonly daemonOperations?: TuiDaemonOperations;
   readonly providerMutationRunner?: TuiProviderMutationRunner;
@@ -2408,6 +2653,7 @@ export function TuiApp({
   screenReader = false,
   readLoader,
   instanceMutationRunner,
+  bulkInstanceMutationRunner,
   foregroundConnectionOperations,
   daemonOperations,
   providerMutationRunner,
@@ -2435,9 +2681,12 @@ export function TuiApp({
   const [navigateToInstanceId, setNavigateToInstanceId] = useState<string | undefined>();
   const [snapshotStale, setSnapshotStale] = useState(false);
   const controllerRef = useRef<AbortController | undefined>(undefined);
+  const bulkMutationControllerRef = useRef<AbortController | undefined>(undefined);
   const providerFlowBusyRef = useRef(false);
 
-  const refresh = useCallback(async (): Promise<boolean> => {
+  const refresh = useCallback(async (
+    options: { readonly quiet?: boolean } = {},
+  ): Promise<boolean> => {
     if (readLoader === undefined) {
       return false;
     }
@@ -2445,14 +2694,16 @@ export function TuiApp({
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
-    setOperation(
-      presentWorkingOperation({
-        title: "Refresh EasyServer status",
-        detail: "Reading provider, instance and daemon state.",
-        activity: "loading",
-        cancellable: true,
-      }),
-    );
+    if (options.quiet !== true) {
+      setOperation(
+        presentWorkingOperation({
+          title: "Refresh EasyServer status",
+          detail: "Reading provider, instance and daemon state.",
+          activity: "loading",
+          cancellable: true,
+        }),
+      );
+    }
 
     try {
       const next = await readLoader({ signal: controller.signal });
@@ -2461,20 +2712,24 @@ export function TuiApp({
       }
       setSnapshot(next);
       setSnapshotStale(false);
-      setOperation(undefined);
+      if (options.quiet !== true) {
+        setOperation(undefined);
+      }
       return true;
     } catch (error) {
       if (controllerRef.current !== controller || controller.signal.aborted) {
         return false;
       }
       setSnapshotStale(true);
-      setOperation(
-        presentOperationError({
-          title: "Refresh EasyServer status",
-          operation: "read",
-          error,
-        }),
-      );
+      if (options.quiet !== true) {
+        setOperation(
+          presentOperationError({
+            title: "Refresh EasyServer status",
+            operation: "read",
+            error,
+          }),
+        );
+      }
       return false;
     }
   }, [readLoader]);
@@ -2485,6 +2740,7 @@ export function TuiApp({
     }
     return () => {
       controllerRef.current?.abort();
+      bulkMutationControllerRef.current?.abort();
     };
   }, [readLoader, refresh]);
 
@@ -2879,6 +3135,98 @@ export function TuiApp({
     [instanceMutationRunner, refresh],
   );
 
+  const mutateBulkInstances = useCallback(
+    async (mutation: TuiBulkInstanceMutation) => {
+      if (bulkInstanceMutationRunner === undefined) {
+        return;
+      }
+
+      bulkMutationControllerRef.current?.abort();
+      const controller = new AbortController();
+      bulkMutationControllerRef.current = controller;
+      const title = bulkInstanceMutationTitle(mutation);
+      const requestedResults = mutation.instanceIds.map((instanceId) => ({
+        instanceId,
+        status: "requested" as const,
+      }));
+      const warnings: string[] = [];
+      setOperation(
+        presentWorkingOperation({
+          title,
+          detail: `${mutation.instanceIds.length} explicit ${mutation.instanceIds.length === 1 ? "target" : "targets"}.`,
+          activity: "requested",
+          cancellable: true,
+          instanceResults: requestedResults,
+        }),
+      );
+
+      try {
+        const result = await bulkInstanceMutationRunner(
+          mutation,
+          { signal: controller.signal },
+          {
+            progress(progress) {
+              setOperation(
+                presentWorkingOperation({
+                  title,
+                  detail:
+                    progress === "observing"
+                      ? "Observing confirmed successful targets through host convergence."
+                      : "Dispatching one host-owned bulk lifecycle request; undispatched targets remain cancellable.",
+                  activity: progress,
+                  cancellable: !controller.signal.aborted,
+                  instanceResults: requestedResults,
+                }),
+              );
+            },
+            warning(message) {
+              warnings.push(message);
+            },
+            confirm(prompt, details, context) {
+              if (context.signal.aborted) {
+                return Promise.resolve(false);
+              }
+              return new Promise<boolean>((resolve) => {
+                setPendingInstanceConfirmation({
+                  resolve,
+                  workingTitle: title,
+                  bulkTargetIds: details.targets.map((target) => target.instanceId),
+                });
+                setOperation(
+                  presentMutationConfirmation(prompt, {
+                    target: `${details.targets.length} selected Compute ${details.targets.length === 1 ? "Instance" : "Instances"}`,
+                    affectedResources: bulkInstanceConfirmationResources(details),
+                  }),
+                );
+              });
+            },
+          },
+        );
+
+        if (bulkMutationControllerRef.current === controller) {
+          bulkMutationControllerRef.current = undefined;
+        }
+        if (!controller.signal.aborted) {
+          await refresh({ quiet: true });
+        }
+        setOperation(presentBulkInstanceResult(title, result, warnings));
+      } catch (error) {
+        if (bulkMutationControllerRef.current === controller) {
+          bulkMutationControllerRef.current = undefined;
+        }
+        setPendingInstanceConfirmation(undefined);
+        setOperation(
+          presentOperationError({
+            title,
+            operation: "mutation",
+            error,
+          }),
+        );
+      }
+    },
+    [bulkInstanceMutationRunner, refresh],
+  );
+
   const mutateProvider = useCallback(
     async (mutation: TuiProviderMutation) => {
       if (providerMutationRunner === undefined) {
@@ -3181,8 +3529,20 @@ export function TuiApp({
           action === "confirm"
             ? presentWorkingOperation({
                 title: pending.workingTitle,
-                detail: "Dispatching the confirmed instance operation.",
+                detail:
+                  pending.bulkTargetIds === undefined
+                    ? "Dispatching the confirmed instance operation."
+                    : "Dispatching the confirmed bulk instance operation; undispatched targets remain cancellable.",
                 activity: "dispatching",
+                ...(pending.bulkTargetIds === undefined
+                  ? {}
+                  : {
+                      cancellable: true,
+                      instanceResults: pending.bulkTargetIds.map((instanceId) => ({
+                        instanceId,
+                        status: "requested" as const,
+                      })),
+                    }),
               })
             : undefined,
         );
@@ -3219,6 +3579,18 @@ export function TuiApp({
         return;
       }
       if (action === "cancel") {
+        if (bulkMutationControllerRef.current !== undefined) {
+          bulkMutationControllerRef.current.abort();
+          setOperation(
+            presentWorkingOperation({
+              title: "Bulk lifecycle cancellation requested",
+              detail:
+                "Undispatched targets will be cancelled. Already dispatched mutations may complete or become outcome-unknown; waiting for the host-owned per-target result.",
+              activity: "dispatching",
+            }),
+          );
+          return;
+        }
         const controller = controllerRef.current;
         controllerRef.current = undefined;
         controller?.abort();
@@ -3301,9 +3673,16 @@ export function TuiApp({
         daemonOperations === undefined ? undefined : closePersistentSession
       }
       onInstanceMutation={
-        instanceMutationRunner !== undefined && operation?.phase !== "working"
+        instanceMutationRunner !== undefined && canStartInstanceMutation(operation)
           ? (mutation) => {
               void mutateInstance(mutation);
+            }
+          : undefined
+      }
+      onBulkInstanceMutation={
+        bulkInstanceMutationRunner !== undefined && canStartInstanceMutation(operation)
+          ? (mutation) => {
+              void mutateBulkInstances(mutation);
             }
           : undefined
       }
@@ -3340,6 +3719,7 @@ export interface TuiRuntimeOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly readLoader?: TuiReadLoader;
   readonly instanceMutationRunner?: TuiInstanceMutationRunner;
+  readonly bulkInstanceMutationRunner?: TuiBulkInstanceMutationRunner;
   readonly foregroundConnectionOperations?: TuiForegroundConnectionOperations;
   readonly daemonOperations?: TuiDaemonOperations;
   readonly providerMutationRunner?: TuiProviderMutationRunner;
@@ -3356,6 +3736,7 @@ export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
       screenReader={screenReader}
       readLoader={options.readLoader}
       instanceMutationRunner={options.instanceMutationRunner}
+      bulkInstanceMutationRunner={options.bulkInstanceMutationRunner}
       foregroundConnectionOperations={options.foregroundConnectionOperations}
       daemonOperations={options.daemonOperations}
       providerMutationRunner={options.providerMutationRunner}
@@ -3378,6 +3759,7 @@ export async function runTui(): Promise<void> {
   const app = renderTui({
     readLoader: loadDefaultTuiReadSnapshot,
     instanceMutationRunner: createDefaultTuiInstanceMutationRunner(),
+    bulkInstanceMutationRunner: createDefaultTuiBulkInstanceMutationRunner(),
     foregroundConnectionOperations: createDefaultTuiForegroundConnectionOperations(),
     daemonOperations: createDefaultTuiDaemonOperations(),
     providerMutationRunner: createDefaultTuiProviderMutationRunner(),

@@ -1358,6 +1358,56 @@ test("degraded provider state remains visible while healthy instance inventory s
   assert.match(view.lastFrame(), /Remediation: verify the installed module and compatibility/);
 });
 
+test("stale retained instance state is visibly distinct from a fresh provider observation", async () => {
+  const snapshot = readSnapshot({
+    instances: {
+      status: "ready",
+      complete: false,
+      providerOutcomes: [
+        {
+          providerId: "offline",
+          status: "failed",
+          error: {
+            code: "provider-unavailable",
+            message: "Provider offline inventory refresh failed",
+          },
+        },
+      ],
+      items: [
+        {
+          id: "instance:retained",
+          providerId: "offline",
+          providerExternalId: "remote-retained",
+          management: "managed",
+          name: "Retained GPU",
+          freshness: "stale",
+          state: "running",
+          observedAt: "2026-08-12T10:00:00.000Z",
+          availableActions: ["instance.stop"],
+        },
+      ],
+    },
+  });
+  const view = render(shell({
+    width: 100,
+    readSnapshot: snapshot,
+    readStatus: "ready",
+    onInstanceMutation() {},
+  }));
+
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+
+  assert.match(view.lastFrame(), /Retained GPU.*freshness=stale/);
+  assert.match(view.lastFrame(), /Freshness: stale/);
+  assert.match(view.lastFrame(), /Last observed: 2026-08-12T10:00:00\.000Z/);
+  assert.match(view.lastFrame(), /retained last-known state/);
+  assert.match(view.lastFrame(), /Available actions: none/);
+  assert.match(view.lastFrame(), /stale or unobserved state is\s+read-only/);
+});
+
 test("empty instance guidance reflects configured but degraded providers", async () => {
   const snapshot = readSnapshot({
     providers: {
@@ -1445,6 +1495,80 @@ test("instance actions come only from provider-declared availableActions", async
   await tick();
   assert.match(view.lastFrame(), /EasyServer ID: instance:b/);
   assert.match(view.lastFrame(), /Available actions: instance\.stop, instance\.destroy/);
+});
+
+test("Instances multi-select preserves the exact target set and uses host bulk action semantics", async () => {
+  const mutations = [];
+  const snapshot = readSnapshot({
+    instances: {
+      status: "ready",
+      complete: true,
+      providerOutcomes: [
+        { providerId: "alpha", status: "fresh" },
+        { providerId: "beta", status: "fresh" },
+      ],
+      items: [
+        {
+          id: "instance:a",
+          providerId: "alpha",
+          providerExternalId: "remote-a",
+          management: "managed",
+          freshness: "fresh",
+          state: "running",
+          rawState: "RUNNING",
+          availableActions: ["instance.stop"],
+        },
+        {
+          id: "instance:b",
+          providerId: "beta",
+          providerExternalId: "remote-b",
+          management: "managed",
+          freshness: "fresh",
+          state: "running",
+          rawState: "RUNNING",
+          availableActions: ["instance.restart"],
+        },
+      ],
+    },
+  });
+  const view = render(shell({
+    width: 100,
+    readSnapshot: snapshot,
+    readStatus: "ready",
+    onBulkInstanceMutation(mutation) {
+      mutations.push(mutation);
+    },
+  }));
+
+  view.stdin.write("\t");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write(" ");
+  await tick();
+  view.stdin.write("j");
+  await tick();
+  view.stdin.write(" ");
+  await tick();
+
+  assert.match(view.lastFrame(), /Bulk targets \(2\)/);
+  assert.match(view.lastFrame(), /instance:a · provider=alpha · freshness=fresh/);
+  assert.match(view.lastFrame(), /instance:b · provider=beta · freshness=fresh/);
+  assert.match(view.lastFrame(), /1 stop \(1\/2 advertise\)/);
+  assert.match(view.lastFrame(), /2 restart \(1\/2 advertise\)/);
+
+  view.stdin.write("1");
+  await tick();
+  assert.deepEqual(mutations, [
+    {
+      instanceIds: ["instance:a", "instance:b"],
+      action: "instance.stop",
+    },
+  ]);
+
+  view.stdin.write("0");
+  await tick();
+  assert.doesNotMatch(view.lastFrame(), /Bulk targets \(2\)/);
 });
 
 test("instance selection is preserved by canonical ID across reorder and narrow layout", async () => {

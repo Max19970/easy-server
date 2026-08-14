@@ -197,6 +197,7 @@ export function presentCompletedOperation(
 export function presentBulkInstanceResult(
   title: string,
   result: TuiBulkInstanceMutationResult,
+  warnings: readonly string[] = [],
 ): TuiOperationPresentation {
   const observationFailures = result.results.filter(
     (item) => item.status === "completed" && item.observationError !== undefined,
@@ -228,7 +229,7 @@ export function presentBulkInstanceResult(
     phase,
     tone,
     title: `${title} ${suffix}`,
-    detail: `requested=${result.summary.requested} completed=${result.summary.completed} failed=${result.summary.failed} outcome-unknown=${result.summary.outcomeUnknown}${observationFailures === 0 ? "" : ` observation-failed=${observationFailures}`}`,
+    detail: `requested=${result.summary.requested} completed=${result.summary.completed} failed=${result.summary.failed} outcome-unknown=${result.summary.outcomeUnknown}${observationFailures === 0 ? "" : ` observation-failed=${observationFailures}`}${warnings.length === 0 ? "" : ` · warnings: ${warnings.join(" | ")}`}`,
     instanceResults: result.results.map((item) => ({
       instanceId: item.instanceId,
       status: item.status,
