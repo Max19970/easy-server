@@ -20,8 +20,8 @@ function plugin({
       displayName: "Fake Plugin",
       version: "1.0.0",
       compatibility: {
-        easyserver: "^0.1.0",
-        pluginSdk: "^0.1.0",
+        easyserver: "^0.2.0",
+        pluginSdk: "^0.2.0",
       },
       provider: {
         id: providerId,
@@ -201,7 +201,7 @@ test("plugin load deadline keeps a standalone process alive until it fires", asy
         id: "fake.plugin",
         displayName: "Fake Plugin",
         version: "1.0.0",
-        compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+        compatibility: { easyserver: "^0.2.0", pluginSdk: "^0.2.0" },
         provider: {
           id: "fake",
           displayName: "Fake Provider",
@@ -324,8 +324,8 @@ test("disable stops new admission while an existing lease keeps its adapter", as
 test("accepts release-compatible SemVer ranges and rejects the next incompatible minor", async () => {
   const registry = new ProviderRegistry();
   const candidate = plugin();
-  candidate.manifest.compatibility.easyserver = "^0.1.0";
-  candidate.manifest.compatibility.pluginSdk = ">=0.1.0 <0.2.0";
+  candidate.manifest.compatibility.easyserver = "^0.2.0";
+  candidate.manifest.compatibility.pluginSdk = ">=0.2.0 <0.3.0";
   const host = new PluginHost(registry, async () => candidate);
 
   await host.load(["compatible-release-plugin"]);
@@ -338,14 +338,14 @@ test("accepts release-compatible SemVer ranges and rejects the next incompatible
     pluginId: "future.plugin",
     providerId: "future",
   });
-  futureCandidate.manifest.compatibility.easyserver = "^0.2.0";
-  futureCandidate.manifest.compatibility.pluginSdk = "^0.1.0";
+  futureCandidate.manifest.compatibility.easyserver = "^0.3.0";
+  futureCandidate.manifest.compatibility.pluginSdk = "^0.2.0";
   const futureHost = new PluginHost(futureRegistry, async () => futureCandidate);
 
   await futureHost.load(["future-release-plugin"]);
 
   assert.equal(futureHost.listPlugins()[0].state, "failed");
-  assert.match(futureHost.listPlugins()[0].error, /requires EasyServer \^0\.2\.0/);
+  assert.match(futureHost.listPlugins()[0].error, /requires EasyServer \^0\.3\.0/);
   assert.deepEqual(futureRegistry.listProviderIds(), []);
 });
 

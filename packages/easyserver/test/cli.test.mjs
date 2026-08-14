@@ -43,7 +43,7 @@ const partialHealthyPlugin = `data:text/javascript,${encodeURIComponent(`
       id: "fixture.partial-healthy",
       displayName: "Partial Healthy Fixture",
       version: "1.0.0",
-      compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+      compatibility: { easyserver: "^0.2.0", pluginSdk: "^0.2.0" },
       provider: {
         id: "partial-healthy",
         displayName: "Partial Healthy",
@@ -72,7 +72,7 @@ const partialFailingPlugin = `data:text/javascript,${encodeURIComponent(`
       id: "fixture.partial-failing",
       displayName: "Partial Failing Fixture",
       version: "1.0.0",
-      compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+      compatibility: { easyserver: "^0.2.0", pluginSdk: "^0.2.0" },
       provider: {
         id: "partial-failing",
         displayName: "Partial Failing",
@@ -98,7 +98,7 @@ const incompatiblePlugin = `data:text/javascript,${encodeURIComponent(`
       id: "fixture.incompatible",
       displayName: "Incompatible Fixture",
       version: "1.0.0",
-      compatibility: { easyserver: "^0.2.0", pluginSdk: "^0.1.0" },
+      compatibility: { easyserver: "^0.3.0", pluginSdk: "^0.2.0" },
       provider: {
         id: "incompatible",
         displayName: "Incompatible Provider",
@@ -118,7 +118,7 @@ const providerCollisionPlugin = `data:text/javascript,${encodeURIComponent(`
       id: "fixture.collision",
       displayName: "Provider Collision Fixture",
       version: "1.0.0",
-      compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+      compatibility: { easyserver: "^0.2.0", pluginSdk: "^0.2.0" },
       provider: {
         id: "fixture",
         displayName: "Fixture Provider",
@@ -142,7 +142,7 @@ const terminalOutputPlugin = `data:text/javascript,${encodeURIComponent(`
       id: "fixture.terminal-output",
       displayName: "Terminal Output Fixture",
       version: "1.0.0",
-      compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+      compatibility: { easyserver: "^0.2.0", pluginSdk: "^0.2.0" },
       provider: {
         id: "terminal-output",
         displayName: "Terminal Output Provider",
@@ -324,7 +324,7 @@ export default {
     id: ${JSON.stringify(`fixture.delayed.${providerId}`)},
     displayName: "Delayed Fixture",
     version: "1.0.0",
-    compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+    compatibility: { easyserver: "^0.2.0", pluginSdk: "^0.2.0" },
     provider: {
       id: ${JSON.stringify(providerId)},
       displayName: "Delayed Provider",
@@ -519,7 +519,7 @@ test("no-argument non-TTY invocation fails without terminal control output", () 
 test("prints version", () => {
   const result = run("--version");
   assert.equal(result.status, 0);
-  assert.equal(result.stdout, "0.1.0\n");
+  assert.equal(result.stdout, "0.2.0\n");
 });
 
 test("command mode never initializes the React or Ink runtime", () => {
@@ -529,7 +529,7 @@ test("command mode never initializes the React or Ink runtime", () => {
 
   const versionResult = runWithoutTuiRuntime("--version");
   assert.equal(versionResult.status, 0, versionResult.stderr);
-  assert.equal(versionResult.stdout, "0.1.0\n");
+  assert.equal(versionResult.stdout, "0.2.0\n");
 
   const namedCommandResult = runWithoutTuiRuntime("plugins", "list");
   assert.equal(namedCommandResult.status, 0, namedCommandResult.stderr);
@@ -567,7 +567,7 @@ test("doctor emits a privacy-safe troubleshooting payload", async () => {
   assert.equal(result.status, 0, result.stderr);
   const report = JSON.parse(result.stdout);
   assert.equal(report.schemaVersion, 1);
-  assert.equal(report.easyserver.version, "0.1.0");
+  assert.equal(report.easyserver.version, "0.2.0");
   assert.equal(report.state.configuredPlugins, 1);
   assert.equal(report.state.credentialBindings, 1);
   assert.equal(report.state.instanceBindings, 1);
@@ -1011,7 +1011,7 @@ test("configured incompatible plugin fails without rewriting durable state", asy
   const list = runWithState(stateFile, "plugins", "list");
 
   assert.equal(list.status, 0);
-  assert.match(list.stdout, /^failed\s+data:text\/javascript,.*requires EasyServer \^0\.2\.0/m);
+  assert.match(list.stdout, /^failed\s+data:text\/javascript,.*requires EasyServer \^0\.3\.0/m);
   assert.equal(await readFile(stateFile, "utf8"), persisted);
 });
 
@@ -1233,7 +1233,7 @@ export default {
     id: "fixture.destroy-confirmation",
     displayName: "Destroy Confirmation Fixture",
     version: "1.0.0",
-    compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+    compatibility: { easyserver: "^0.2.0", pluginSdk: "^0.2.0" },
     provider: {
       id: "destructive-cli",
       displayName: "Destructive CLI Fixture",
@@ -1820,7 +1820,7 @@ export default {
     id: "fixture.handoff-failure",
     displayName: "Handoff Failure Fixture",
     version: "1.0.0",
-    compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+    compatibility: { easyserver: "^0.2.0", pluginSdk: "^0.2.0" },
     provider: {
       id: "handoff-failure",
       displayName: "Handoff Failure Provider",

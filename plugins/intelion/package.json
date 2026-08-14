@@ -1,6 +1,6 @@
 {
   "name": "@easyai101/easyserver-plugin-intelion",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "EasyServer Provider Plugin for Intelion.cloud.",
   "license": "MIT",
   "type": "module",
@@ -51,6 +51,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@easyai101/easyserver-plugin-sdk": "^0.1.0"
+    "@easyai101/easyserver-plugin-sdk": "^0.2.0"
   }
 }

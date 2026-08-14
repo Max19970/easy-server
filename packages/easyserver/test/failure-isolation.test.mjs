@@ -76,7 +76,7 @@ function syntheticPlugin({ pluginId, providerId, feature }) {
       id: pluginId,
       displayName: pluginId,
       version: "1.0.0",
-      compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+      compatibility: { easyserver: "^0.2.0", pluginSdk: "^0.2.0" },
       provider: {
         id: providerId,
         displayName: providerId,

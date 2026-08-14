@@ -166,7 +166,7 @@ async function verifyExternalSdkConsumer(sdkTarball) {
           node: ">=24.18.1 <25",
         },
         dependencies: {
-          "@easyai101/easyserver-plugin-sdk": "^0.1.0",
+          "@easyai101/easyserver-plugin-sdk": "^0.2.0",
         },
       },
       null,
@@ -249,8 +249,8 @@ const plugin: ProviderPlugin = {
     displayName: "External TypeScript Provider",
     version: "0.1.0",
     compatibility: {
-      easyserver: "^0.1.0",
-      pluginSdk: "^0.1.0",
+      easyserver: "^0.2.0",
+      pluginSdk: "^0.2.0",
     },
     provider: {
       id: "external-ts",
@@ -266,7 +266,7 @@ const parsed = parseProviderPlugin(plugin);
 const adapter = parsed.accessAdapters?.[0];
 if (
   parsed.manifest.id !== "external.ts-provider" ||
-  PLUGIN_SDK_VERSION !== "0.1.0" ||
+  PLUGIN_SDK_VERSION !== "0.2.0" ||
   adapter === undefined
 ) {
   throw new Error("Unexpected public SDK runtime result");
@@ -310,7 +310,7 @@ export default plugin;
   );
   assert.equal(
     installed.dependencies?.["@easyai101/easyserver-plugin-sdk"]?.version,
-    "0.1.0",
+    "0.2.0",
     "external consumer must resolve the packed SDK version",
   );
 
@@ -351,11 +351,11 @@ async function verifyCoreOnlyInstall(sdkTarball, cliTarball) {
 
   const result = runCli(prefix, "plugins", "list");
   assert.equal(result.stdout, "No provider plugins configured.\n");
-  assert.equal(runInstalledExecutable(prefix, "--version").stdout, "0.1.0\n");
+  assert.equal(runInstalledExecutable(prefix, "--version").stdout, "0.2.0\n");
 
   const diagnostics = JSON.parse(runCli(prefix, "doctor").stdout);
   assert.equal(diagnostics.schemaVersion, 1);
-  assert.equal(diagnostics.easyserver.version, "0.1.0");
+  assert.equal(diagnostics.easyserver.version, "0.2.0");
   assert.deepEqual(diagnostics.plugins, []);
   assert.equal(diagnostics.state.status, "empty");
 }
@@ -402,7 +402,7 @@ async function verifyPluginInstall({
   }
 
   runCli(prefix, "plugins", "disable", packageName);
-  assert.equal(runCli(prefix, "--version").stdout, "0.1.0\n");
+  assert.equal(runCli(prefix, "--version").stdout, "0.2.0\n");
 }
 
 async function verifyPackageLifecycle(sdkTarball, cliTarball, pluginTarball) {

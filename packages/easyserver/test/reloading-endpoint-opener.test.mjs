@@ -13,7 +13,7 @@ export default {
     id: "fixture.reloading-credential",
     displayName: "Reloading Credential Fixture",
     version: "1.0.0",
-    compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+    compatibility: { easyserver: "^0.2.0", pluginSdk: "^0.2.0" },
     credentials: [{ name: "api-key", required: true }],
     provider: {
       id: "reload-credential",

@@ -25,10 +25,10 @@ import {
 const validManifest = {
   id: "vastai",
   displayName: "Vast.ai",
-  version: "0.1.0",
+  version: "0.2.0",
   compatibility: {
-    easyserver: ">=0.1.0 <1.0.0",
-    pluginSdk: ">=0.1.0 <1.0.0",
+    easyserver: ">=0.2.0 <1.0.0",
+    pluginSdk: ">=0.2.0 <1.0.0",
   },
   provider: {
     id: "vastai",

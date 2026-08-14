@@ -17,8 +17,8 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const npmCli = process.env.npm_execpath;
 assert.ok(npmCli, "release artifacts must be built through npm");
-assert.equal(process.platform, "win32", "0.1.0 release artifacts are qualified on Windows only");
-assert.equal(process.arch, "x64", "0.1.0 release artifacts are qualified for x64 only");
+assert.equal(process.platform, "win32", "release artifacts are qualified on Windows only");
+assert.equal(process.arch, "x64", "release artifacts are qualified for x64 only");
 
 const rootManifest = JSON.parse(
   await readFile(join(repositoryRoot, "package.json"), "utf8"),

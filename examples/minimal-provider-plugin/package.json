@@ -1,6 +1,6 @@
 {
   "name": "@easyai101/easyserver-example-provider",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Minimal EasyServer Provider Plugin example.",
   "license": "MIT",
@@ -13,6 +13,6 @@
     "node": ">=24.18.1 <25"
   },
   "dependencies": {
-    "@easyai101/easyserver-plugin-sdk": "^0.1.0"
+    "@easyai101/easyserver-plugin-sdk": "^0.2.0"
   }
 }

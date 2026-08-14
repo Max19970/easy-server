@@ -644,7 +644,7 @@ test("setup admitted before disable may finish, but new setup cannot start after
         id: "fake.plugin",
         displayName: "Fake Plugin",
         version: "1.0.0",
-        compatibility: { easyserver: "^0.1.0", pluginSdk: "^0.1.0" },
+        compatibility: { easyserver: "^0.2.0", pluginSdk: "^0.2.0" },
         provider: {
           id: "fake",
           displayName: "Fake Provider",

@@ -58,9 +58,9 @@ export default {
   manifest: {
     id: "example.provider-plugin",
     displayName: "Example Provider",
-    version: "0.1.0",
+    version: "0.2.0",
     compatibility: {
-      easyserver: "^0.1.0",
+      easyserver: "^0.2.0",
       pluginSdk: `^${PLUGIN_SDK_VERSION}`,
     },
     credentials: [

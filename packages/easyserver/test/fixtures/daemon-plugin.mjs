@@ -7,8 +7,8 @@ export default {
     displayName: "Daemon Fixture Plugin",
     version: "1.0.0",
     compatibility: {
-      easyserver: "^0.1.0",
-      pluginSdk: "^0.1.0",
+      easyserver: "^0.2.0",
+      pluginSdk: "^0.2.0",
     },
     provider: {
       id: "daemon-fixture",
