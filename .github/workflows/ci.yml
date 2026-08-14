@@ -40,6 +40,9 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Verify Windows TUI terminal surface
+        run: npm run verify:tui-windows
+
       - name: Verify publishable tarballs
         run: npm pack --workspaces --dry-run
 
