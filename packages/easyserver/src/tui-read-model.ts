@@ -120,6 +120,7 @@ export interface TuiSessionSummary {
 }
 
 export interface TuiEndpointIntentReadItem {
+  readonly operationName: string;
   readonly name: string;
   readonly enabled: boolean;
   readonly state: EndpointIntentStatus["state"];
@@ -552,6 +553,7 @@ function summarizeEndpointIntents(
 
 function projectEndpointIntent(intent: EndpointIntentStatus): TuiEndpointIntentReadItem {
   return {
+    operationName: intent.name,
     name: escapeTerminalText(intent.name),
     enabled: intent.enabled,
     state: intent.state,

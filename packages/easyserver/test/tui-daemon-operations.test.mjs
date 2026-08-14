@@ -125,6 +125,56 @@ test("TUI persistent session close delegates to the daemon client by stable Sess
   assert.deepEqual(closed, ["session:cleanup-failed"]);
 });
 
+test("TUI Endpoint intent mutations delegate to the authenticated daemon client by stable intent name", async () => {
+  const calls = [];
+  const operations = createTuiDaemonOperations(
+    {
+      async requireClient() {
+        return {
+          async setEndpointIntentEnabled(name, enabled) {
+            calls.push(["enabled", name, enabled]);
+            return {
+              name,
+              enabled,
+              state: enabled ? "starting" : "disabled",
+              instanceId: "instance:fixture",
+              remoteHost: "127.0.0.1",
+              remotePort: 8188,
+            };
+          },
+          async retryEndpointIntent(name) {
+            calls.push(["retry", name]);
+            return {
+              name,
+              enabled: true,
+              state: "starting",
+              instanceId: "instance:fixture",
+              remoteHost: "127.0.0.1",
+              remotePort: 8188,
+            };
+          },
+          async removeEndpointIntent(name) {
+            calls.push(["remove", name]);
+          },
+        };
+      },
+    },
+    { async enrollHostKey() {} },
+  );
+
+  assert.equal((await operations.setEndpointIntentEnabled("comfy", false)).state, "disabled");
+  assert.equal((await operations.setEndpointIntentEnabled("comfy", true)).state, "starting");
+  assert.equal((await operations.retryEndpointIntent("comfy")).state, "starting");
+  await operations.removeEndpointIntent("comfy");
+
+  assert.deepEqual(calls, [
+    ["enabled", "comfy", false],
+    ["enabled", "comfy", true],
+    ["retry", "comfy"],
+    ["remove", "comfy"],
+  ]);
+});
+
 test("TUI persistent session idempotency keys are non-empty and distinct", () => {
   const first = newTuiPersistentSessionIdempotencyKey();
   const second = newTuiPersistentSessionIdempotencyKey();

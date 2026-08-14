@@ -283,6 +283,7 @@ test("daemon read snapshot projects durable Endpoint intents separately from liv
   assert.equal(snapshot.sessions.total, 0);
   assert.deepEqual(snapshot.endpointIntents.items, [
     {
+      operationName: "comfy\u001b[2J",
       name: "comfy\\u001b[2J",
       enabled: true,
       state: "live",
@@ -295,6 +296,7 @@ test("daemon read snapshot projects durable Endpoint intents separately from liv
       accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
     },
     {
+      operationName: "web",
       name: "web",
       enabled: true,
       state: "error",

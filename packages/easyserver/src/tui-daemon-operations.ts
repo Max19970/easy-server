@@ -11,6 +11,7 @@ import {
   type CreatePersistentSessionRequest,
   type LivePersistentConnectionSession,
 } from "./local-daemon.js";
+import type { EndpointIntentStatus } from "./endpoint-intent-service.js";
 import { resolveHostRuntimePaths, type HostRuntimePaths } from "./host-runtime.js";
 import { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
 
@@ -34,6 +35,9 @@ export interface TuiDaemonOperations {
     interaction?: TuiDaemonInteraction,
   ): Promise<LivePersistentConnectionSession>;
   closeSession(id: string): Promise<void>;
+  setEndpointIntentEnabled(name: string, enabled: boolean): Promise<EndpointIntentStatus>;
+  retryEndpointIntent(name: string): Promise<EndpointIntentStatus>;
+  removeEndpointIntent(name: string): Promise<void>;
 }
 
 export function newTuiPersistentSessionIdempotencyKey(): string {
@@ -62,6 +66,15 @@ export function createTuiDaemonOperations(
     },
     async closeSession(id) {
       await (await managed.requireClient()).closeSession(id);
+    },
+    async setEndpointIntentEnabled(name, enabled) {
+      return (await managed.requireClient()).setEndpointIntentEnabled(name, enabled);
+    },
+    async retryEndpointIntent(name) {
+      return (await managed.requireClient()).retryEndpointIntent(name);
+    },
+    async removeEndpointIntent(name) {
+      await (await managed.requireClient()).removeEndpointIntent(name);
     },
   };
 }

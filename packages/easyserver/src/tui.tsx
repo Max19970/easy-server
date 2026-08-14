@@ -24,6 +24,7 @@ import {
 } from "./tui-operation-model.js";
 import {
   loadDefaultTuiReadSnapshot,
+  type TuiEndpointIntentReadItem,
   type TuiInstanceReadItem,
   type TuiPersistentSessionReadItem,
   type TuiProviderWorkflowReadItem,
@@ -175,6 +176,10 @@ interface PendingDaemonStopConfirmation {
   readonly resolve: (stopped: boolean) => void;
 }
 
+interface PendingEndpointIntentRemoval {
+  readonly intent: TuiEndpointIntentReadItem;
+}
+
 type ForegroundConnectionStep =
   | "instance"
   | "remote-host"
@@ -221,6 +226,9 @@ export interface TuiShellProps {
     request: TuiPersistentSessionRequest,
   ) => Promise<boolean>;
   readonly onClosePersistentSession?: (id: string) => Promise<boolean>;
+  readonly onSetEndpointIntentEnabled?: (name: string, enabled: boolean) => Promise<boolean>;
+  readonly onRetryEndpointIntent?: (name: string) => Promise<boolean>;
+  readonly onRemoveEndpointIntent?: (intent: TuiEndpointIntentReadItem) => void;
   readonly onProviderMutation?: (mutation: TuiProviderMutation) => void;
   readonly providerInteractiveScreen?: ProviderInteractiveScreen;
   readonly providerInteractiveDisabled?: boolean;
@@ -251,6 +259,9 @@ export function TuiShell({
   onStopDaemon,
   onCreatePersistentSession,
   onClosePersistentSession,
+  onSetEndpointIntentEnabled,
+  onRetryEndpointIntent,
+  onRemoveEndpointIntent,
   onProviderMutation,
   providerInteractiveScreen,
   providerInteractiveDisabled = false,
@@ -291,6 +302,8 @@ export function TuiShell({
     useState<string | undefined>(() => foregroundConnections[0]?.id);
   const [foregroundConnectionBusy, setForegroundConnectionBusy] = useState(false);
   const [selectedPersistentSessionId, setSelectedPersistentSessionId] =
+    useState<string | undefined>();
+  const [selectedEndpointIntentName, setSelectedEndpointIntentName] =
     useState<string | undefined>();
   const [quitArmed, setQuitArmed] = useState(false);
   const activeRoute = routes[activeIndex] ?? routes[0];
@@ -364,6 +377,16 @@ export function TuiShell({
     persistentSessions.some((session) => session.id === selectedPersistentSessionId)
       ? selectedPersistentSessionId
       : undefined;
+  const endpointIntents =
+    readSnapshot?.daemon.status === "running" &&
+    readSnapshot.daemon.endpointIntents.status === "ready"
+      ? readSnapshot.daemon.endpointIntents.items ?? []
+      : [];
+  const effectiveSelectedEndpointIntentName =
+    selectedEndpointIntentName !== undefined &&
+    endpointIntents.some((intent) => intent.operationName === selectedEndpointIntentName)
+      ? selectedEndpointIntentName
+      : endpointIntents[0]?.operationName;
 
   useEffect(() => {
     setSelectedProviderSource((current) =>
@@ -394,6 +417,11 @@ export function TuiShell({
   useEffect(() => {
     setSelectedPersistentSessionId((current) =>
       current === undefined ? persistentSessions[0]?.id : current,
+    );
+    setSelectedEndpointIntentName((current) =>
+      current !== undefined && endpointIntents.some((intent) => intent.operationName === current)
+        ? current
+        : endpointIntents[0]?.operationName,
     );
   }, [readSnapshot]);
 
@@ -1020,6 +1048,91 @@ export function TuiShell({
 
     if (
       activeRoute.id === "sessions" &&
+      endpointIntents.length > 0 &&
+      (input === "[" || input === "]")
+    ) {
+      const currentIndex = endpointIntents.findIndex(
+        (intent) => intent.operationName === effectiveSelectedEndpointIntentName,
+      );
+      const nextIndex =
+        currentIndex < 0
+          ? input === "]"
+            ? 0
+            : endpointIntents.length - 1
+          : input === "]"
+            ? (currentIndex + 1) % endpointIntents.length
+            : (currentIndex - 1 + endpointIntents.length) % endpointIntents.length;
+      const next = endpointIntents[nextIndex];
+      if (next !== undefined) {
+        setSelectedEndpointIntentName(next.operationName);
+        setStatus(`Selected persisted Endpoint intent ${next.name}.`);
+      }
+      return;
+    }
+
+    if (
+      activeRoute.id === "sessions" &&
+      input === "e" &&
+      effectiveSelectedEndpointIntentName !== undefined &&
+      onSetEndpointIntentEnabled !== undefined
+    ) {
+      const selected = endpointIntents.find(
+        (intent) => intent.operationName === effectiveSelectedEndpointIntentName,
+      );
+      if (selected === undefined) {
+        return;
+      }
+      setForegroundConnectionBusy(true);
+      const enabled = !selected.enabled;
+      void onSetEndpointIntentEnabled(selected.operationName, enabled).then((changed) => {
+        setForegroundConnectionBusy(false);
+        if (changed) {
+          setStatus(`${enabled ? "Enabled" : "Disabled"} Endpoint intent ${selected.name}.`);
+        }
+      });
+      return;
+    }
+
+    if (
+      activeRoute.id === "sessions" &&
+      input === "t" &&
+      effectiveSelectedEndpointIntentName !== undefined &&
+      onRetryEndpointIntent !== undefined
+    ) {
+      const selected = endpointIntents.find(
+        (intent) => intent.operationName === effectiveSelectedEndpointIntentName,
+      );
+      if (selected?.state !== "error") {
+        setStatus("Retry is available only for a persisted Endpoint intent in Error state.");
+        return;
+      }
+      setForegroundConnectionBusy(true);
+      void onRetryEndpointIntent(selected.operationName).then((retried) => {
+        setForegroundConnectionBusy(false);
+        if (retried) {
+          setStatus(`Retry requested for Endpoint intent ${selected.name}.`);
+        }
+      });
+      return;
+    }
+
+    if (
+      activeRoute.id === "sessions" &&
+      input === "X" &&
+      effectiveSelectedEndpointIntentName !== undefined &&
+      onRemoveEndpointIntent !== undefined
+    ) {
+      const selected = endpointIntents.find(
+        (intent) => intent.operationName === effectiveSelectedEndpointIntentName,
+      );
+      if (selected !== undefined) {
+        onRemoveEndpointIntent(selected);
+      }
+      return;
+    }
+
+    if (
+      activeRoute.id === "sessions" &&
       foregroundConnections.length > 0 &&
       (input === "j" || input === "k")
     ) {
@@ -1399,6 +1512,7 @@ export function TuiShell({
                   foregroundConnections={foregroundConnections}
                   selectedForegroundConnectionId={selectedForegroundConnectionId}
                   selectedPersistentSessionId={selectedPersistentSessionId}
+                  selectedEndpointIntentName={effectiveSelectedEndpointIntentName}
                   canManageForegroundConnections={
                     onOpenForegroundConnection !== undefined &&
                     onCloseForegroundConnection !== undefined
@@ -1406,6 +1520,11 @@ export function TuiShell({
                   canManagePersistentSessions={
                     onCreatePersistentSession !== undefined &&
                     onClosePersistentSession !== undefined
+                  }
+                  canManageEndpointIntents={
+                    onSetEndpointIntentEnabled !== undefined &&
+                    onRetryEndpointIntent !== undefined &&
+                    onRemoveEndpointIntent !== undefined
                   }
                   canManageDaemon={
                     onStartDaemon !== undefined && onStopDaemon !== undefined
@@ -1448,11 +1567,11 @@ export function TuiShell({
           </Text>
         ) : screenReader ? (
           <Text>
-            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; on Instances, J and K select, Space marks bulk targets, 0 clears marks, and number keys run lifecycle actions; on Connections, N starts a foreground Endpoint, P creates a persistent Endpoint, D starts or stops the daemon, lowercase J/K and X manage foreground Endpoints, uppercase J/K and C manage persistent Sessions; Q quits.
+            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; on Instances, J and K select, Space marks bulk targets, 0 clears marks, and number keys run lifecycle actions; on Connections, N starts a foreground Endpoint, P creates a persistent Session, D starts or stops the daemon, lowercase J/K/X manage foreground Endpoints, uppercase J/K/C manage persistent Sessions, brackets select persisted Endpoint intents, E toggles them, T retries Error state, and uppercase X removes after confirmation; Q quits.
           </Text>
         ) : (
           <Text color={muted} wrap="wrap">
-            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? onInstanceMutation === undefined ? " · j/k select" : onBulkInstanceMutation === undefined ? " · j/k select · a adopt · 1-4 actions" : " · j/k select · Space mark · 0 clear · a adopt · 1-4 actions" : activeRoute.id === "sessions" ? " · n foreground · p persistent · d daemon · j/k/x foreground · J/K/c persistent" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : ""} · q quit
+            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? onInstanceMutation === undefined ? " · j/k select" : onBulkInstanceMutation === undefined ? " · j/k select · a adopt · 1-4 actions" : " · j/k select · Space mark · 0 clear · a adopt · 1-4 actions" : activeRoute.id === "sessions" ? " · n foreground · p persistent · d daemon · j/k/x foreground · J/K/c sessions · [/] intents · e toggle · t retry · X remove" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : ""} · q quit
           </Text>
         )}
       </Box>
@@ -1474,8 +1593,10 @@ interface RouteSurfaceProps {
   readonly foregroundConnections: readonly TuiForegroundConnection[];
   readonly selectedForegroundConnectionId?: string;
   readonly selectedPersistentSessionId?: string;
+  readonly selectedEndpointIntentName?: string;
   readonly canManageForegroundConnections: boolean;
   readonly canManagePersistentSessions: boolean;
+  readonly canManageEndpointIntents: boolean;
   readonly canManageDaemon: boolean;
   readonly providerSourceInput?: string;
   readonly providerCredentialFlow?: ProviderCredentialFlowView;
@@ -1502,8 +1623,10 @@ function RouteSurface({
   foregroundConnections,
   selectedForegroundConnectionId,
   selectedPersistentSessionId,
+  selectedEndpointIntentName,
   canManageForegroundConnections,
   canManagePersistentSessions,
+  canManageEndpointIntents,
   canManageDaemon,
   providerSourceInput,
   providerCredentialFlow,
@@ -1578,8 +1701,10 @@ function RouteSurface({
         connections={foregroundConnections}
         selectedConnectionId={selectedForegroundConnectionId}
         selectedPersistentSessionId={selectedPersistentSessionId}
+        selectedEndpointIntentName={selectedEndpointIntentName}
         canManage={canManageForegroundConnections}
         canManagePersistent={canManagePersistentSessions}
+        canManageIntents={canManageEndpointIntents}
         canManageDaemon={canManageDaemon}
       />
     );
@@ -1799,8 +1924,10 @@ function ConnectionsSurface({
   connections,
   selectedConnectionId,
   selectedPersistentSessionId,
+  selectedEndpointIntentName,
   canManage,
   canManagePersistent,
+  canManageIntents,
   canManageDaemon,
 }: {
   readonly snapshot: TuiReadSnapshot;
@@ -1809,8 +1936,10 @@ function ConnectionsSurface({
   readonly connections: readonly TuiForegroundConnection[];
   readonly selectedConnectionId?: string;
   readonly selectedPersistentSessionId?: string;
+  readonly selectedEndpointIntentName?: string;
   readonly canManage: boolean;
   readonly canManagePersistent: boolean;
+  readonly canManageIntents: boolean;
   readonly canManageDaemon: boolean;
 }): React.ReactElement {
   if (flow !== undefined) {
@@ -1927,6 +2056,14 @@ function ConnectionsSurface({
   const selectedPersistent = persistentSessions.find(
     (session) => session.id === selectedPersistentSessionId,
   );
+  const endpointIntents =
+    snapshot.daemon.status === "running" &&
+    snapshot.daemon.endpointIntents.status === "ready"
+      ? snapshot.daemon.endpointIntents.items ?? []
+      : [];
+  const selectedIntent = endpointIntents.find(
+    (intent) => intent.operationName === selectedEndpointIntentName,
+  );
   return (
     <Box flexDirection="column">
       <Text>
@@ -1934,7 +2071,8 @@ function ConnectionsSurface({
       </Text>
       <Text>
         {canManage ? "n new foreground" : "foreground unavailable"}
-        {canManagePersistent ? " · p new persistent · J/K select persistent · c close persistent" : ""}
+        {canManagePersistent ? " · p new persistent Session · J/K select Session · c close Session" : ""}
+        {canManageIntents ? " · [/] select persisted intent · e enable/disable · t retry Error · X remove" : ""}
         {canManageDaemon ? " · d start/stop daemon" : ""}
       </Text>
       <Box marginTop={1} flexDirection="column">
@@ -1956,7 +2094,34 @@ function ConnectionsSurface({
         )}
       </Box>
       <Box marginTop={1} flexDirection="column">
-        <Text bold>Daemon-owned persistent Endpoints</Text>
+        <Text bold>Persisted Endpoint intents (desired state)</Text>
+        <Text>
+          These definitions survive daemon restart. Live transport is shown separately and is recreated; an old dead transport is never treated as live.
+        </Text>
+        {snapshot.daemon.status !== "running" ? (
+          <Text>Daemon must be running to inspect current intent realization state.</Text>
+        ) : snapshot.daemon.endpointIntents.status === "unavailable" ? (
+          <Text>Persisted intents exist independently, but current daemon intent status is temporarily unavailable.</Text>
+        ) : endpointIntents.length === 0 ? (
+          <Text>No persisted Endpoint intents configured.</Text>
+        ) : (
+          <>
+            {canManageIntents ? <Text>[/] select · e enable/disable · t retry Error · X remove</Text> : null}
+            {endpointIntents.map((intent) => (
+              <EndpointIntentLine
+                key={intent.operationName}
+                intent={intent}
+                selected={intent.operationName === selectedIntent?.operationName}
+              />
+            ))}
+            {selectedIntent === undefined ? null : (
+              <EndpointIntentDetail intent={selectedIntent} />
+            )}
+          </>
+        )}
+      </Box>
+      <Box marginTop={1} flexDirection="column">
+        <Text bold>Daemon-owned Connection Sessions (runtime state)</Text>
         <Text>Daemon: {snapshot.daemon.status}</Text>
         {snapshot.daemon.status === "stale" ? (
           <Text>Daemon state is stale because its descriptor is invalid. Start will reconcile the managed daemon state.</Text>
@@ -2028,6 +2193,85 @@ function PersistentSessionDetail({
       ) : null}
     </Box>
   );
+}
+
+function EndpointIntentLine({
+  intent,
+  selected,
+}: {
+  readonly intent: TuiEndpointIntentReadItem;
+  readonly selected: boolean;
+}): React.ReactElement {
+  const realization =
+    intent.state === "live" && intent.endpoint !== undefined
+      ? `live endpoint=${intent.endpoint.host}:${intent.endpoint.port}`
+      : intent.state;
+  return (
+    <Text bold={selected}>
+      {selected ? "> " : "  "}{intent.name} · desired={intent.enabled ? "enabled" : "disabled"} · {realization} · {intent.instanceId} → {intent.remoteHost}:{intent.remotePort} · requested-local-port={intent.requestedLocalPort ?? "dynamic"}
+      {intent.state === "error" ? ` · ${intent.failure?.code ?? "failure"}` : ""}
+    </Text>
+  );
+}
+
+function EndpointIntentDetail({
+  intent,
+}: {
+  readonly intent: TuiEndpointIntentReadItem;
+}): React.ReactElement {
+  return (
+    <Box marginTop={1} flexDirection="column">
+      <Text bold>Persisted Endpoint intent detail</Text>
+      <Text>Name: {intent.name}</Text>
+      <Text>Desired state: {intent.enabled ? "enabled" : "disabled"}</Text>
+      <Text>Realization state: {intent.state}</Text>
+      <Text>Instance: {intent.instanceId}</Text>
+      <Text>Remote target: {intent.remoteHost}:{intent.remotePort}</Text>
+      <Text>Requested local port: {intent.requestedLocalPort ?? "dynamic"}</Text>
+      <Text>Requested Access Method: {intent.requestedAccessMethodId ?? "default"}</Text>
+      {intent.endpoint === undefined ? null : (
+        <Text>
+          Current live Endpoint: {intent.endpoint.host}:{intent.endpoint.port}
+        </Text>
+      )}
+      {intent.accessMethod === undefined ? null : (
+        <Text>Current Access Method: {intent.accessMethod.id} · {intent.accessMethod.kind}</Text>
+      )}
+      {intent.state === "starting" ? (
+        <Text>Recovery: daemon is realizing desired state; refresh to observe the resulting live Endpoint or Error.</Text>
+      ) : intent.state === "error" ? (
+        <>
+          <Text>Error: {intent.failure?.code}: {intent.failure?.message}</Text>
+          <Text>Remediation: {endpointIntentRemediation(intent)}</Text>
+        </>
+      ) : intent.state === "disabled" ? (
+        <Text>Recovery: desired state is disabled; press e to enable and realize it again.</Text>
+      ) : (
+        <Text>Recovery: current transport is live. On daemon restart it will be recreated from this persisted definition.</Text>
+      )}
+    </Box>
+  );
+}
+
+function endpointIntentRemediation(intent: TuiEndpointIntentReadItem): string {
+  const code = intent.failure?.code;
+  const message = intent.failure?.message ?? "";
+  if (code === "host-trust-required") {
+    return "review and enroll the exact SSH host fingerprint through a normal TUI connection flow, then press t to retry this intent";
+  }
+  if (code === "authentication") {
+    return "configure or rotate the required provider credential in Providers, then press t to retry";
+  }
+  if (code === "provider-unavailable") {
+    return "restore provider or instance availability, refresh state, then press t to retry";
+  }
+  if (code === "conflict" && /port/i.test(message)) {
+    return "the requested fixed local port is unavailable; free it, or remove and recreate the intent with another fixed or dynamic port, then retry";
+  }
+  if (code === "unsupported-operation") {
+    return "restore a compatible provider Access Method, then press t to retry";
+  }
+  return "resolve the reported cause without deleting the desired intent, then press t to retry realization";
 }
 
 function NewInstanceSurface({
@@ -2623,10 +2867,14 @@ function HelpPanel({ colorEnabled }: { readonly colorEnabled: boolean }): React.
       <Text>a — adopt the selected discovered instance when offered</Text>
       <Text>1-4 — run the shown lifecycle action on the selected instance, or on all marked targets</Text>
       <Text>n — start a TUI-owned foreground Endpoint on Connections</Text>
-      <Text>p — create a daemon-owned persistent Endpoint</Text>
+      <Text>p — create a daemon-owned persistent Connection Session</Text>
       <Text>d — start or stop the managed daemon</Text>
       <Text>j / k and x — select or close foreground Endpoints</Text>
-      <Text>J / K and c — select or close persistent Sessions</Text>
+      <Text>J / K and c — select or close daemon-owned Connection Sessions</Text>
+      <Text>[ / ] — select persisted Endpoint intents (desired state)</Text>
+      <Text>e — enable or disable the selected persisted Endpoint intent</Text>
+      <Text>t — retry realization for a selected intent in Error state</Text>
+      <Text>X — remove the selected persisted intent after destructive confirmation</Text>
       <Text>q / Ctrl+C — quit EasyServer; live foreground Endpoints require a second quit confirmation, persistent Sessions survive</Text>
     </Box>
   );
@@ -2668,6 +2916,8 @@ export function TuiApp({
     useState<PendingHostTrustConfirmation | undefined>();
   const [pendingDaemonStopConfirmation, setPendingDaemonStopConfirmation] =
     useState<PendingDaemonStopConfirmation | undefined>();
+  const [pendingEndpointIntentRemoval, setPendingEndpointIntentRemoval] =
+    useState<PendingEndpointIntentRemoval | undefined>();
   const [pendingInstanceConfirmation, setPendingInstanceConfirmation] =
     useState<PendingInstanceConfirmation | undefined>();
   const [pendingProviderMutation, setPendingProviderMutation] =
@@ -3059,6 +3309,117 @@ export function TuiApp({
       }
     },
     [daemonOperations, refresh],
+  );
+
+  const setEndpointIntentEnabled = useCallback(
+    async (name: string, enabled: boolean): Promise<boolean> => {
+      if (daemonOperations === undefined) {
+        return false;
+      }
+      const title = enabled ? "Enable persisted Endpoint intent" : "Disable persisted Endpoint intent";
+      setOperation(
+        presentWorkingOperation({
+          title,
+          detail: enabled
+            ? `${name}: realizing desired Endpoint state.`
+            : `${name}: disabling desired state and closing any current realization.`,
+          activity: "verifying-state",
+        }),
+      );
+      try {
+        await daemonOperations.setEndpointIntentEnabled(name, enabled);
+        await refresh();
+        setOperation(
+          presentCompletedOperation({
+            title: `${title} completed`,
+            detail: enabled
+              ? `${name} is enabled; Starting or Live state reflects current realization.`
+              : `${name} remains persisted but disabled; any live realization is closed.`,
+          }),
+        );
+        return true;
+      } catch (error) {
+        await refresh({ quiet: true });
+        setOperation(
+          presentOperationError({
+            title,
+            operation: "read",
+            error,
+            allowRetry: false,
+          }),
+        );
+        return false;
+      }
+    },
+    [daemonOperations, refresh],
+  );
+
+  const retryEndpointIntent = useCallback(
+    async (name: string): Promise<boolean> => {
+      if (daemonOperations === undefined) {
+        return false;
+      }
+      setOperation(
+        presentWorkingOperation({
+          title: "Retry persisted Endpoint intent",
+          detail: `${name}: reconciling desired state with a new transport realization.`,
+          activity: "verifying-state",
+        }),
+      );
+      try {
+        await daemonOperations.retryEndpointIntent(name);
+        await refresh();
+        setOperation(
+          presentCompletedOperation({
+            title: "Endpoint intent retry requested",
+            detail: `${name} remains persisted; refresh will continue to show Starting, Live or Error without reviving an old transport.`,
+          }),
+        );
+        return true;
+      } catch (error) {
+        await refresh({ quiet: true });
+        setOperation(
+          presentOperationError({
+            title: "Retry persisted Endpoint intent",
+            operation: "read",
+            error,
+            allowRetry: false,
+          }),
+        );
+        return false;
+      }
+    },
+    [daemonOperations, refresh],
+  );
+
+  const requestRemoveEndpointIntent = useCallback(
+    (intent: TuiEndpointIntentReadItem) => {
+      setPendingEndpointIntentRemoval({ intent });
+      setOperation(
+        presentMutationConfirmation(
+          {
+            summary: `Remove persisted Endpoint intent ${intent.name}`,
+            risks: ["destructive"],
+            consequence:
+              intent.state === "live"
+                ? "deletes the persisted desired state and closes its current live transport realization"
+                : intent.state === "starting"
+                  ? "deletes the persisted desired state and cancels the current realization attempt"
+                  : "deletes the persisted desired state; it will no longer be recovered after daemon restart",
+          },
+          {
+            target: intent.name,
+            affectedResources: [
+              "Persisted Endpoint intent definition",
+              ...(intent.endpoint === undefined
+                ? []
+                : [`Current live Endpoint ${intent.endpoint.host}:${intent.endpoint.port}`]),
+            ],
+          },
+        ),
+      );
+    },
+    [],
   );
 
   const mutateInstance = useCallback(
@@ -3519,6 +3880,50 @@ export function TuiApp({
         return;
       }
       if (
+        pendingEndpointIntentRemoval !== undefined &&
+        (action === "confirm" || action === "decline")
+      ) {
+        const pending = pendingEndpointIntentRemoval;
+        setPendingEndpointIntentRemoval(undefined);
+        if (action === "decline" || daemonOperations === undefined) {
+          setOperation(undefined);
+          return;
+        }
+        setOperation(
+          presentWorkingOperation({
+            title: "Remove persisted Endpoint intent",
+            detail:
+              pending.intent.state === "live"
+                ? `${pending.intent.name}: deleting desired state and closing the current realization.`
+                : `${pending.intent.name}: deleting persisted desired state.`,
+            activity: "verifying-state",
+          }),
+        );
+        void daemonOperations.removeEndpointIntent(pending.intent.operationName).then(
+          async () => {
+            await refresh();
+            setOperation(
+              presentCompletedOperation({
+                title: "Persisted Endpoint intent removed",
+                detail: `${pending.intent.name} will not be recovered on daemon restart.`,
+              }),
+            );
+          },
+          async (error) => {
+            await refresh({ quiet: true });
+            setOperation(
+              presentOperationError({
+                title: "Remove persisted Endpoint intent",
+                operation: "read",
+                error,
+                allowRetry: false,
+              }),
+            );
+          },
+        );
+        return;
+      }
+      if (
         pendingInstanceConfirmation !== undefined &&
         (action === "confirm" || action === "decline")
       ) {
@@ -3604,6 +4009,7 @@ export function TuiApp({
       if (action === "dismiss") {
         setPendingHostTrustConfirmation(undefined);
         setPendingDaemonStopConfirmation(undefined);
+        setPendingEndpointIntentRemoval(undefined);
         setPendingInstanceConfirmation(undefined);
         setPendingProviderMutation(undefined);
         setOperation(undefined);
@@ -3613,6 +4019,7 @@ export function TuiApp({
       daemonOperations,
       mutateProvider,
       pendingDaemonStopConfirmation,
+      pendingEndpointIntentRemoval,
       pendingHostTrustConfirmation,
       pendingInstanceConfirmation,
       pendingProviderFlowConfirmation,
@@ -3671,6 +4078,21 @@ export function TuiApp({
       }
       onClosePersistentSession={
         daemonOperations === undefined ? undefined : closePersistentSession
+      }
+      onSetEndpointIntentEnabled={
+        daemonOperations === undefined || operation?.phase === "working"
+          ? undefined
+          : setEndpointIntentEnabled
+      }
+      onRetryEndpointIntent={
+        daemonOperations === undefined || operation?.phase === "working"
+          ? undefined
+          : retryEndpointIntent
+      }
+      onRemoveEndpointIntent={
+        daemonOperations === undefined || operation?.phase === "working"
+          ? undefined
+          : requestRemoveEndpointIntent
       }
       onInstanceMutation={
         instanceMutationRunner !== undefined && canStartInstanceMutation(operation)
