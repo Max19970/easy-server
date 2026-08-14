@@ -91,11 +91,16 @@ function Quote-MinttyArgument([string]$Value) {
 
 function Find-SmokeWindow([DateTime]$Deadline) {
   do {
-    $process = Get-Process mintty -ErrorAction SilentlyContinue |
-      Where-Object { $_.MainWindowTitle -like "$title*" } |
+    $processInfo = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.Name -eq "mintty.exe" -and $_.CommandLine -like "*$title*"
+      } |
       Select-Object -First 1
-    if ($null -ne $process) {
-      return $process
+    if ($null -ne $processInfo) {
+      $process = Get-Process -Id $processInfo.ProcessId -ErrorAction SilentlyContinue
+      if ($null -ne $process -and $process.MainWindowHandle -ne [IntPtr]::Zero) {
+        return $process
+      }
     }
     Start-Sleep -Milliseconds 100
   } while ((Get-Date) -lt $Deadline)
