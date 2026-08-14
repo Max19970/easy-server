@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WINDOWS_STATUS_DLL_INIT_FAILED = 0xc0000142;
-const PROCESS_START_ATTEMPTS = 3;
+const PROCESS_START_ATTEMPTS = 4;
+const PROCESS_START_RETRY_DELAY_MS = 1_000;
 const npmCli = process.env.npm_execpath;
 assert.ok(npmCli, "verify-packaged-install must be run through npm");
 
@@ -611,6 +612,14 @@ function spawnSyncForVerification(command, args, options) {
       result.status !== WINDOWS_STATUS_DLL_INIT_FAILED
     ) {
       return result;
+    }
+    if (attempt + 1 < PROCESS_START_ATTEMPTS) {
+      Atomics.wait(
+        new Int32Array(new SharedArrayBuffer(4)),
+        0,
+        0,
+        PROCESS_START_RETRY_DELAY_MS,
+      );
     }
   }
   return result;
