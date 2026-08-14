@@ -1,13 +1,70 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   TuiReadOperations,
   collectDaemonReadSnapshot,
+  loadDefaultTuiReadSnapshot,
 } from "../dist/tui-read-model.js";
 
 function context(signal = new AbortController().signal) {
   return { signal };
 }
+
+test("default TUI read path recovers a validated Local State generation", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "easyserver-tui-state-recovery-"));
+  const stateFile = join(directory, "state.json");
+  const daemonFile = join(directory, "daemon.json");
+  const recoveryState = {
+    version: 1,
+    plugins: [{ source: "@fixture/recovered-provider", enabled: false }],
+  };
+
+  try {
+    await writeFile(stateFile, "corrupt primary state", "utf8");
+    await writeFile(`${stateFile}.recovery`, `${JSON.stringify(recoveryState)}\n`, "utf8");
+
+    const snapshot = await loadDefaultTuiReadSnapshot(context(), {
+      stateFile,
+      daemonFile,
+    });
+
+    assert.equal(snapshot.providers.status, "ready");
+    assert.equal(snapshot.providers.items.length, 1);
+    assert.equal(snapshot.providers.items[0].source, "@fixture/recovered-provider");
+    assert.equal(snapshot.providers.items[0].state, "disabled");
+    assert.equal(snapshot.providers.items[0].readiness, "disabled");
+    assert.equal(snapshot.instances.status, "ready");
+    assert.deepEqual(snapshot.instances.items, []);
+    assert.equal(snapshot.daemon.status, "stopped");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("default TUI read path fails closed when primary and recovery Local State are corrupt", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "easyserver-tui-state-corrupt-"));
+  const stateFile = join(directory, "state.json");
+  const daemonFile = join(directory, "daemon.json");
+  const primary = "corrupt primary state";
+  const recovery = "corrupt recovery state";
+
+  try {
+    await writeFile(stateFile, primary, "utf8");
+    await writeFile(`${stateFile}.recovery`, recovery, "utf8");
+
+    await assert.rejects(
+      loadDefaultTuiReadSnapshot(context(), { stateFile, daemonFile }),
+      /Unable to recover EasyServer state/,
+    );
+    assert.equal(await readFile(stateFile, "utf8"), primary);
+    assert.equal(await readFile(`${stateFile}.recovery`, "utf8"), recovery);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("read snapshot keeps healthy inventory beside degraded providers and plugin failures", async () => {
   const operations = new TuiReadOperations({

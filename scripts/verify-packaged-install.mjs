@@ -347,6 +347,7 @@ async function verifyCoreOnlyInstall(sdkTarball, cliTarball) {
 
   assertPackageAbsent(prefix, "@easyai101/easyserver-plugin-vastai");
   assertPackageAbsent(prefix, "@easyai101/easyserver-plugin-intelion");
+  verifyInstalledTui(prefix);
 
   const result = runCli(prefix, "plugins", "list");
   assert.equal(result.stdout, "No provider plugins configured.\n");
@@ -508,10 +509,7 @@ function runCli(prefix, ...args) {
 }
 
 function runInstalledExecutable(prefix, ...args) {
-  const executable =
-    process.platform === "win32"
-      ? join(prefix, "easyserver.cmd")
-      : join(prefix, "bin", "easyserver");
+  const executable = installedExecutable(prefix);
   assert.equal(existsSync(executable), true, "npm must expose the easyserver executable");
 
   if (process.platform === "win32") {
@@ -526,6 +524,42 @@ function runInstalledExecutable(prefix, ...args) {
   }
 
   return run(executable, args, repositoryRoot, cliEnvironment(prefix));
+}
+
+function installedExecutable(prefix) {
+  return process.platform === "win32"
+    ? join(prefix, "easyserver.cmd")
+    : join(prefix, "bin", "easyserver");
+}
+
+function verifyInstalledTui(prefix) {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const executable = installedExecutable(prefix);
+  assert.equal(existsSync(executable), true, "npm must expose the easyserver executable");
+  runWindowsTuiSmoke(executable, "No provider plugins configured.");
+}
+
+function runWindowsTuiSmoke(executable, expectedText) {
+  const script = join(repositoryRoot, "scripts", "verify-tui-windows-smoke.ps1");
+  const command = [
+    `& '${powerShellLiteral(script)}'`,
+    "-Program 'cmd.exe'",
+    `-ProgramArgsJson '${powerShellLiteral(JSON.stringify(["/d", "/c", executable]))}'`,
+    "-ExitMode 'quit'",
+    `-ExpectedText '${powerShellLiteral(expectedText)}'`,
+  ].join(" ");
+  return run(
+    "powershell.exe",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+    repositoryRoot,
+  );
+}
+
+function powerShellLiteral(value) {
+  return value.replaceAll("'", "''");
 }
 
 function cliEnvironment(prefix) {

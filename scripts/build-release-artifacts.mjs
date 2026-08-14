@@ -166,6 +166,7 @@ async function verifyReleaseArchive(zipPath, checksumPath) {
   expandArchive(zipPath, extractionDirectory);
 
   verifyPortablePrefix(extractionDirectory);
+  verifyPortableTui(extractionDirectory);
   const environment = {
     ...process.env,
     EASYSERVER_STATE_FILE: join(outsideDirectory, "state.json"),
@@ -189,6 +190,20 @@ async function verifyReleaseArchive(zipPath, checksumPath) {
       environment,
     ).stdout,
     "No provider plugins configured.\n",
+  );
+}
+
+function verifyPortableTui(prefix) {
+  const executable = join(prefix, "easyserver.cmd");
+  const smokeScript = join(repositoryRoot, "scripts", "verify-tui-windows-smoke.ps1");
+  runPowerShell(
+    [
+      `& '${powerShellLiteral(smokeScript)}'`,
+      "-Program 'cmd.exe'",
+      `-ProgramArgsJson '${powerShellLiteral(JSON.stringify(["/d", "/c", executable]))}'`,
+      "-ExitMode 'quit'",
+      "-ExpectedText 'No provider plugins configured.'",
+    ].join(" "),
   );
 }
 
