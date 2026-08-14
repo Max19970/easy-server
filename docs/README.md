@@ -17,6 +17,7 @@ Current public guides:
 - [Support and maintenance policy](support-and-maintenance.md)
 - [Supported platforms](supported-platforms.md)
 - [Security model](security-model.md)
+- [EasyServer 0.2.0 release notes](releases/v0.2.0.md)
 - [0.1.0 dependency and supply-chain audit](dependency-audit-0.1.0.md)
 - [EasyServer 0.1.0 release notes](releases/v0.1.0.md)
 

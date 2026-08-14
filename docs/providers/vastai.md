@@ -12,7 +12,7 @@ You need:
 
 Vast.ai account SSH keys are the normal one-time account preparation path for new instances. EasyServer does not require you to manually attach a key to every newly rented instance after that account-level key is prepared. Keep the corresponding private key only on the client machine; never paste it into repository files.
 
-For Vast.ai in EasyServer `0.1.0`, that private key must also be discoverable by the system OpenSSH client through a standard identity file such as `~/.ssh/id_ed25519` or through `ssh-agent`. EasyServer's managed SSH path does not read your user `~/.ssh/config`, so an `IdentityFile` configured only there is not sufficient by itself.
+For Vast.ai in EasyServer `0.2.0`, that private key must also be discoverable by the system OpenSSH client through a standard identity file such as `~/.ssh/id_ed25519` or through `ssh-agent`. EasyServer's managed SSH path does not read your user `~/.ssh/config`, so an `IdentityFile` configured only there is not sufficient by itself.
 
 If you add/change an account SSH key after an instance already exists, Vast.ai may require provider-side handling for that existing instance. The EasyServer workflow below assumes account preparation happens before rental.
 

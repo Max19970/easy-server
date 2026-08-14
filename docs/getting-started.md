@@ -4,7 +4,7 @@ EasyServer is a provider-independent control surface for acquiring, managing and
 
 ## Requirements
 
-EasyServer `0.1.x` is released for Node.js `24.18.1` with npm `11.16.0`. See [Supported platforms](supported-platforms.md) for the operating systems and OS integrations qualified for the release.
+EasyServer `0.2.x` is released for Node.js `24.18.1` with npm `11.16.0`. See [Supported platforms](supported-platforms.md) for the operating systems and OS integrations qualified for the release.
 
 EasyServer's built-in SSH access uses the system OpenSSH client. If you plan to connect to SSH-backed resources, `ssh` and `ssh-keyscan` must be available on `PATH`.
 

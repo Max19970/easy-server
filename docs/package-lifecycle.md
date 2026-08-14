@@ -2,17 +2,17 @@
 
 EasyServer keeps user state separate from the installed npm package. Ordinary package-manager operations must therefore change installed code without silently changing the remote resources or supported Local State that belong to the user.
 
-This document defines the package-lifecycle contract for the `0.1.x` compatibility line. The general compatibility rules remain defined in [Versioning and compatibility](versioning-and-compatibility.md).
+This document defines the package-lifecycle contract for the current `0.2.x` compatibility line. The general compatibility rules remain defined in [Versioning and compatibility](versioning-and-compatibility.md).
 
-## Compatible `0.1.x` upgrades and reinstalls
+## Compatible upgrades and reinstalls
 
-A compatible `0.1.x` upgrade or reinstall must preserve valid state created by an earlier `0.1.x` release.
+A compatible `0.2.x` upgrade or reinstall must preserve valid state created by an earlier `0.2.x` release. The `0.2.0` transition also accepts valid `0.1.x` Local State; users do not need to delete or recreate state to adopt the new TUI entrypoint or Plugin SDK line.
 
 - Local State remains in the configured `EASYSERVER_STATE_FILE` or, by default, `~/.easyserver/state.json`; it is not stored inside the npm package directory.
 - Canonical `instance:<uuid>` identities, Provider Plugin registrations and opaque credential Secret References remain unchanged unless the user performs an operation that intentionally changes them.
-- Secret values remain in the operating-system Secret Store. EasyServer stores only their opaque `secret:<uuid>` references in Local State, and `0.1.x` releases keep the same EasyServer keyring service identity so those references continue to address the same credentials.
-- A package reinstall must not be treated as a state reset. Deleting Local State to make an upgrade work is not an acceptable `0.1.x` migration.
-- State-format changes within `0.1.x` must be additive or transparently backward-compatible. Add a migration only when an actual format change requires one.
+- Secret values remain in the operating-system Secret Store. EasyServer stores only their opaque `secret:<uuid>` references in Local State, and the `0.2.x` line keeps the same EasyServer keyring service identity so those references continue to address the same credentials.
+- A package reinstall must not be treated as a state reset. Deleting Local State to make an upgrade work is not an acceptable migration.
+- State-format changes within `0.2.x` must be additive or transparently backward-compatible. Add a migration only when an actual format change requires one.
 
 Provider Plugins are separately installed packages. Reinstalling or upgrading the core CLI does not implicitly install, upgrade or remove them.
 

@@ -1,10 +1,10 @@
 # Supported platforms
 
-EasyServer `0.1.0` makes a deliberately narrow platform promise: **Windows 11 x64**.
+EasyServer `0.2.0` makes a deliberately narrow platform promise: **Windows 11 x64**.
 
 The codebase and native dependencies may run on additional operating systems, but installation success alone is not a support claim. A platform is supported only after clean installation, deterministic release checks, packaged plugin loading, real OS Secret Store integration and representative access behavior have been qualified together.
 
-## 0.1.0 supported matrix
+## 0.2.0 supported matrix
 
 | Platform | Architecture | Status | Secret Store | SSH access prerequisite |
 | --- | --- | --- | --- | --- |
@@ -25,8 +25,9 @@ The release verification covers:
 
 - clean `npm ci`, typechecking, build and deterministic test suites;
 - packed CLI/Plugin SDK/first-party Provider Plugin artifacts;
-- a global npm installation with a working `easyserver` executable;
-- a portable GitHub Release ZIP built from packed core packages, checksum verification and a clean extracted-bundle smoke test;
+- a global npm installation with a working `easyserver` executable and real no-argument TUI launch;
+- a portable GitHub Release ZIP built from packed core packages, checksum verification and a clean extracted-bundle TUI smoke test;
+- real Windows terminal qualification for normal quit, Ctrl+C, thrown-error cleanup, narrow/wide rendering, resize, `NO_COLOR` and screen-reader mode;
 - the default zero-Provider-Plugin installation and explicit plugin installation/loading;
 - Local State persistence and atomic updates;
 - a real create/read/delete round trip through the OS keyring adapter;
@@ -38,7 +39,7 @@ Real provider acceptance is a maintainer release check and intentionally does no
 
 ## OpenSSH prerequisite
 
-EasyServer `0.1.0` uses the production OpenSSH command-line tools for its generic SSH access path rather than embedding an SSH implementation.
+EasyServer `0.2.0` uses the production OpenSSH command-line tools for its generic SSH access path rather than embedding an SSH implementation.
 
 Before using an SSH-backed Provider Access Method, verify:
 
@@ -51,9 +52,9 @@ If either command is unavailable, install/enable the Windows OpenSSH Client feat
 
 EasyServer manages its own known-host trust file and fails closed on a changed trusted key. On first foreground access it can show the discovered fingerprint and ask for explicit confirmation; non-interactive daemon setup never auto-trusts an unknown host.
 
-## Not supported by the 0.1.0 contract
+## Not supported by the 0.2.0 contract
 
-The following are **not qualified support targets for 0.1.0**:
+The following are **not qualified support targets for 0.2.0**:
 
 - Linux distributions;
 - macOS;
@@ -64,7 +65,7 @@ The following are **not qualified support targets for 0.1.0**:
 
 During pre-release qualification, Windows completed the release gate and real OS-keyring probe. Ubuntu and macOS GitHub runners did not complete the same release gate reliably enough to justify a support claim. The follow-up work is tracked separately rather than weakening the meaning of “supported”.
 
-An unsupported platform is not necessarily known to be incompatible; it means EasyServer `0.1.0` does not promise release-level support for it.
+An unsupported platform is not necessarily known to be incompatible; it means EasyServer `0.2.0` does not promise release-level support for it.
 
 ## Future platform expansion
 

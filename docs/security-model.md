@@ -1,6 +1,6 @@
 # EasyServer security model
 
-This document describes the security boundaries of EasyServer `0.1.0`. The supported client platform for this release is Windows 11 x64; platform-specific statements below refer to that qualified environment unless stated otherwise.
+This document describes the security boundaries of EasyServer `0.2.0`. The supported client platform for this release is Windows 11 x64; platform-specific statements below refer to that qualified environment unless stated otherwise.
 
 ## Trust boundaries
 
@@ -25,7 +25,7 @@ EasyServer separates **remote/provider input**, **trusted Provider Plugin code**
 
 ### Trusted code
 
-EasyServer core/CLI and installed Provider Plugins execute with the privileges of the current OS user. Provider Plugins are **trusted in-process code** in `0.1.0`. Installing/registering a malicious Provider Plugin is equivalent to running other malicious Node.js code as the current user.
+EasyServer core/CLI and installed Provider Plugins execute with the privileges of the current OS user. Provider Plugins are **trusted in-process code** in `0.2.0`. Installing/registering a malicious Provider Plugin is equivalent to running other malicious Node.js code as the current user.
 
 The Plugin SDK and host restrict ordinary plugin operations to declared contracts and credential resolvers, but those APIs are not a malicious-code sandbox. An in-process plugin can use Node.js/OS capabilities available to the user. Install plugins only from sources you trust.
 
@@ -72,7 +72,7 @@ On Windows, EasyServer removes inherited ACLs from that temporary directory and 
 
 The setup cleanup scope recursively removes this directory on normal teardown, including failure paths. Focused tests verify that password/private-key files are gone after cleanup.
 
-A hard process or machine crash can bypass in-process cleanup and leave user-private temporary credential material on disk. This does not cross the qualified Windows OS-user trust boundary when its ACL remains intact, but it extends at-rest lifetime beyond the intended session scope. Crash-safe multi-process cleanup is tracked as [#42](https://github.com/Max19970/easy-server/issues/42) for post-`0.1.0` hardening.
+A hard process or machine crash can bypass in-process cleanup and leave user-private temporary credential material on disk. This does not cross the qualified Windows OS-user trust boundary when its ACL remains intact, but it extends at-rest lifetime beyond the intended session scope. Crash-safe multi-process cleanup is tracked separately as [#42](https://github.com/Max19970/easy-server/issues/42).
 
 ## SSH host trust
 
@@ -107,7 +107,7 @@ Daemon session setup never enrolls SSH trust interactively. Unknown-host trust m
 
 ## Local Endpoints
 
-Every EasyServer Endpoint in `0.1.0` is hard-bound to IPv4 loopback:
+Every EasyServer Endpoint in `0.2.0` is hard-bound to IPv4 loopback:
 
 ```text
 127.0.0.1:<dynamic-port>
@@ -141,7 +141,7 @@ Published EasyServer tarballs are allowlisted to `LICENSE`, `README.md`, `packag
 
 Registering a Provider Plugin imports and executes that package. EasyServer checks manifest/runtime compatibility before admission, but compatibility validation is not package authenticity verification or sandboxing.
 
-## Residual risks and non-goals in 0.1.0
+## Residual risks and non-goals in 0.2.0
 
 The following are explicit limitations rather than hidden security claims:
 
@@ -150,7 +150,7 @@ The following are explicit limitations rather than hidden security claims:
 - local Endpoints are unauthenticated loopback TCP listeners;
 - EasyServer is not an application-layer TLS/authentication proxy for the tunneled workload;
 - abrupt termination can leave ACL-protected temporary SSH credential material until separately cleaned;
-- only Windows 11 x64 has the complete `0.1.0` platform/security integration qualification.
+- only Windows 11 x64 has the complete `0.2.0` platform/security integration qualification.
 
 ## Release security verification
 

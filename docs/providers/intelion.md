@@ -105,7 +105,7 @@ Optional fields are:
 --ssh-key <id>     # repeatable
 ```
 
-Network disk size must be at least 30 GB in the `0.1.0` plugin contract.
+Network disk size must be at least 30 GB in the `0.2.0` plugin contract.
 
 Validate before creating:
 

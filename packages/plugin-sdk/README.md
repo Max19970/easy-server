@@ -1,6 +1,6 @@
 # @easyai101/easyserver-plugin-sdk
 
-Public contracts and TypeScript types for building EasyServer Provider Plugins. This is the supported reusable programmatic EasyServer dependency in `0.1.x`; `@easyai101/easyserver` is intentionally CLI-only.
+Public contracts and TypeScript types for building EasyServer Provider Plugins. This is the supported reusable programmatic EasyServer dependency in `0.2.x`; `@easyai101/easyserver` is intentionally CLI-only.
 
 ## Install
 

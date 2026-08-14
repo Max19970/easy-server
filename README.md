@@ -22,7 +22,7 @@ That separation is intentional. Vast.ai searches/rents marketplace offers; Intel
 
 Use EasyServer when you want provider-independent lifecycle and connectivity around rented compute while keeping provider-specific product concepts in plugins. GPU/AI machines are one use case, but the model is equally applicable to development boxes, game servers, databases, CI workers and arbitrary remote services.
 
-EasyServer `0.1.0` ships first-party Provider Plugins for:
+EasyServer `0.2.0` ships first-party Provider Plugins for:
 
 - **Vast.ai** — marketplace search/rental plus normalized instance lifecycle/access;
 - **Intelion.cloud** — flavor/image/SSH-key catalog discovery, server configuration/creation and normalized lifecycle/access.
@@ -31,13 +31,13 @@ Third-party providers can integrate through the public [`@easyai101/easyserver-p
 
 ## Supported release environment
 
-EasyServer `0.1.0` is release-qualified for **Windows 11 x64**, using **Node.js 24.18.1** and **npm 11.16.0**. SSH-backed access additionally requires the Windows OpenSSH Client (`ssh` and `ssh-keyscan` on `PATH`).
+EasyServer `0.2.0` is release-qualified for **Windows 11 x64**, using **Node.js 24.18.1** and **npm 11.16.0**. SSH-backed access additionally requires the Windows OpenSSH Client (`ssh` and `ssh-keyscan` on `PATH`).
 
-Linux and macOS are not part of the `0.1.0` support contract yet; that means unqualified, not necessarily known-incompatible. See [Supported platforms](docs/supported-platforms.md) for the exact qualification boundary.
+Linux and macOS are not part of the `0.2.0` support contract yet; that means unqualified, not necessarily known-incompatible. See [Supported platforms](docs/supported-platforms.md) for the exact qualification boundary.
 
 ## Install
 
-EasyServer `0.1.0` supports two CLI distribution paths on Windows 11 x64.
+EasyServer `0.2.0` supports two CLI distribution paths on Windows 11 x64.
 
 **npm** is the primary package/ecosystem path:
 
@@ -123,7 +123,7 @@ EasyServer prints a dynamically allocated loopback address such as:
 127.0.0.1:54321
 ```
 
-Open `http://127.0.0.1:54321` locally while the command remains active. **ComfyUI is only an example workload**: EasyServer is forwarding generic TCP bytes and does not know or manage ComfyUI itself. `0.1.0` also does not provide HTTP path routing such as `/comfyui`.
+Open `http://127.0.0.1:54321` locally while the command remains active. **ComfyUI is only an example workload**: EasyServer is forwarding generic TCP bytes and does not know or manage ComfyUI itself. `0.2.0` also does not provide HTTP path routing such as `/comfyui`.
 
 On the first SSH-backed connection, EasyServer shows the discovered host-key fingerprint and requires explicit trust confirmation before enrolling it. Changed trusted keys fail closed.
 
@@ -172,13 +172,15 @@ Run `easyserver --help` for the command groups, then append `--help` to the rele
 
 EasyServer is **not** a workload orchestrator. It does not install, deploy, schedule or configure applications on the rented machine; it does not define a universal job/workload specification; and it does not turn provider-specific marketplaces/configurators into one lossy provisioning schema.
 
-It also is not a general reverse proxy or VPN product. The `0.1.0` caller-facing connectivity primitive is an EasyServer-owned local TCP Endpoint backed by an applicable provider Access Method and Access Adapter.
+It also is not a general reverse proxy or VPN product. The `0.2.0` caller-facing connectivity primitive is an EasyServer-owned local TCP Endpoint backed by an applicable provider Access Method and Access Adapter.
 
-Provider Plugins run in-process and are trusted extensions in `0.1.0`; the plugin boundary validates contracts and isolates ordinary failures, but is not a malicious-code sandbox.
+Provider Plugins run in-process and are trusted extensions in `0.2.0`; the plugin boundary validates contracts and isolates ordinary failures, but is not a malicious-code sandbox.
 
 ## Documentation
 
 - [Getting started](docs/getting-started.md)
+- [Interactive TUI](docs/tui.md)
+- [EasyServer 0.2.0 release notes](docs/releases/v0.2.0.md)
 - [Vast.ai quick start](docs/providers/vastai.md)
 - [Intelion.cloud quick start](docs/providers/intelion.md)
 - [Supported platforms](docs/supported-platforms.md)
