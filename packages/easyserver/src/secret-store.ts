@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { AsyncEntry } from "@napi-rs/keyring";
+import { createRequire } from "node:module";
 import {
   parseSecretReference,
   type SecretReference,
 } from "@easyai101/easyserver-plugin-sdk";
 
 const DEFAULT_SERVICE = "EasyServer";
+const require = createRequire(import.meta.url);
 
 export interface SecretStore {
   create(secret: string, signal?: AbortSignal): Promise<SecretReference>;
@@ -46,8 +47,7 @@ export class OsKeyringSecretStore implements SecretStore {
 
   constructor(
     service = DEFAULT_SERVICE,
-    entryFactory: KeyringEntryFactory = (entryService, account) =>
-      new AsyncEntry(entryService, account),
+    entryFactory: KeyringEntryFactory = defaultKeyringEntryFactory,
   ) {
     this.#service = service;
     this.#entryFactory = entryFactory;
@@ -87,6 +87,11 @@ export class OsKeyringSecretStore implements SecretStore {
   #entry(ref: SecretReference): KeyringEntry {
     return this.#entryFactory(this.#service, ref);
   }
+}
+
+function defaultKeyringEntryFactory(service: string, account: string): KeyringEntry {
+  const { AsyncEntry } = require("@napi-rs/keyring") as typeof import("@napi-rs/keyring");
+  return new AsyncEntry(service, account);
 }
 
 function newSecretReference(): SecretReference {

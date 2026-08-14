@@ -5,6 +5,7 @@ import {
   hostTrustRequiredError,
   isHostTrustRequiredError,
   isNormalizedError,
+  isProviderCliUsageError,
   isSecretReference,
   isSshAccessMethod,
   normalizedError,
@@ -17,6 +18,7 @@ import {
   parseProviderInstanceList,
   parseProviderPlugin,
   parseSecretReference,
+  providerCliUsageError,
   PluginContractError,
 } from "../dist/index.js";
 
@@ -731,6 +733,47 @@ test("validates dedicated provider CLI help-only contributions without executabl
       }),
     /only for mutation commands/,
   );
+
+  assert.throws(
+    () =>
+      parseProviderCliHelpModule({
+        easyserverCliHelp: {
+          pluginId: "fixture.plugin",
+          providerId: "fixture",
+          features: [
+            {
+              id: "marketplace",
+              displayName: "Marketplace",
+              commands: [
+                {
+                  name: "read",
+                  description: "Read",
+                  operation: "read",
+                  async run() {},
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    /run is not allowed/,
+  );
+});
+
+test("provider CLI usage errors are structural across SDK copies", () => {
+  const error = providerCliUsageError("Missing provider argument");
+  assert.equal(error instanceof Error, true);
+  assert.equal(error.kind, "easyserver-provider-cli-usage-error");
+  assert.equal(error.message, "Missing provider argument");
+  assert.equal(isProviderCliUsageError(error), true);
+  assert.equal(
+    isProviderCliUsageError({
+      kind: "easyserver-provider-cli-usage-error",
+      message: "Third-party SDK copy",
+    }),
+    true,
+  );
+  assert.equal(isProviderCliUsageError(new Error("ordinary failure")), false);
 });
 
 test("validates provider CLI affected identities for host reconciliation", () => {

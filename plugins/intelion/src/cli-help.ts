@@ -124,7 +124,7 @@ export const INTELION_SERVER_CONFIGURATOR_COMMAND_HELP = [
 export const easyserverCliHelp: ProviderCliHelpContribution = {
   pluginId: "intelion",
   providerId: "intelion",
-  displayName: "Intelion",
+  displayName: "Intelion.cloud",
   features: [
     {
       id: "server-configurator",

@@ -467,6 +467,17 @@ test("core help is hierarchical, descriptive and available before Local State or
   );
   assert.equal(withoutInk.status, 0, withoutInk.stderr);
   assert.match(withoutInk.stdout, /--close-sessions/);
+
+  const withoutNativeAddons = spawnSync(
+    process.execPath,
+    ["--no-addons", cli, "--help"],
+    {
+      encoding: "utf8",
+      env: { ...process.env, EASYSERVER_STATE_FILE: malformedStateFile },
+    },
+  );
+  assert.equal(withoutNativeAddons.status, 0, withoutNativeAddons.stderr);
+  assert.match(withoutNativeAddons.stdout, /EasyServer/);
 });
 
 test("usage errors point to the deepest relevant contextual help page", () => {
@@ -483,6 +494,18 @@ test("usage errors point to the deepest relevant contextual help page", () => {
   assert.equal(unknown.status, 1);
   assert.match(unknown.stderr, /See: easyserver --help/);
   assert.doesNotMatch(unknown.stderr, /^Usage:/m);
+
+  const unknownNestedHelp = runWithState(
+    testDirectory,
+    "instances",
+    "definitely-not-a-command",
+    "--help",
+  );
+  assert.equal(unknownNestedHelp.status, 1);
+  assert.match(unknownNestedHelp.stderr, /Unknown help topic: instances definitely-not-a-command/);
+  assert.match(unknownNestedHelp.stderr, /See: easyserver instances --help/);
+  assert.match(unknownNestedHelp.stdout, /EasyServer · instances/);
+  assert.doesNotMatch(unknownNestedHelp.stderr, /EISDIR/);
 });
 
 test("no-argument non-TTY invocation fails without terminal control output", () => {
@@ -644,6 +667,15 @@ test("first-party provider command help needs no configured credentials or provi
   assert.match(vastHelp.stdout, /non-interactive calls require --yes/);
   assert.doesNotMatch(vastHelp.stderr, /credential|authentication/i);
 
+  const intelionProviderHelp = runWithState(
+    stateFile,
+    "provider",
+    "intelion",
+    "--help",
+  );
+  assert.equal(intelionProviderHelp.status, 0, intelionProviderHelp.stderr);
+  assert.match(intelionProviderHelp.stdout, /Intelion\.cloud \(intelion\)/);
+
   const intelionHelp = runWithState(
     stateFile,
     "provider",
@@ -660,6 +692,21 @@ test("first-party provider command help needs no configured credentials or provi
   assert.match(intelionHelp.stdout, /--addon <id> \(optional, repeatable\)/);
   assert.match(intelionHelp.stdout, /Risks: billable/);
   assert.doesNotMatch(intelionHelp.stderr, /credential|authentication/i);
+
+  const providerUsageError = runWithState(
+    stateFile,
+    "provider",
+    "vastai",
+    "marketplace",
+    "rent",
+    "--yes",
+  );
+  assert.equal(providerUsageError.status, 1);
+  assert.match(providerUsageError.stderr, /Vast marketplace rent requires <offer-id>/);
+  assert.match(
+    providerUsageError.stderr,
+    /See: easyserver provider vastai marketplace rent --help/,
+  );
 
   const unknownCommand = runWithState(
     stateFile,

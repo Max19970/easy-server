@@ -1,6 +1,7 @@
 import {
   isNormalizedError,
   normalizedError,
+  providerCliUsageError,
   type ProviderCliCommandContext,
   type ProviderCliCommandResult,
   type ProviderCliContribution,
@@ -633,7 +634,7 @@ function providerReadContext(
 function parseRentalArgs(args: readonly string[]): VastRentalRequest {
   const [offerId, ...options] = args;
   if (offerId === undefined) {
-    throw new Error("Vast marketplace rent requires <offer-id>");
+    throw providerCliUsageError("Vast marketplace rent requires <offer-id>");
   }
 
   let image: string | undefined;
@@ -645,7 +646,7 @@ function parseRentalArgs(args: readonly string[]): VastRentalRequest {
     const option = options[index];
     const value = options[index + 1];
     if (value === undefined) {
-      throw new Error(`Missing value for Vast rental option ${option}`);
+      throw providerCliUsageError(`Missing value for Vast rental option ${option}`);
     }
 
     switch (option) {
@@ -657,7 +658,7 @@ function parseRentalArgs(args: readonly string[]): VastRentalRequest {
         break;
       case "--runtype":
         if (!isVastRuntype(value)) {
-          throw new Error(`Unsupported Vast runtype: ${value}`);
+          throw providerCliUsageError(`Unsupported Vast runtype: ${value}`);
         }
         runtype = value;
         break;
@@ -665,21 +666,31 @@ function parseRentalArgs(args: readonly string[]): VastRentalRequest {
         label = value;
         break;
       default:
-        throw new Error(`Unknown Vast rental option: ${option}`);
+        throw providerCliUsageError(`Unknown Vast rental option: ${option}`);
     }
   }
 
   if (image === undefined) {
-    throw new Error("Vast marketplace rent requires --image <image>");
+    throw providerCliUsageError("Vast marketplace rent requires --image <image>");
   }
 
-  return {
+  const request = {
     offerId,
     image,
     ...(diskGb === undefined ? {} : { diskGb }),
     ...(runtype === undefined ? {} : { runtype }),
     ...(label === undefined ? {} : { label }),
   };
+  try {
+    expectOfferId(request.offerId);
+    buildRentalRequest(request);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw providerCliUsageError(error.message);
+    }
+    throw error;
+  }
+  return request;
 }
 
 function buildRentalRequest(request: VastRentalRequest): Record<string, unknown> {
@@ -768,7 +779,7 @@ function parseSearchArgs(args: readonly string[]): VastOfferSearch {
 
     const value = args[index + 1];
     if (value === undefined) {
-      throw new Error(`Missing value for Vast marketplace option ${option}`);
+      throw providerCliUsageError(`Missing value for Vast marketplace option ${option}`);
     }
     index += 1;
 
@@ -789,10 +800,18 @@ function parseSearchArgs(args: readonly string[]): VastOfferSearch {
         search.limit = Number(value);
         break;
       default:
-        throw new Error(`Unknown Vast marketplace option: ${option}`);
+        throw providerCliUsageError(`Unknown Vast marketplace option: ${option}`);
     }
   }
 
+  try {
+    buildOfferSearchRequest(search);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw providerCliUsageError(error.message);
+    }
+    throw error;
+  }
   return search;
 }
 

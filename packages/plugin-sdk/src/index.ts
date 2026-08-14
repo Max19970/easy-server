@@ -205,6 +205,31 @@ export interface ProviderCliCommandContext extends ProviderOperationContext {
   writeError(text: string): void;
 }
 
+export class ProviderCliUsageError extends Error {
+  readonly kind = "easyserver-provider-cli-usage-error" as const;
+
+  constructor(message: string) {
+    if (message.trim().length === 0) {
+      throw new TypeError("provider CLI usage error message must be non-empty");
+    }
+    super(message);
+    this.name = "ProviderCliUsageError";
+  }
+}
+
+export function providerCliUsageError(message: string): ProviderCliUsageError {
+  return new ProviderCliUsageError(message);
+}
+
+export function isProviderCliUsageError(value: unknown): value is ProviderCliUsageError {
+  return (
+    isRecord(value) &&
+    value.kind === "easyserver-provider-cli-usage-error" &&
+    typeof value.message === "string" &&
+    value.message.trim().length > 0
+  );
+}
+
 export interface ProviderCliCommandResult {
   readonly refreshProviderInventory?: boolean;
   /**
@@ -889,7 +914,13 @@ export function parseProviderCliHelpModule(value: unknown): ProviderCliHelpContr
     const seenCommands = new Set<string>();
     const commands = feature.commands.map((command, commandIndex) => {
       const commandPath = `${path}.commands[${commandIndex}]`;
-      const parsed = parseProviderCliCommandMetadata(command, commandPath);
+      const commandRecord = expectRecord(command, commandPath);
+      assertOnlyKeys(
+        commandRecord,
+        ["name", "description", "operation", "risks", "help"],
+        commandPath,
+      );
+      const parsed = parseProviderCliCommandMetadata(commandRecord, commandPath);
       if (seenCommands.has(parsed.name)) {
         throw new PluginContractError(
           `${path}.commands must not contain duplicate names`,

@@ -303,7 +303,9 @@ easyserver provider <provider-id> <feature-id> --help
 easyserver provider <provider-id> <feature-id> <command> --help
 ```
 
-EasyServer validates the help-only contribution with the SDK before rendering it. The host never calls a command's `run()` function for help and never falls back to importing the normal plugin entrypoint merely to obtain metadata. Legacy/local-file plugins without a dedicated help-only package export remain loadable and executable; their provider-specific `--help` degrades explicitly instead of guessing or evaluating executable plugin code.
+EasyServer validates the help-only contribution with the SDK before rendering it. The help-only command objects are strictly declarative: executable `run` functions are rejected at this boundary. The host never calls a command's `run()` function for help and never falls back to importing the normal plugin entrypoint merely to obtain metadata. Legacy/local-file plugins without a dedicated help-only package export remain loadable and executable; their provider-specific `--help` degrades explicitly instead of guessing or evaluating executable plugin code.
+
+When a provider command rejects malformed or missing **CLI arguments**, throw `providerCliUsageError(message)` from the Plugin SDK. EasyServer recognizes this structural error even when the Provider Plugin carries a separate compatible SDK copy and points the user to that command's exact `--help` page. Do not use it for authentication, provider availability, remote API failures or mutation outcomes; those remain ordinary normalized/runtime failures and must not be disguised as usage mistakes.
 
 ### Acquisition handoff to canonical EasyServer identity
 

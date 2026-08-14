@@ -1,6 +1,7 @@
 import {
   isNormalizedError,
   normalizedError,
+  providerCliUsageError,
   type ProviderCliCommandContext,
   type ProviderCliCommandResult,
   type ProviderCliContribution,
@@ -326,7 +327,7 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
     context: ProviderCliCommandContext,
   ): Promise<void> {
     if (args.length !== 0) {
-      throw new Error("Intelion flavors does not accept arguments");
+      throw providerCliUsageError("Intelion flavors does not accept arguments");
     }
     const flavors = await this.listFlavors(context);
     context.write(`${JSON.stringify(flavors)}\n`);
@@ -337,7 +338,7 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
     context: ProviderCliCommandContext,
   ): Promise<void> {
     if (args.length !== 0) {
-      throw new Error("Intelion ssh-keys does not accept arguments");
+      throw providerCliUsageError("Intelion ssh-keys does not accept arguments");
     }
     const keys = await this.listSshKeys(context);
     context.write(`${JSON.stringify(keys)}\n`);
@@ -347,15 +348,32 @@ class ServerConfiguratorFeature implements IntelionServerConfiguratorFeature {
     args: readonly string[],
     context: ProviderCliCommandContext,
   ): Promise<void> {
-    const configuration = this.validateConfiguration(parseValidateArgs(args));
-    context.write(`${JSON.stringify(configuration)}\n`);
+    const input = parseValidateArgs(args);
+    try {
+      const configuration = this.validateConfiguration(input);
+      context.write(`${JSON.stringify(configuration)}\n`);
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw providerCliUsageError(error.message);
+      }
+      throw error;
+    }
   }
 
   async #runCreate(
     args: readonly string[],
     context: ProviderCliCommandContext,
   ): Promise<ProviderCliCommandResult> {
-    const result = await this.createServer(parseValidateArgs(args), context);
+    const input = parseValidateArgs(args);
+    try {
+      this.validateConfiguration(input);
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw providerCliUsageError(error.message);
+      }
+      throw error;
+    }
+    const result = await this.createServer(input, context);
     context.write(`${JSON.stringify(result)}\n`);
     return {
       refreshProviderInventory: true,
@@ -876,9 +894,16 @@ function parseOsImageArgs(args: readonly string[]): IntelionOsImageQuery {
     return {};
   }
   if (args.length === 2 && args[0] === "--flavor") {
-    return { flavorId: Number(args[1]) };
+    try {
+      return { flavorId: positiveInteger(Number(args[1]), "flavorId") };
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw providerCliUsageError(error.message);
+      }
+      throw error;
+    }
   }
-  throw new Error("Intelion os-images accepts only optional --flavor <id>");
+  throw providerCliUsageError("Intelion os-images accepts only optional --flavor <id>");
 }
 
 function parseCatalogPage(
@@ -1115,7 +1140,7 @@ function parseValidateArgs(args: readonly string[]): IntelionServerConfiguration
 
     const value = args[index + 1];
     if (value === undefined) {
-      throw new Error(`Missing value for Intelion configurator option ${option}`);
+      throw providerCliUsageError(`Missing value for Intelion configurator option ${option}`);
     }
     index += 1;
 
@@ -1145,21 +1170,21 @@ function parseValidateArgs(args: readonly string[]): IntelionServerConfiguration
         sshKeyIds.push(Number(value));
         break;
       default:
-        throw new Error(`Unknown Intelion configurator option: ${option}`);
+        throw providerCliUsageError(`Unknown Intelion configurator option: ${option}`);
     }
   }
 
   if (name === undefined) {
-    throw new Error("Intelion configurator requires --name <name>");
+    throw providerCliUsageError("Intelion configurator requires --name <name>");
   }
   if (flavorId === undefined) {
-    throw new Error("Intelion configurator requires --flavor <id>");
+    throw providerCliUsageError("Intelion configurator requires --flavor <id>");
   }
   if (networkDiskGb === undefined) {
-    throw new Error("Intelion configurator requires --disk <gb>");
+    throw providerCliUsageError("Intelion configurator requires --disk <gb>");
   }
   if (osImageId === undefined) {
-    throw new Error("Intelion configurator requires --os <id>");
+    throw providerCliUsageError("Intelion configurator requires --os <id>");
   }
 
   return {

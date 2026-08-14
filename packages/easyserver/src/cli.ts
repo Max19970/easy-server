@@ -4,6 +4,7 @@ import { createInterface } from "node:readline/promises";
 import {
   INSTANCE_STATES,
   isNormalizedError,
+  isProviderCliUsageError,
   normalizedError,
   type AvailableAction,
   type HostTrustRequiredError,
@@ -113,6 +114,14 @@ async function run(args: readonly string[]): Promise<void> {
       }
       return;
     }
+
+    const contextualPath = findContextualHelpPath(helpPath);
+    process.stderr.write(
+      `Unknown help topic: ${escapeTerminalText(helpPath.join(" "))}\n\n${formatHelpHint(contextualPath)}\n`,
+    );
+    process.stdout.write(formatCoreHelp(contextualPath)!);
+    process.exitCode = 1;
+    return;
   }
 
   if (command === "--version" || command === "-v" || command === "version") {
@@ -816,30 +825,40 @@ async function runProvider(args: readonly string[]): Promise<void> {
   process.once("SIGTERM", cancel);
   try {
     const interactive = isInteractiveTerminal();
-    const execution = await operations.execute({
-      providerId,
-      featureId,
-      commandName,
-      args: providerCommandArgs,
-      context: { signal: controller.signal },
-      assumeYes,
-      interaction: {
-        ...(interactive ? { confirm: confirmRiskyMutationInteractively } : {}),
-        transcript(event) {
-          if (event.stream === "output") {
-            process.stdout.write(event.text);
-          } else {
-            process.stderr.write(event.text);
-          }
+    try {
+      const execution = await operations.execute({
+        providerId,
+        featureId,
+        commandName,
+        args: providerCommandArgs,
+        context: { signal: controller.signal },
+        assumeYes,
+        interaction: {
+          ...(interactive ? { confirm: confirmRiskyMutationInteractively } : {}),
+          transcript(event) {
+            if (event.stream === "output") {
+              process.stdout.write(event.text);
+            } else {
+              process.stderr.write(event.text);
+            }
+          },
         },
-      },
-    });
-    reportProviderCommandHandoff(
-      providerId,
-      featureId,
-      commandName,
-      execution,
-    );
+      });
+      reportProviderCommandHandoff(
+        providerId,
+        featureId,
+        commandName,
+        execution,
+      );
+    } catch (error) {
+      if (isProviderCliUsageError(error)) {
+        throw new CliUsageError(
+          error.message,
+          `easyserver provider ${providerId} ${featureId} ${commandName} --help`,
+        );
+      }
+      throw error;
+    }
   } finally {
     process.removeListener("SIGINT", cancel);
     process.removeListener("SIGTERM", cancel);
