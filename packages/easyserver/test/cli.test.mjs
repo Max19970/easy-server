@@ -1230,6 +1230,137 @@ test("lists and inspects compute instances through configured providers", () => 
   assert.match(start.stderr, /conflict: instance\.start is not available/);
 });
 
+test("global JSON mode exposes stable core plugin, inventory, lifecycle and error data", () => {
+  const stateFile = join(testDirectory, "json-core-state.json");
+  const add = runWithState(stateFile, "--json", "plugins", "add", inventoryPlugin);
+  assert.equal(add.status, 0, add.stderr);
+  assert.deepEqual(JSON.parse(add.stdout), {
+    schemaVersion: 1,
+    ok: true,
+    data: {
+      plugin: {
+        pluginId: "fixture.inventory",
+        source: inventoryPlugin,
+      },
+    },
+  });
+
+  const plugins = JSON.parse(
+    runWithState(stateFile, "--json", "plugins", "list").stdout,
+  );
+  assert.equal(plugins.schemaVersion, 1);
+  assert.equal(plugins.ok, true);
+  assert.equal(plugins.data.plugins.length, 1);
+  assert.equal(plugins.data.plugins[0].state, "loaded");
+  assert.equal(plugins.data.plugins[0].providerId, "inventory");
+
+  const listed = runWithState(stateFile, "--json", "instances", "list");
+  assert.equal(listed.status, 0, listed.stderr);
+  const inventory = JSON.parse(listed.stdout);
+  assert.equal(inventory.schemaVersion, 1);
+  assert.equal(inventory.ok, true);
+  assert.equal(inventory.data.inventory.complete, true);
+  assert.equal(inventory.data.inventory.instances.length, 1);
+  const instanceId = inventory.data.inventory.instances[0].id;
+
+  const inspected = JSON.parse(
+    runWithState(stateFile, "--json", "instances", "inspect", instanceId).stdout,
+  );
+  assert.equal(inspected.ok, true);
+  assert.equal(inspected.data.instance.id, instanceId);
+  assert.equal(inspected.data.instance.providerExternalId, "remote-1");
+
+  const unavailable = runWithState(
+    stateFile,
+    "--json",
+    "instances",
+    "start",
+    instanceId,
+  );
+  assert.equal(unavailable.status, 1);
+  assert.equal(unavailable.stdout, "");
+  const error = JSON.parse(unavailable.stderr);
+  assert.equal(error.schemaVersion, 1);
+  assert.equal(error.ok, false);
+  assert.equal(error.error.code, "conflict");
+  assert.match(error.error.message, /instance\.start is not available/);
+
+  const adopted = JSON.parse(
+    runWithState(stateFile, "--json", "instances", "adopt", instanceId).stdout,
+  );
+  assert.deepEqual(adopted.data, { instanceId, management: "managed" });
+
+  const stopped = JSON.parse(
+    runWithState(stateFile, "--json", "instances", "stop", instanceId).stdout,
+  );
+  assert.deepEqual(stopped.data, {
+    action: "instance.stop",
+    instanceId,
+    status: "requested",
+    warnings: [],
+  });
+});
+
+test("global JSON mode preserves provider-owned command output as namespaced raw transcript", () => {
+  const stateFile = join(testDirectory, "json-provider-state.json");
+  assert.equal(
+    runWithState(stateFile, "plugins", "add", providerCliPlugin).status,
+    0,
+  );
+
+  const result = runWithState(
+    stateFile,
+    "--json",
+    "provider",
+    "provider-cli",
+    "marketplace",
+    "echo",
+    "alpha",
+    "beta",
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.schemaVersion, 1);
+  assert.equal(envelope.ok, true);
+  assert.deepEqual(envelope.data.provider, {
+    providerId: "provider-cli",
+    featureId: "marketplace",
+    commandName: "echo",
+    stdout: "provider-owned:alpha|beta\n",
+    stderr: "",
+  });
+  assert.equal(envelope.data.execution.operation, "read");
+  assert.equal(envelope.data.execution.mutationOutcome, "not-applicable");
+});
+
+test("global JSON mode exposes daemon-owned sessions without display parsing", async () => {
+  const stateFile = join(testDirectory, "json-sessions-state.json");
+  const daemonFile = join(testDirectory, "json-sessions-daemon.json");
+  const daemon = startDaemon(stateFile, daemonFile);
+  try {
+    await waitForDaemonFile(daemonFile, daemon);
+    const result = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "--json",
+      "sessions",
+      "list",
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      schemaVersion: 1,
+      ok: true,
+      data: { sessions: [] },
+    });
+  } finally {
+    if (daemon.child.exitCode === null) {
+      daemon.child.kill();
+      await once(daemon.child, "exit");
+    }
+  }
+});
+
 test("bulk lifecycle accepts multiple explicit instance IDs and reports partial results", () => {
   const stateFile = join(testDirectory, "bulk-instance-state.json");
   assert.equal(

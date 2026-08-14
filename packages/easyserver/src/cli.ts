@@ -275,7 +275,8 @@ async function runDaemonForeground(): Promise<void> {
   process.once("SIGTERM", stop);
 
   try {
-    process.stdout.write(
+    writeCliSuccess(
+      { daemon: { status: "running", address: daemon.address } },
       `EasyServer daemon listening on ${daemon.address.host}:${daemon.address.port}\n`,
     );
     await Promise.race([stopped, daemon.shutdownRequested.then(() => undefined)]);
@@ -362,23 +363,33 @@ function managedDaemonOperations(): ManagedDaemonOperations {
 async function reportManagedDaemonStatus(): Promise<void> {
   const state = await managedDaemonOperations().inspect();
   if (state.status === "running") {
-    process.stdout.write(
+    writeCliSuccess(
+      { daemon: { status: "running", address: state.descriptor.address } },
       `running endpoint=${state.descriptor.address.host}:${state.descriptor.address.port}\n`,
     );
     return;
   }
   if (state.status === "stopped") {
-    process.stdout.write("stopped\n");
+    writeCliSuccess({ daemon: { status: "stopped" } }, "stopped\n");
     process.exitCode = 1;
     return;
   }
-  process.stdout.write(`stale reason=${escapeTerminalText(state.reason)}\n`);
+  writeCliSuccess(
+    { daemon: { status: "stale", reason: state.reason } },
+    `stale reason=${escapeTerminalText(state.reason)}\n`,
+  );
   process.exitCode = 2;
 }
 
 async function startManagedDaemon(): Promise<void> {
   const result = await managedDaemonOperations().start();
-  process.stdout.write(
+  writeCliSuccess(
+    {
+      daemon: {
+        status: result.alreadyRunning ? "already-running" : "started",
+        address: result.descriptor.address,
+      },
+    },
     result.alreadyRunning
       ? `EasyServer daemon already running on ${result.descriptor.address.host}:${result.descriptor.address.port}\n`
       : `EasyServer daemon started on ${result.descriptor.address.host}:${result.descriptor.address.port}\n`,
@@ -388,20 +399,24 @@ async function startManagedDaemon(): Promise<void> {
 async function stopManagedDaemon(): Promise<void> {
   const result = await managedDaemonOperations().stop();
   if (result.status === "already-stopped") {
-    process.stdout.write("EasyServer daemon already stopped.\n");
+    writeCliSuccess(
+      { daemon: { status: "already-stopped" } },
+      "EasyServer daemon already stopped.\n",
+    );
     return;
   }
   if (result.status === "stale") {
-    process.stdout.write(
+    writeCliSuccess(
+      { daemon: { status: "stale", reason: result.reason } },
       `EasyServer daemon is unreachable; descriptor left intact (${escapeTerminalText(result.reason)}).\n`,
     );
     process.exitCode = 2;
     return;
   }
-  process.stdout.write(
-    `Stopping EasyServer daemon; closing live-sessions=${result.summary.liveSessions} active-endpoint-intents=${result.summary.activeEndpointIntents}.\n`,
+  writeCliSuccess(
+    { daemon: { status: "stopped", summary: result.summary } },
+    `Stopping EasyServer daemon; closing live-sessions=${result.summary.liveSessions} active-endpoint-intents=${result.summary.activeEndpointIntents}.\nEasyServer daemon stopped.\n`,
   );
-  process.stdout.write("EasyServer daemon stopped.\n");
 }
 
 async function runSessions(args: readonly string[]): Promise<void> {
@@ -414,7 +429,8 @@ async function runSessions(args: readonly string[]): Promise<void> {
 
   if (command === "list" && args.length === 1) {
     const client = await localDaemonClient();
-    process.stdout.write(formatPersistentSessions(await client.listSessions()));
+    const sessions = await client.listSessions();
+    writeCliSuccess({ sessions }, formatPersistentSessions(sessions));
     return;
   }
 
@@ -440,12 +456,13 @@ async function runSessions(args: readonly string[]): Promise<void> {
       () => client.createSession(request),
       {
         sshAdapter: new OpenSshAccessAdapter(),
-        ...(process.stdin.isTTY && process.stdout.isTTY
+        ...(isInteractiveTerminal()
           ? { confirmHostTrust: confirmHostTrustInteractively }
           : {}),
       },
     );
-    process.stdout.write(
+    writeCliSuccess(
+      { session },
       `${session.id}${session.idempotencyKey === undefined ? "" : ` idempotency-key=${escapeTerminalText(session.idempotencyKey)}`} requested-local-port=${session.requestedLocalPort ?? "dynamic"} endpoint=${session.endpoint.host}:${session.endpoint.port} access-method=${escapeTerminalText(session.accessMethod.id)} kind=${escapeTerminalText(session.accessMethod.kind)}\n`,
     );
     return;
@@ -454,7 +471,10 @@ async function runSessions(args: readonly string[]): Promise<void> {
   if (command === "close" && args[1] !== undefined && args.length === 2) {
     const client = await localDaemonClient();
     await client.closeSession(args[1]);
-    process.stdout.write(`Closed ${escapeTerminalText(args[1])}\n`);
+    writeCliSuccess(
+      { sessionId: args[1], closed: true },
+      `Closed ${escapeTerminalText(args[1])}\n`,
+    );
     return;
   }
 
@@ -466,7 +486,8 @@ async function runSessionIntents(args: readonly string[]): Promise<void> {
 
   if (command === "list" && args.length === 1) {
     const client = await localDaemonClient();
-    process.stdout.write(formatEndpointIntents(await client.listEndpointIntents()));
+    const endpointIntents = await client.listEndpointIntents();
+    writeCliSuccess({ endpointIntents }, formatEndpointIntents(endpointIntents));
     return;
   }
 
@@ -482,7 +503,7 @@ async function runSessionIntents(args: readonly string[]): Promise<void> {
       ...(localPort === undefined ? {} : { localPort }),
       ...(accessMethodId === undefined ? {} : { accessMethodId }),
     });
-    process.stdout.write(`${formatEndpointIntent(status)}\n`);
+    writeCliSuccess({ endpointIntent: status }, `${formatEndpointIntent(status)}\n`);
     return;
   }
 
@@ -493,22 +514,24 @@ async function runSessionIntents(args: readonly string[]): Promise<void> {
   ) {
     const client = await localDaemonClient();
     const status = await client.setEndpointIntentEnabled(name, command === "enable");
-    process.stdout.write(`${formatEndpointIntent(status)}\n`);
+    writeCliSuccess({ endpointIntent: status }, `${formatEndpointIntent(status)}\n`);
     return;
   }
 
   if (command === "retry" && name !== undefined && args.length === 2) {
     const client = await localDaemonClient();
-    process.stdout.write(
-      `${formatEndpointIntent(await client.retryEndpointIntent(name))}\n`,
-    );
+    const status = await client.retryEndpointIntent(name);
+    writeCliSuccess({ endpointIntent: status }, `${formatEndpointIntent(status)}\n`);
     return;
   }
 
   if (command === "remove" && name !== undefined && args.length === 2) {
     const client = await localDaemonClient();
     await client.removeEndpointIntent(name);
-    process.stdout.write(`Removed Endpoint intent ${escapeTerminalText(name)}\n`);
+    writeCliSuccess(
+      { endpointIntent: { name, removed: true } },
+      `Removed Endpoint intent ${escapeTerminalText(name)}\n`,
+    );
     return;
   }
 
@@ -593,7 +616,8 @@ async function runConnect(args: readonly string[]): Promise<void> {
         ? { confirmHostTrust: confirmHostTrustInteractively }
         : {}),
       onEndpoint(endpoint, accessMethod) {
-        process.stdout.write(
+        writeCliSuccess(
+          { endpoint, accessMethod },
           `${endpoint.host}:${endpoint.port} access-method=${escapeTerminalText(accessMethod.id)} kind=${escapeTerminalText(accessMethod.kind)}\n`,
         );
       },
@@ -605,7 +629,9 @@ async function runConnect(args: readonly string[]): Promise<void> {
 }
 
 function isInteractiveTerminal(): boolean {
-  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  return Boolean(
+    cliOutputMode === "human" && process.stdin.isTTY && process.stdout.isTTY,
+  );
 }
 
 function supportsInteractiveTui(): boolean {
@@ -786,12 +812,14 @@ async function runProviderHelp(args: readonly string[]): Promise<void> {
     stateFile: stateFilePath(),
   });
   if (contribution === undefined) {
-    process.stdout.write(formatProviderHelpUnavailable(providerId));
+    const help = formatProviderHelpUnavailable(providerId);
+    writeCliSuccess({ help }, help);
     return;
   }
 
   if (featureId === undefined) {
-    process.stdout.write(formatProviderHelpContribution(contribution));
+    const help = formatProviderHelpContribution(contribution);
+    writeCliSuccess({ help }, help);
     return;
   }
 
@@ -803,9 +831,13 @@ async function runProviderHelp(args: readonly string[]): Promise<void> {
     );
   }
   if (commandName === undefined) {
-    process.stdout.write(
-      formatProviderHelpFeature(providerId, feature.id, feature.displayName, feature.commands),
+    const help = formatProviderHelpFeature(
+      providerId,
+      feature.id,
+      feature.displayName,
+      feature.commands,
     );
+    writeCliSuccess({ help }, help);
     return;
   }
 
@@ -816,7 +848,8 @@ async function runProviderHelp(args: readonly string[]): Promise<void> {
       `easyserver provider ${providerId} ${featureId} --help`,
     );
   }
-  process.stdout.write(formatProviderCommandHelp(providerId, featureId, command));
+  const help = formatProviderCommandHelp(providerId, featureId, command);
+  writeCliSuccess({ help }, help);
 }
 
 async function runProvider(args: readonly string[]): Promise<void> {
@@ -825,18 +858,23 @@ async function runProvider(args: readonly string[]): Promise<void> {
   const operations = runtime.providerFeatureOperations;
 
   if (providerId === undefined) {
-    process.stdout.write(formatProviderFeatures(operations.listFeatures()));
+    const features = operations.listFeatures();
+    writeCliSuccess({ features }, formatProviderFeatures(features));
     return;
   }
 
   if (featureId === undefined) {
-    process.stdout.write(formatProviderFeatures(operations.listFeatures(providerId)));
+    const features = operations.listFeatures(providerId);
+    writeCliSuccess({ features }, formatProviderFeatures(features));
     return;
   }
 
   const commands = operations.listCommands(providerId, featureId);
   if (commandName === undefined) {
-    process.stdout.write(formatProviderCommands(providerId, featureId, commands));
+    writeCliSuccess(
+      { providerId, featureId, commands },
+      formatProviderCommands(providerId, featureId, commands),
+    );
     return;
   }
 
@@ -857,6 +895,7 @@ async function runProvider(args: readonly string[]): Promise<void> {
   process.once("SIGTERM", cancel);
   try {
     const interactive = isInteractiveTerminal();
+    const providerTranscript = { stdout: "", stderr: "" };
     try {
       const execution = await operations.execute({
         providerId,
@@ -868,6 +907,14 @@ async function runProvider(args: readonly string[]): Promise<void> {
         interaction: {
           ...(interactive ? { confirm: confirmRiskyMutationInteractively } : {}),
           transcript(event) {
+            if (cliOutputMode === "json") {
+              if (event.stream === "output") {
+                providerTranscript.stdout += event.text;
+              } else {
+                providerTranscript.stderr += event.text;
+              }
+              return;
+            }
             if (event.stream === "output") {
               process.stdout.write(event.text);
             } else {
@@ -876,12 +923,28 @@ async function runProvider(args: readonly string[]): Promise<void> {
           },
         },
       });
-      reportProviderCommandHandoff(
-        providerId,
-        featureId,
-        commandName,
-        execution,
-      );
+      if (cliOutputMode === "json") {
+        writeCliSuccess(
+          {
+            provider: {
+              providerId,
+              featureId,
+              commandName,
+              stdout: providerTranscript.stdout,
+              stderr: providerTranscript.stderr,
+            },
+            execution,
+          },
+          "",
+        );
+      } else {
+        reportProviderCommandHandoff(
+          providerId,
+          featureId,
+          commandName,
+          execution,
+        );
+      }
     } catch (error) {
       if (isProviderCliUsageError(error)) {
         throw new CliUsageError(
@@ -911,12 +974,14 @@ async function runInstances(args: readonly string[]): Promise<void> {
 
     if (command === "list" && args.length === 1) {
       const inventory = await manager.listInventory(context);
-      process.stdout.write(formatInventory(inventory.instances));
-      for (const provider of inventory.providers) {
-        if (provider.status === "failed") {
-          process.stderr.write(
-            `Provider ${escapeTerminalText(provider.providerId)} inventory failed (${provider.error.code}): ${escapeTerminalText(provider.error.message)}\n`,
-          );
+      writeCliSuccess({ inventory }, formatInventory(inventory.instances));
+      if (cliOutputMode === "human") {
+        for (const provider of inventory.providers) {
+          if (provider.status === "failed") {
+            process.stderr.write(
+              `Provider ${escapeTerminalText(provider.providerId)} inventory failed (${provider.error.code}): ${escapeTerminalText(provider.error.message)}\n`,
+            );
+          }
         }
       }
       if (!inventory.complete) {
@@ -931,7 +996,7 @@ async function runInstances(args: readonly string[]): Promise<void> {
         throw new Error(`Compute Instance not found: ${instanceId}`);
       }
 
-      process.stdout.write(`${JSON.stringify(instance, null, 2)}\n`);
+      writeCliSuccess({ instance }, `${JSON.stringify(instance, null, 2)}\n`);
       return;
     }
 
@@ -940,17 +1005,23 @@ async function runInstances(args: readonly string[]): Promise<void> {
       instanceId !== undefined &&
       args.length === 2
     ) {
-      process.stdout.write(
-        formatAccessMethods(
-          await runtime.connectionGateway.listAccessMethods(instanceId, context),
-        ),
+      const accessMethods = await runtime.connectionGateway.listAccessMethods(
+        instanceId,
+        context,
+      );
+      writeCliSuccess(
+        { instanceId, accessMethods },
+        formatAccessMethods(accessMethods),
       );
       return;
     }
 
     if (command === "adopt" && instanceId !== undefined && args.length === 2) {
       await instanceOperations.adopt(instanceId);
-      process.stdout.write(`Adopted ${escapeTerminalText(instanceId)} for EasyServer management\n`);
+      writeCliSuccess(
+        { instanceId, management: "managed" },
+        `Adopted ${escapeTerminalText(instanceId)} for EasyServer management\n`,
+      );
       return;
     }
 
@@ -962,7 +1033,8 @@ async function runInstances(args: readonly string[]): Promise<void> {
         { timeoutMs: wait.timeoutMs },
         context,
       );
-      process.stdout.write(
+      writeCliSuccess(
+        { instanceId, result },
         `Reached state=${result.observedState} for ${escapeTerminalText(instanceId)}\n`,
       );
       return;
@@ -975,10 +1047,15 @@ async function runInstances(args: readonly string[]): Promise<void> {
         args.slice(1),
       );
       const interactive = isInteractiveTerminal();
+      const warnings: string[] = [];
       const interaction = {
         assumeYes: actionOptions.assumeYes,
         warning(message: string) {
-          process.stderr.write(`Warning: ${escapeTerminalText(message)}\n`);
+          if (cliOutputMode === "json") {
+            warnings.push(message);
+          } else {
+            process.stderr.write(`Warning: ${escapeTerminalText(message)}\n`);
+          }
         },
         ...(interactive
           ? {
@@ -1004,7 +1081,10 @@ async function runInstances(args: readonly string[]): Promise<void> {
         } else {
           await instanceOperations.perform({ instanceId: target, action, context });
         }
-        process.stdout.write(`Requested ${action} for ${escapeTerminalText(target)}\n`);
+        writeCliSuccess(
+          { action, instanceId: target, status: "requested", warnings },
+          `Requested ${action} for ${escapeTerminalText(target)}\n`,
+        );
         return;
       }
 
@@ -1019,7 +1099,10 @@ async function runInstances(args: readonly string[]): Promise<void> {
               interaction,
             }),
       });
-      process.stdout.write(formatBulkInstanceActionResult(result));
+      writeCliSuccess(
+        { result, warnings },
+        formatBulkInstanceActionResult(result),
+      );
       if (result.summary.failed + result.summary.outcomeUnknown > 0) {
         process.exitCode = result.summary.completed > 0 ? 2 : 1;
       }
@@ -1042,24 +1125,25 @@ async function runPlugins(args: readonly string[]): Promise<void> {
   const operations = runtime.pluginOperations;
 
   if (command === "list") {
-    process.stdout.write(
-      formatPluginStatuses(
-        await operations.list(parsePluginSources(args.slice(1))),
-      ),
-    );
+    const plugins = await operations.list(parsePluginSources(args.slice(1)));
+    writeCliSuccess({ plugins }, formatPluginStatuses(plugins));
     return;
   }
 
   if (command === "add" && args.length === 2) {
     const result = await operations.add(args[1]);
-    process.stdout.write(`Added ${escapeTerminalText(result.pluginId)}\n`);
+    writeCliSuccess(
+      { plugin: result },
+      `Added ${escapeTerminalText(result.pluginId)}\n`,
+    );
     return;
   }
 
   if ((command === "enable" || command === "disable") && args.length === 2) {
     const enabled = command === "enable";
     const result = await operations.setEnabled(args[1], enabled);
-    process.stdout.write(
+    writeCliSuccess(
+      { plugin: { ...result, enabled } },
       `${enabled ? "Enabled" : "Disabled"} ${escapeTerminalText(result.source)}\n`,
     );
     return;
@@ -1091,10 +1175,18 @@ async function runPluginCredential(
       throw new Error(`Environment variable is empty or missing: ${variable}`);
     }
     const result = await operations.setCredential(rawSource, name, secret);
-    process.stdout.write(
+    writeCliSuccess(
+      {
+        credential: {
+          source: rawSource,
+          name,
+          configured: true,
+          previousSecretRemoved: result.previousSecretRemoved,
+        },
+      },
       `Configured credential ${escapeTerminalText(name)} for ${escapeTerminalText(rawSource)}\n`,
     );
-    if (!result.previousSecretRemoved) {
+    if (!result.previousSecretRemoved && cliOutputMode === "human") {
       process.stderr.write(
         "Warning: previous credential could not be removed from the OS secret store.\n",
       );
@@ -1109,10 +1201,18 @@ async function runPluginCredential(
     args.length === 3
   ) {
     const result = await operations.removeCredential(rawSource, name);
-    process.stdout.write(
+    writeCliSuccess(
+      {
+        credential: {
+          source: rawSource,
+          name,
+          configured: false,
+          previousSecretRemoved: result.previousSecretRemoved,
+        },
+      },
       `Removed credential ${escapeTerminalText(name)} from ${escapeTerminalText(rawSource)}\n`,
     );
-    if (!result.previousSecretRemoved) {
+    if (!result.previousSecretRemoved && cliOutputMode === "human") {
       process.stderr.write(
         "Warning: credential reference was removed but the OS secret could not be deleted.\n",
       );
