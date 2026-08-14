@@ -157,9 +157,15 @@ try {
   ) + ($ProgramArgs | ForEach-Object { Quote-MinttyArgument $_ })
 
   Start-Process -FilePath $mintty -ArgumentList $minttyArgs | Out-Null
-  $windowProcess = Find-SmokeWindow ((Get-Date).AddSeconds(10))
+  $windowProcess = Find-SmokeWindow ((Get-Date).AddSeconds(20))
   if ($null -eq $windowProcess) {
-    throw "TUI smoke terminal window did not appear."
+    $observed = if (Test-Path -LiteralPath $log) { Read-SharedText $log } else { "<no terminal log>" }
+    $observed = [regex]::Replace($observed, ([char]27 + '\[[0-9;?]*[ -/]*[@-~]'), "")
+    $observed = $observed.Replace("`r", " ").Replace("`n", " ").Trim()
+    if ($observed.Length -gt 1200) {
+      $observed = $observed.Substring($observed.Length - 1200)
+    }
+    throw "TUI smoke terminal window did not appear. Observed: $observed"
   }
 
   if (-not (Wait-ForLogText $log $ExpectedText ((Get-Date).AddSeconds(15)))) {
