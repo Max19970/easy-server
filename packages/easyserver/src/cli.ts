@@ -30,6 +30,11 @@ import { formatPluginStatuses } from "./plugin-host.js";
 import type { PluginOperations } from "./plugin-operations.js";
 import type { ProviderFeatureCommandDescriptor } from "./provider-feature-operations.js";
 import {
+  findContextualHelpPath,
+  formatCoreHelp,
+  formatHelpHint,
+} from "./cli-help.js";
+import {
   createHostRuntime,
   resolveHostRuntimePaths,
 } from "./host-runtime.js";
@@ -58,44 +63,6 @@ class CliUsageError extends Error {
   }
 }
 
-const help = `EasyServer
-
-Usage:
-  easyserver --help
-  easyserver --version
-  easyserver doctor
-  easyserver plugins list [--plugin <module> ...]
-  easyserver plugins add <module>
-  easyserver plugins enable <module>
-  easyserver plugins disable <module>
-  easyserver plugins credential set <module> <name> --env <variable>
-  easyserver plugins credential remove <module> <name>
-  easyserver instances list
-  easyserver instances inspect <instance-id>
-  easyserver instances access-methods <instance-id>
-  easyserver instances adopt <instance-id>
-  easyserver instances start <instance-id>...
-  easyserver instances stop <instance-id>...
-  easyserver instances restart <instance-id>...
-  easyserver instances destroy <instance-id>... [--close-sessions] [--yes]
-  easyserver instances wait <instance-id> --state <state|absent> [--timeout <seconds>]
-  easyserver connect <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>] [--access-method <id>]
-  easyserver daemon run
-  easyserver daemon start
-  easyserver daemon status
-  easyserver daemon stop
-  easyserver sessions create <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>] [--access-method <id>] [--idempotency-key <key>]
-  easyserver sessions list
-  easyserver sessions close <session-id>
-  easyserver sessions intents list
-  easyserver sessions intents create <name> <instance-id> --port <remote-port> [--host <remote-host>] [--local-port <local-port>] [--access-method <id>]
-  easyserver sessions intents enable <name>
-  easyserver sessions intents disable <name>
-  easyserver sessions intents retry <name>
-  easyserver sessions intents remove <name>
-  easyserver provider <provider-id> <feature-id> <command> [--yes] [args...]
-`;
-
 await run(process.argv.slice(2));
 
 async function run(args: readonly string[]): Promise<void> {
@@ -114,14 +81,23 @@ async function run(args: readonly string[]): Promise<void> {
       const { runTui } = await import("./tui.js");
       await runTui();
     } catch (error) {
-      reportCliError(error);
+      reportCliError(error, []);
     }
     return;
   }
 
   if (command === "--help" || command === "-h") {
-    process.stdout.write(help);
+    process.stdout.write(formatCoreHelp()!);
     return;
+  }
+
+  const helpFlag = args.at(-1);
+  if (helpFlag === "--help" || helpFlag === "-h") {
+    const page = formatCoreHelp(args.slice(0, -1));
+    if (page !== undefined) {
+      process.stdout.write(page);
+      return;
+    }
   }
 
   if (command === "--version" || command === "-v" || command === "version") {
@@ -133,7 +109,7 @@ async function run(args: readonly string[]): Promise<void> {
     try {
       await runDoctor(args.slice(1));
     } catch (error) {
-      reportCliError(error);
+      reportCliError(error, args);
     }
     return;
   }
@@ -142,7 +118,7 @@ async function run(args: readonly string[]): Promise<void> {
     try {
       await runDaemon(args.slice(1));
     } catch (error) {
-      reportCliError(error);
+      reportCliError(error, args);
     }
     return;
   }
@@ -151,7 +127,7 @@ async function run(args: readonly string[]): Promise<void> {
     try {
       await runSessions(args.slice(1));
     } catch (error) {
-      reportCliError(error);
+      reportCliError(error, args);
     }
     return;
   }
@@ -160,7 +136,7 @@ async function run(args: readonly string[]): Promise<void> {
     try {
       await runConnect(args.slice(1));
     } catch (error) {
-      reportCliError(error);
+      reportCliError(error, args);
     }
     return;
   }
@@ -169,7 +145,7 @@ async function run(args: readonly string[]): Promise<void> {
     try {
       await runProvider(args.slice(1));
     } catch (error) {
-      reportCliError(error);
+      reportCliError(error, args);
     }
     return;
   }
@@ -178,7 +154,7 @@ async function run(args: readonly string[]): Promise<void> {
     try {
       await runInstances(args.slice(1));
     } catch (error) {
-      reportCliError(error);
+      reportCliError(error, args);
     }
     return;
   }
@@ -187,12 +163,14 @@ async function run(args: readonly string[]): Promise<void> {
     try {
       await runPlugins(args.slice(1));
     } catch (error) {
-      reportCliError(error);
+      reportCliError(error, args);
     }
     return;
   }
 
-  process.stderr.write(`Unknown command: ${escapeTerminalText(command)}\n\n${help}`);
+  process.stderr.write(
+    `Unknown command: ${escapeTerminalText(command)}\n\n${formatHelpHint([])}\n`,
+  );
   process.exitCode = 1;
 }
 
@@ -429,9 +407,9 @@ async function runSessions(args: readonly string[]): Promise<void> {
 
 async function runSessionIntents(args: readonly string[]): Promise<void> {
   const [command, name] = args;
-  const client = await localDaemonClient();
 
   if (command === "list" && args.length === 1) {
+    const client = await localDaemonClient();
     process.stdout.write(formatEndpointIntents(await client.listEndpointIntents()));
     return;
   }
@@ -439,6 +417,7 @@ async function runSessionIntents(args: readonly string[]): Promise<void> {
   if (command === "create" && name !== undefined) {
     const { instanceId, remotePort, remoteHost, localPort, accessMethodId } =
       parseConnectArgs(args.slice(2), "sessions intents create");
+    const client = await localDaemonClient();
     const status = await client.createEndpointIntent({
       name,
       instanceId,
@@ -456,12 +435,14 @@ async function runSessionIntents(args: readonly string[]): Promise<void> {
     name !== undefined &&
     args.length === 2
   ) {
+    const client = await localDaemonClient();
     const status = await client.setEndpointIntentEnabled(name, command === "enable");
     process.stdout.write(`${formatEndpointIntent(status)}\n`);
     return;
   }
 
   if (command === "retry" && name !== undefined && args.length === 2) {
+    const client = await localDaemonClient();
     process.stdout.write(
       `${formatEndpointIntent(await client.retryEndpointIntent(name))}\n`,
     );
@@ -469,6 +450,7 @@ async function runSessionIntents(args: readonly string[]): Promise<void> {
   }
 
   if (command === "remove" && name !== undefined && args.length === 2) {
+    const client = await localDaemonClient();
     await client.removeEndpointIntent(name);
     process.stdout.write(`Removed Endpoint intent ${escapeTerminalText(name)}\n`);
     return;
@@ -1425,10 +1407,10 @@ function daemonFilePath(): string {
   return resolveHostRuntimePaths().daemonFile;
 }
 
-function reportCliError(error: unknown): void {
+function reportCliError(error: unknown, args: readonly string[]): void {
   process.stderr.write(
     error instanceof CliUsageError
-      ? `${escapeTerminalText(errorMessage(error))}\n\n${help}`
+      ? `${escapeTerminalText(errorMessage(error))}\n\n${formatHelpHint(findContextualHelpPath(args))}\n`
       : `${escapeTerminalText(errorMessage(error))}\n`,
   );
   process.exitCode = 1;

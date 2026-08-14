@@ -419,12 +419,70 @@ function relativePluginSource(source) {
   return process.platform === "win32" ? `.\\${path}` : `./${path}`;
 }
 
-test("prints help", () => {
+test("top-level help explains TUI versus CLI use and every core command group", () => {
   const result = run("--help");
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /EasyServer/);
-  assert.match(result.stdout, /--version/);
-  assert.match(result.stdout, /connect <instance-id> --port <remote-port>/);
+  assert.match(result.stdout, /easyserver\s+Open the interactive TUI/);
+  assert.match(result.stdout, /easyserver --help\s+Show this CLI help entrypoint/);
+  assert.match(result.stdout, /easyserver --version\s+Print the EasyServer version without starting the TUI/);
+  for (const command of [
+    "doctor",
+    "plugins",
+    "instances",
+    "connect",
+    "daemon",
+    "sessions",
+    "provider",
+  ]) {
+    assert.match(result.stdout, new RegExp(`^  ${command}\\s{2}`, "m"));
+  }
+  assert.match(result.stdout, /Provider-independent compute lifecycle and local connectivity/);
+});
+
+test("core help is hierarchical, descriptive and available before Local State or TUI initialization", async () => {
+  const malformedStateFile = join(testDirectory, "help-must-not-read-state.json");
+  await writeFile(malformedStateFile, "this is deliberately not json", "utf8");
+
+  for (const [path, expected] of [
+    [["plugins", "credential", "set"], /Secret Store/],
+    [["instances", "destroy"], /Permanently release one or more managed Compute Instances/],
+    [["connect"], /foreground localhost Endpoint/],
+    [["daemon", "stop"], /Persistent desired Endpoint intents remain durable/],
+    [["sessions", "intents"], /durable desired Endpoint definitions/],
+    [["sessions", "create"], /daemon-owned persistent Connection Session/],
+  ]) {
+    const result = runWithState(malformedStateFile, ...path, "--help");
+    assert.equal(result.status, 0, `${path.join(" ")}: ${result.stderr}`);
+    assert.match(result.stdout, expected);
+    assert.match(result.stdout, new RegExp(`Usage:\\n  easyserver ${path.join(" ")}`));
+  }
+
+  const withoutInk = spawnSync(
+    process.execPath,
+    ["--import", pathToFileURL(rejectTuiRuntime).href, cli, "instances", "destroy", "--help"],
+    {
+      encoding: "utf8",
+      env: { ...process.env, EASYSERVER_STATE_FILE: malformedStateFile },
+    },
+  );
+  assert.equal(withoutInk.status, 0, withoutInk.stderr);
+  assert.match(withoutInk.stdout, /--close-sessions/);
+});
+
+test("usage errors point to the deepest relevant contextual help page", () => {
+  const destroy = run("instances", "destroy");
+  assert.equal(destroy.status, 1);
+  assert.match(destroy.stderr, /See: easyserver instances destroy --help/);
+  assert.doesNotMatch(destroy.stderr, /^Usage:/m);
+
+  const intents = run("sessions", "intents", "wat");
+  assert.equal(intents.status, 1);
+  assert.match(intents.stderr, /See: easyserver sessions intents --help/);
+
+  const unknown = run("definitely-not-a-command");
+  assert.equal(unknown.status, 1);
+  assert.match(unknown.stderr, /See: easyserver --help/);
+  assert.doesNotMatch(unknown.stderr, /^Usage:/m);
 });
 
 test("no-argument non-TTY invocation fails without terminal control output", () => {
@@ -2283,7 +2341,8 @@ test("connect validates its target before opening providers", () => {
   const missingPort = run("connect", "instance:test");
   assert.equal(missingPort.status, 1);
   assert.match(missingPort.stderr, /connect requires --port/);
-  assert.match(missingPort.stderr, /Usage:/);
+  assert.match(missingPort.stderr, /See: easyserver connect --help/);
+  assert.doesNotMatch(missingPort.stderr, /Usage:/);
 
   const invalidPort = run("connect", "instance:test", "--port", "70000");
   assert.equal(invalidPort.status, 1);
@@ -2294,5 +2353,6 @@ test("rejects unknown commands", () => {
   const result = run("nope");
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Unknown command: nope/);
-  assert.match(result.stderr, /Usage:/);
+  assert.match(result.stderr, /See: easyserver --help/);
+  assert.doesNotMatch(result.stderr, /Usage:/);
 });
