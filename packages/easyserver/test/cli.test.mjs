@@ -522,6 +522,55 @@ test("prints version", () => {
   assert.equal(result.stdout, "0.2.0\n");
 });
 
+test("global --json emits version and help through the stable success envelope", () => {
+  const version = run("--json", "--version");
+  assert.equal(version.status, 0, version.stderr);
+  assert.deepEqual(JSON.parse(version.stdout), {
+    schemaVersion: 1,
+    ok: true,
+    data: { version: "0.2.0" },
+  });
+  assert.equal(version.stderr, "");
+
+  const help = run("--json", "instances", "--help");
+  assert.equal(help.status, 0, help.stderr);
+  const envelope = JSON.parse(help.stdout);
+  assert.equal(envelope.schemaVersion, 1);
+  assert.equal(envelope.ok, true);
+  assert.match(envelope.data.help, /EasyServer · instances/);
+  assert.equal(help.stderr, "");
+});
+
+test("global --json emits one structured usage error without human help text", () => {
+  const result = run("--json", "instances", "definitely-not-a-command");
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.deepEqual(JSON.parse(result.stderr), {
+    schemaVersion: 1,
+    ok: false,
+    error: {
+      code: "usage-error",
+      message: "Unknown instances command: definitely-not-a-command",
+      helpCommand: "easyserver instances --help",
+    },
+  });
+});
+
+test("bare --json fails as structured command-mode usage instead of launching the TUI", () => {
+  const result = runWithoutTuiRuntime("--json");
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.deepEqual(JSON.parse(result.stderr), {
+    schemaVersion: 1,
+    ok: false,
+    error: {
+      code: "usage-error",
+      message: "--json requires a command",
+      helpCommand: "easyserver --help",
+    },
+  });
+});
+
 test("command mode never initializes the React or Ink runtime", () => {
   const helpResult = runWithoutTuiRuntime("--help");
   assert.equal(helpResult.status, 0, helpResult.stderr);

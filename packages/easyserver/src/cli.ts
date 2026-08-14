@@ -70,10 +70,24 @@ class CliUsageError extends Error {
   }
 }
 
-await run(process.argv.slice(2));
+const CLI_JSON_SCHEMA_VERSION = 1 as const;
+type CliOutputMode = "human" | "json";
+let cliOutputMode: CliOutputMode = "human";
+
+const invocation = parseCliInvocation(process.argv.slice(2));
+cliOutputMode = invocation.outputMode;
+await run(invocation.args);
 
 async function run(args: readonly string[]): Promise<void> {
   const [command] = args;
+
+  if (command === undefined && cliOutputMode === "json") {
+    reportCliError(
+      new CliUsageError("--json requires a command", "easyserver --help"),
+      [],
+    );
+    return;
+  }
 
   if (command === undefined) {
     if (!supportsInteractiveTui()) {
@@ -94,7 +108,8 @@ async function run(args: readonly string[]): Promise<void> {
   }
 
   if (command === "--help" || command === "-h") {
-    process.stdout.write(formatCoreHelp()!);
+    const help = formatCoreHelp()!;
+    writeCliSuccess({ help }, help);
     return;
   }
 
@@ -103,7 +118,7 @@ async function run(args: readonly string[]): Promise<void> {
     const helpPath = args.slice(0, -1);
     const page = formatCoreHelp(helpPath);
     if (page !== undefined) {
-      process.stdout.write(page);
+      writeCliSuccess({ help: page }, page);
       return;
     }
     if (helpPath[0] === "provider") {
@@ -116,6 +131,16 @@ async function run(args: readonly string[]): Promise<void> {
     }
 
     const contextualPath = findContextualHelpPath(helpPath);
+    if (cliOutputMode === "json") {
+      reportCliError(
+        new CliUsageError(
+          `Unknown help topic: ${helpPath.join(" ")}`,
+          helpCommandForPath(contextualPath),
+        ),
+        helpPath,
+      );
+      return;
+    }
     process.stderr.write(
       `Unknown help topic: ${escapeTerminalText(helpPath.join(" "))}\n\n${formatHelpHint(contextualPath)}\n`,
     );
@@ -125,7 +150,7 @@ async function run(args: readonly string[]): Promise<void> {
   }
 
   if (command === "--version" || command === "-v" || command === "version") {
-    process.stdout.write(`${EASYSERVER_VERSION}\n`);
+    writeCliSuccess({ version: EASYSERVER_VERSION }, `${EASYSERVER_VERSION}\n`);
     return;
   }
 
@@ -192,6 +217,13 @@ async function run(args: readonly string[]): Promise<void> {
     return;
   }
 
+  if (cliOutputMode === "json") {
+    reportCliError(
+      new CliUsageError(`Unknown command: ${command}`, "easyserver --help"),
+      args,
+    );
+    return;
+  }
   process.stderr.write(
     `Unknown command: ${escapeTerminalText(command)}\n\n${formatHelpHint([])}\n`,
   );
@@ -207,7 +239,7 @@ async function runDoctor(args: readonly string[]): Promise<void> {
     stateFile: stateFilePath(),
     daemonFile: daemonFilePath(),
   });
-  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  writeCliSuccess(report, `${JSON.stringify(report, null, 2)}\n`);
 }
 
 async function runDaemon(args: readonly string[]): Promise<void> {
@@ -1532,6 +1564,29 @@ function parsePluginSources(args: readonly string[]): readonly string[] {
   return sources;
 }
 
+function parseCliInvocation(args: readonly string[]): {
+  readonly outputMode: CliOutputMode;
+  readonly args: readonly string[];
+} {
+  return args[0] === "--json"
+    ? { outputMode: "json", args: args.slice(1) }
+    : { outputMode: "human", args };
+}
+
+function writeCliSuccess<T>(data: T, humanText: string): void {
+  process.stdout.write(
+    cliOutputMode === "json"
+      ? `${JSON.stringify({ schemaVersion: CLI_JSON_SCHEMA_VERSION, ok: true, data })}\n`
+      : humanText,
+  );
+}
+
+function helpCommandForPath(path: readonly string[]): string {
+  return path.length === 0
+    ? "easyserver --help"
+    : `easyserver ${path.join(" ")} --help`;
+}
+
 function stateFilePath(): string {
   return resolveHostRuntimePaths().stateFile;
 }
@@ -1541,6 +1596,30 @@ function daemonFilePath(): string {
 }
 
 function reportCliError(error: unknown, args: readonly string[]): void {
+  if (cliOutputMode === "json") {
+    const helpCommand =
+      error instanceof CliUsageError
+        ? error.helpCommand ?? helpCommandForPath(findContextualHelpPath(args))
+        : undefined;
+    process.stderr.write(
+      `${JSON.stringify({
+        schemaVersion: CLI_JSON_SCHEMA_VERSION,
+        ok: false,
+        error: {
+          code: isNormalizedError(error)
+            ? error.code
+            : error instanceof CliUsageError
+              ? "usage-error"
+              : "command-failed",
+          message: errorMessage(error),
+          ...(helpCommand === undefined ? {} : { helpCommand }),
+        },
+      })}\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   process.stderr.write(
     error instanceof CliUsageError
       ? `${escapeTerminalText(errorMessage(error))}\n\n${error.helpCommand === undefined ? formatHelpHint(findContextualHelpPath(args)) : `See: ${escapeTerminalText(error.helpCommand)}`}\n`
