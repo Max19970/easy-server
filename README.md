@@ -71,6 +71,20 @@ Check the active plugin set:
 easyserver plugins list
 ```
 
+## Interactive TUI
+
+For ordinary interactive use, run EasyServer without arguments:
+
+```powershell
+easyserver
+```
+
+The TUI provides Overview, Instances, Providers, New instance, Connections and privacy-safe Diagnostics over the same host-owned operations as command mode. It supports compact terminals, `NO_COLOR` and a linear `INK_SCREEN_READER=true` mode. Foreground Endpoints close with the TUI; daemon-owned persistent Sessions and Endpoint intents survive TUI exit.
+
+Use `easyserver --help` and nested `--help` pages for automation and advanced command-mode workflows. Plain `easyserver` on a non-interactive stdin/stdout fails clearly instead of emitting terminal control output.
+
+Provider package installation/update/uninstall remains a package-manager/CLI concern; the TUI registers and configures Provider Plugins that are already installed in the EasyServer package environment. See [Interactive TUI](docs/tui.md) for keyboard navigation, accessibility, connection lifetime and degraded/recovery behavior.
+
 ## Quick start: rent compute and expose a service
 
 The shortest real flow is provider-specific acquisition followed by provider-independent access. This example uses Vast.ai; prepare the account/API key and register an account-level SSH public key first as described in the [Vast.ai guide](docs/providers/vastai.md).

@@ -40,6 +40,8 @@ easyserver sessions intents --help
 
 Usage errors point back to the nearest relevant `--help` page instead of dumping unrelated global usage.
 
+See [Interactive TUI](tui.md) for keyboard navigation, compact terminals, `NO_COLOR`, screen-reader mode, connection lifetime, privacy-safe Diagnostics and recovery behavior. Plain `easyserver` requires an interactive terminal; in a pipe, CI job or other non-TTY context use the explicit CLI command you intend instead.
+
 Provider-specific commands remain Provider Plugin owned. Package-based plugins can publish a dedicated side-effect-free `./easyserver-help` contribution, which allows discovery without loading the normal plugin runtime, resolving credentials or contacting provider APIs:
 
 ```sh

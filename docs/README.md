@@ -7,6 +7,7 @@ Documentation kept here must be useful to at least one external audience: EasySe
 Current public guides:
 
 - [Getting started](getting-started.md)
+- [Interactive TUI](tui.md)
 - [Install from GitHub Releases](github-release-install.md)
 - [Vast.ai quick start](providers/vastai.md)
 - [Intelion.cloud quick start](providers/intelion.md)
@@ -19,4 +20,4 @@ Current public guides:
 - [0.1.0 dependency and supply-chain audit](dependency-audit-0.1.0.md)
 - [EasyServer 0.1.0 release notes](releases/v0.1.0.md)
 
-Additional user, provider, release and compatibility documentation is added here as the public `0.1.0` release surface is finalized.
+Release-specific notes are kept under `releases/`; the current compatibility line is described by the package/version metadata and [Versioning and compatibility](versioning-and-compatibility.md).
