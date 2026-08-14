@@ -70,6 +70,11 @@ import {
   type TuiPersistentSessionRequest,
 } from "./tui-daemon-operations.js";
 import {
+  createDefaultTuiDiagnosticsOperations,
+  serializeTuiDiagnostics,
+  type TuiDiagnosticsOperations,
+} from "./tui-diagnostics.js";
+import {
   isNormalizedError,
   normalizedError,
   PROVIDER_CAPABILITIES,
@@ -80,6 +85,15 @@ import {
 } from "@easyai101/easyserver-plugin-sdk";
 import { escapeTerminalText } from "./terminal-text.js";
 import { EASYSERVER_VERSION } from "./version.js";
+
+type TuiDiagnosticsView =
+  | { readonly status: "idle" }
+  | { readonly status: "loading" }
+  | { readonly status: "failed"; readonly message: string }
+  | {
+      readonly status: "ready";
+      readonly text: string;
+    };
 
 type TuiRouteId =
   | "overview"
@@ -214,7 +228,9 @@ export interface TuiShellProps {
   readonly onOperationAction?: (action: TuiOperationActionKind) => void;
   readonly readSnapshot?: TuiReadSnapshot;
   readonly readStatus?: TuiReadStatus;
+  readonly diagnostics?: TuiDiagnosticsView;
   readonly onRefresh?: (routeId: TuiRouteId) => void;
+  readonly onCopyDiagnostics?: () => Promise<boolean>;
   readonly onInstanceMutation?: (mutation: TuiInstanceMutation) => void;
   readonly onBulkInstanceMutation?: (mutation: TuiBulkInstanceMutation) => void;
   readonly foregroundConnections?: readonly TuiForegroundConnection[];
@@ -253,7 +269,9 @@ export function TuiShell({
   onOperationAction,
   readSnapshot,
   readStatus = "idle",
+  diagnostics = { status: "idle" },
   onRefresh,
+  onCopyDiagnostics,
   onInstanceMutation,
   onBulkInstanceMutation,
   foregroundConnections = [],
@@ -460,6 +478,19 @@ export function TuiShell({
     [activeIndex, focusedIndex],
   );
 
+  const openRoute = (routeId: TuiRouteId, message?: string): void => {
+    const index = routes.findIndex((route) => route.id === routeId);
+    if (index < 0) {
+      return;
+    }
+    setActiveIndex(index);
+    setFocusedIndex(index);
+    setStatus(message ?? `Opened ${routes[index]?.label ?? "Overview"}.`);
+    if (routeId === "diagnostics") {
+      onRefresh?.("diagnostics");
+    }
+  };
+
   const requestExit = (): void => {
     const count = foregroundConnections.length;
     if (count === 0) {
@@ -633,7 +664,18 @@ export function TuiShell({
       return;
     }
 
-    if (foregroundConnectionFlow !== undefined) {
+    if (
+      foregroundConnectionFlow !== undefined &&
+      input === "g" &&
+      (operation?.phase === "failed" ||
+        operation?.phase === "outcome-unknown" ||
+        operation?.phase === "reconciliation-failed")
+    ) {
+      openRoute("diagnostics", "Opened privacy-safe Diagnostics from the connection failure.");
+      return;
+    }
+
+    if (foregroundConnectionFlow !== undefined && activeRoute.id === "sessions") {
       if (foregroundConnectionBusy) {
         return;
       }
@@ -931,6 +973,32 @@ export function TuiShell({
 
     if (helpOpen) {
       return;
+    }
+
+    if (input === "g") {
+      openRoute("diagnostics", "Opened privacy-safe Diagnostics.");
+      return;
+    }
+
+    if (activeRoute.id === "diagnostics") {
+      if (input === "P") {
+        openRoute("providers", "Opened Providers for remediation.");
+        return;
+      }
+      if (input === "C") {
+        openRoute("sessions", "Opened Connections for remediation.");
+        return;
+      }
+      if (input === "c" && diagnostics.status === "ready" && onCopyDiagnostics !== undefined) {
+        void onCopyDiagnostics().then((copied) => {
+          setStatus(
+            copied
+              ? "Copied the reviewed privacy-safe Diagnostics payload."
+              : "Diagnostics could not be copied; the reviewed payload is unchanged.",
+          );
+        });
+        return;
+      }
     }
 
     if (activeRoute.id === "sessions" && input === "n") {
@@ -1427,8 +1495,10 @@ export function TuiShell({
     }
 
     if (key.return) {
-      setActiveIndex(focusedIndex);
-      setStatus(`Opened ${routes[focusedIndex]?.label ?? "Overview"}.`);
+      const route = routes[focusedIndex];
+      if (route !== undefined) {
+        openRoute(route.id);
+      }
       return;
     }
 
@@ -1508,6 +1578,8 @@ export function TuiShell({
                   route={activeRoute}
                   snapshot={readSnapshot}
                   readStatus={readStatus}
+                  diagnostics={diagnostics}
+                  canCopyDiagnostics={onCopyDiagnostics !== undefined}
                   narrow={narrow}
                   selectedInstanceId={selectedInstanceId}
                   bulkSelectedInstanceIds={bulkSelectedInstanceIds}
@@ -1573,11 +1645,11 @@ export function TuiShell({
           </Text>
         ) : screenReader ? (
           <Text>
-            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; R refreshes; on Instances, J and K select, Space marks bulk targets, 0 clears marks, and number keys run lifecycle actions; on Connections, N starts a foreground Endpoint, P creates a persistent Session, D starts or stops the daemon, lowercase J/K/X manage foreground Endpoints, uppercase J/K/C manage persistent Sessions, brackets select persisted Endpoint intents, E toggles them, T retries Error state, and uppercase X removes after confirmation; Q quits.
+            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; r refreshes; g opens privacy-safe Diagnostics; on Instances, J and K select, Space marks bulk targets, 0 clears marks, and number keys run lifecycle actions; on Connections, N starts a foreground Endpoint, P creates a persistent Session, D starts or stops the daemon, lowercase J/K/X manage foreground Endpoints, uppercase J/K/C manage persistent Sessions, brackets select persisted Endpoint intents, E toggles them, T retries Error state, and uppercase X removes after confirmation; on Diagnostics, lowercase c copies the reviewed payload, P opens Providers and uppercase C opens Connections; Q quits.
           </Text>
         ) : (
           <Text color={muted} wrap="wrap">
-            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh{activeRoute.id === "instances" ? onInstanceMutation === undefined ? " · j/k select" : onBulkInstanceMutation === undefined ? " · j/k select · a adopt · 1-4 actions" : " · j/k select · Space mark · 0 clear · a adopt · 1-4 actions" : activeRoute.id === "sessions" ? " · n foreground · p persistent · d daemon · j/k/x foreground · J/K/c sessions · [/] intents · e toggle · t retry · X remove" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : ""} · q quit
+            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh · g diagnostics{activeRoute.id === "instances" ? onInstanceMutation === undefined ? " · j/k select" : onBulkInstanceMutation === undefined ? " · j/k select · a adopt · 1-4 actions" : " · j/k select · Space mark · 0 clear · a adopt · 1-4 actions" : activeRoute.id === "sessions" ? " · n foreground · p persistent · d daemon · j/k/x foreground · J/K/c sessions · [/] intents · e toggle · t retry · X remove" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : activeRoute.id === "diagnostics" ? " · c copy · P providers · C connections" : ""} · q quit
           </Text>
         )}
       </Box>
@@ -1589,6 +1661,8 @@ interface RouteSurfaceProps {
   readonly route: TuiRoute;
   readonly snapshot?: TuiReadSnapshot;
   readonly readStatus: TuiReadStatus;
+  readonly diagnostics: TuiDiagnosticsView;
+  readonly canCopyDiagnostics: boolean;
   readonly narrow: boolean;
   readonly selectedInstanceId?: string;
   readonly bulkSelectedInstanceIds: readonly string[];
@@ -1619,6 +1693,8 @@ function RouteSurface({
   route,
   snapshot,
   readStatus,
+  diagnostics,
+  canCopyDiagnostics,
   narrow,
   selectedInstanceId,
   bulkSelectedInstanceIds,
@@ -1649,9 +1725,19 @@ function RouteSurface({
     route.id !== "instances" &&
     route.id !== "providers" &&
     route.id !== "new-instance" &&
-    route.id !== "sessions"
+    route.id !== "sessions" &&
+    route.id !== "diagnostics"
   ) {
     return <Text wrap="wrap">{route.body}</Text>;
+  }
+
+  if (route.id === "diagnostics") {
+    return (
+      <DiagnosticsSurface
+        diagnostics={diagnostics}
+        canCopy={canCopyDiagnostics}
+      />
+    );
   }
 
   if (snapshot === undefined) {
@@ -1799,6 +1885,61 @@ function OverviewSurface({ snapshot }: { readonly snapshot: TuiReadSnapshot }): 
           <Text>Healthy provider inventory remains available above.</Text>
         </Box>
       )}
+
+      <Box marginTop={1}>
+        <Text>Support: press g to inspect the privacy-safe Diagnostics payload before sharing it.</Text>
+      </Box>
+    </Box>
+  );
+}
+
+function DiagnosticsSurface({
+  diagnostics,
+  canCopy,
+}: {
+  readonly diagnostics: TuiDiagnosticsView;
+  readonly canCopy: boolean;
+}): React.ReactElement {
+  if (diagnostics.status === "idle") {
+    return (
+      <Box flexDirection="column">
+        <Text>Diagnostics have not been collected yet.</Text>
+        <Text>Press r to generate the privacy-safe support payload.</Text>
+      </Box>
+    );
+  }
+  if (diagnostics.status === "loading") {
+    return <Text>Collecting privacy-safe Diagnostics…</Text>;
+  }
+  if (diagnostics.status === "failed") {
+    return (
+      <Box flexDirection="column">
+        <Text>{diagnostics.message}</Text>
+        <Text>Press r to retry. Do not substitute raw logs that may contain sensitive data.</Text>
+      </Box>
+    );
+  }
+
+  return (
+    <Box flexDirection="column">
+      <Text bold>User-safe Diagnostics payload</Text>
+      <Text>
+        This payload comes from EasyServer&apos;s shared sanitized diagnostics model. It excludes raw secrets, Secret References, daemon tokens, private keys and resource identifiers by contract.
+      </Text>
+      <Text>
+        {canCopy
+          ? "Press c to copy exactly the JSON shown below; nothing else is added."
+          : "Clipboard integration is unavailable in this TUI session; the exact safe payload is still shown below."}
+      </Text>
+      <Box marginTop={1} flexDirection="column">
+        <Text>{diagnostics.text}</Text>
+      </Box>
+      <Box marginTop={1} flexDirection="column">
+        <Text bold>Support guidance</Text>
+        <Text>Raw logs are not the same as this sanitized payload. Review raw logs separately and never share credentials, tokens or private keys.</Text>
+        <Text>Press P to open Providers for plugin, credential or readiness remediation.</Text>
+        <Text>Press C to open Connections for daemon, Endpoint or SSH remediation.</Text>
+      </Box>
     </Box>
   );
 }
@@ -2462,6 +2603,9 @@ function ProvidersSurface({
           {provider.state === "failed" ? (
             <Text>Remediation: verify the installed module and compatibility, then press r to refresh.</Text>
           ) : null}
+          {provider.state === "failed" || provider.credentials.missingRequired > 0 ? (
+            <Text>Support: press g to inspect privacy-safe Diagnostics before sharing provider details.</Text>
+          ) : null}
         </Box>
         );
       })}
@@ -2867,6 +3011,8 @@ function HelpPanel({ colorEnabled }: { readonly colorEnabled: boolean }): React.
       <Text>Esc — close help or return to Overview</Text>
       <Text>? — toggle this help</Text>
       <Text>r — refresh current section</Text>
+      <Text>g — open privacy-safe Diagnostics from any main surface</Text>
+      <Text>c / P / C — on Diagnostics: copy reviewed payload / open Providers / open Connections</Text>
       <Text>j / k — select next / previous instance on Instances</Text>
       <Text>Space — mark or unmark the selected fresh instance for a bulk lifecycle action</Text>
       <Text>0 — clear the exact bulk target set</Text>
@@ -2898,6 +3044,7 @@ export interface TuiAppProps {
   readonly bulkInstanceMutationRunner?: TuiBulkInstanceMutationRunner;
   readonly foregroundConnectionOperations?: TuiForegroundConnectionOperations;
   readonly daemonOperations?: TuiDaemonOperations;
+  readonly diagnosticsOperations?: TuiDiagnosticsOperations;
   readonly providerMutationRunner?: TuiProviderMutationRunner;
   readonly providerFlowOpener?: TuiProviderFlowOpener;
 }
@@ -2910,10 +3057,12 @@ export function TuiApp({
   bulkInstanceMutationRunner,
   foregroundConnectionOperations,
   daemonOperations,
+  diagnosticsOperations,
   providerMutationRunner,
   providerFlowOpener,
 }: TuiAppProps): React.ReactElement {
   const [snapshot, setSnapshot] = useState<TuiReadSnapshot | undefined>();
+  const [diagnostics, setDiagnostics] = useState<TuiDiagnosticsView>({ status: "idle" });
   const [operation, setOperation] = useState<TuiOperationPresentation | undefined>();
   const [foregroundConnections, setForegroundConnections] = useState<
     readonly TuiForegroundConnection[]
@@ -2941,6 +3090,53 @@ export function TuiApp({
   const controllerRef = useRef<AbortController | undefined>(undefined);
   const bulkMutationControllerRef = useRef<AbortController | undefined>(undefined);
   const providerFlowBusyRef = useRef(false);
+  const diagnosticsGenerationRef = useRef(0);
+
+  const refreshDiagnostics = useCallback(async (): Promise<boolean> => {
+    if (diagnosticsOperations === undefined) {
+      setDiagnostics({
+        status: "failed",
+        message: "Privacy-safe Diagnostics are unavailable in this TUI session.",
+      });
+      return false;
+    }
+
+    const generation = diagnosticsGenerationRef.current + 1;
+    diagnosticsGenerationRef.current = generation;
+    setDiagnostics({ status: "loading" });
+    try {
+      const report = await diagnosticsOperations.load();
+      if (diagnosticsGenerationRef.current !== generation) {
+        return false;
+      }
+      setDiagnostics({
+        status: "ready",
+        text: serializeTuiDiagnostics(report),
+      });
+      return true;
+    } catch {
+      if (diagnosticsGenerationRef.current !== generation) {
+        return false;
+      }
+      setDiagnostics({
+        status: "failed",
+        message: "Privacy-safe Diagnostics could not be generated.",
+      });
+      return false;
+    }
+  }, [diagnosticsOperations]);
+
+  const copyDiagnostics = useCallback(async (): Promise<boolean> => {
+    if (diagnosticsOperations === undefined || diagnostics.status !== "ready") {
+      return false;
+    }
+    try {
+      await diagnosticsOperations.copy(diagnostics.text);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [diagnostics, diagnosticsOperations]);
 
   const refresh = useCallback(async (
     options: { readonly quiet?: boolean } = {},
@@ -4076,11 +4272,19 @@ export function TuiApp({
       screenReader={screenReader}
       readSnapshot={snapshot}
       readStatus={readStatus}
+      diagnostics={diagnostics}
       operation={operation}
       onOperationAction={handleOperationAction}
-      onRefresh={() => {
+      onRefresh={(routeId) => {
+        if (routeId === "diagnostics") {
+          void refreshDiagnostics();
+          return;
+        }
         void refresh();
       }}
+      onCopyDiagnostics={
+        diagnosticsOperations === undefined ? undefined : copyDiagnostics
+      }
       foregroundConnections={foregroundConnections}
       onListForegroundAccessMethods={
         foregroundConnectionOperations === undefined
@@ -4175,6 +4379,7 @@ export interface TuiRuntimeOptions {
   readonly bulkInstanceMutationRunner?: TuiBulkInstanceMutationRunner;
   readonly foregroundConnectionOperations?: TuiForegroundConnectionOperations;
   readonly daemonOperations?: TuiDaemonOperations;
+  readonly diagnosticsOperations?: TuiDiagnosticsOperations;
   readonly providerMutationRunner?: TuiProviderMutationRunner;
   readonly providerFlowOpener?: TuiProviderFlowOpener;
 }
@@ -4192,6 +4397,7 @@ export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
       bulkInstanceMutationRunner={options.bulkInstanceMutationRunner}
       foregroundConnectionOperations={options.foregroundConnectionOperations}
       daemonOperations={options.daemonOperations}
+      diagnosticsOperations={options.diagnosticsOperations}
       providerMutationRunner={options.providerMutationRunner}
       providerFlowOpener={options.providerFlowOpener}
     />,
@@ -4215,6 +4421,7 @@ export async function runTui(): Promise<void> {
     bulkInstanceMutationRunner: createDefaultTuiBulkInstanceMutationRunner(),
     foregroundConnectionOperations: createDefaultTuiForegroundConnectionOperations(),
     daemonOperations: createDefaultTuiDaemonOperations(),
+    diagnosticsOperations: createDefaultTuiDiagnosticsOperations(),
     providerMutationRunner: createDefaultTuiProviderMutationRunner(),
     providerFlowOpener: createDefaultTuiProviderFlowOpener(),
   });

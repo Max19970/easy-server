@@ -90,6 +90,14 @@ export function TuiOperationDrawer({
         </Box>
       )}
 
+      {operation.phase === "failed" ||
+      operation.phase === "outcome-unknown" ||
+      operation.phase === "reconciliation-failed" ? (
+        <Box marginTop={1}>
+          <Text>Support: press g to inspect privacy-safe Diagnostics before sharing raw logs.</Text>
+        </Box>
+      ) : null}
+
       {operation.actions.length === 0 ? null : (
         <Box marginTop={1}>
           <Text>Actions: {operation.actions.map(actionLabel).join(" · ")}</Text>
