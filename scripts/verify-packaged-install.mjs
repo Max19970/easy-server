@@ -574,7 +574,9 @@ function cliEnvironment(prefix) {
 }
 
 function globalNodeModules(prefix) {
-  return runNpm(["root", "--global", "--prefix", prefix], repositoryRoot).stdout.trim();
+  return process.platform === "win32"
+    ? join(prefix, "node_modules")
+    : join(prefix, "lib", "node_modules");
 }
 
 function assertPackagePresent(prefix, packageName) {
