@@ -1,0 +1,116 @@
+# Machine-readable CLI output
+
+EasyServer keeps human-oriented CLI output as the default. Automation can opt into a stable machine-readable contract by placing the host-owned `--json` flag **before** the command:
+
+```powershell
+easyserver --json instances list
+easyserver --json plugins list
+easyserver --json sessions list
+```
+
+`--json` is intentionally a prefix rather than a provider-command argument. EasyServer consumes it before command dispatch, so a Provider Plugin remains free to define its own provider-specific arguments without the host stealing an argument named `--json` later in the command line.
+
+Bare `easyserver --json` is command mode, not TUI mode, and fails with a structured usage error because no command was supplied.
+
+## Envelope version 1
+
+Every successful JSON-mode command writes exactly one compact JSON document to stdout:
+
+```json
+{"schemaVersion":1,"ok":true,"data":{"version":"0.2.0"}}
+```
+
+Every terminal command error writes exactly one compact JSON document to stderr and leaves stdout empty:
+
+```json
+{"schemaVersion":1,"ok":false,"error":{"code":"not-found","message":"Compute Instance not found: instance:..."}}
+```
+
+Usage errors use the stable host code `usage-error` and include `helpCommand` when EasyServer knows the relevant contextual help path:
+
+```json
+{"schemaVersion":1,"ok":false,"error":{"code":"usage-error","message":"Unknown instances command: wat","helpCommand":"easyserver instances --help"}}
+```
+
+Unexpected non-normalized command failures use `command-failed`. Normalized EasyServer/provider failures preserve their public normalized error code, such as `authentication`, `not-found`, `conflict`, `rate-limited`, `provider-unavailable`, `cancelled`, `timeout`, `outcome-unknown`, `plugin-failure`, `host-trust-required` or `unknown-provider-error`.
+
+The raw internal `cause` of a normalized error is not serialized into the JSON error envelope. Automation should branch on `error.code`, not parse `error.message`.
+
+## Command data
+
+The outer envelope is uniform; `data` remains command-specific so EasyServer does not invent one lossy universal model for unrelated concepts.
+
+Common core shapes include:
+
+- `plugins list` → `data.plugins`;
+- `instances list` → `data.inventory`, including per-provider completeness/failure state;
+- `instances inspect` → `data.instance`;
+- single lifecycle mutations → `data.action`, `data.instanceId`, `data.status` and any host warnings;
+- bulk lifecycle mutations → `data.result` plus any host warnings, preserving every per-target result and summary;
+- `sessions list` → `data.sessions`;
+- Endpoint-intent commands → `data.endpointIntents` or `data.endpointIntent`;
+- provider-feature discovery → `data.features` or provider/feature command descriptors;
+- daemon commands → `data.daemon`;
+- `connect` → the published `data.endpoint` and selected `data.accessMethod` once the foreground Endpoint is ready.
+
+Some successful observations intentionally retain a non-zero legacy exit status. For example, a partial bulk result or a daemon status such as `stopped`/`stale` is still a successfully structured result (`ok: true`) even though its exit status communicates degraded/non-running state. Treat `ok: false` as a terminal command failure; use the documented command data together with the process exit status when the distinction matters.
+
+## Provider-specific commands
+
+Provider Plugins own provider-specific command semantics. EasyServer therefore does not parse arbitrary provider text into fake normalized fields.
+
+In JSON mode, an executed provider command returns its host-owned execution/handoff result plus a namespaced raw transcript:
+
+```json
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "data": {
+    "provider": {
+      "providerId": "example",
+      "featureId": "marketplace",
+      "commandName": "search",
+      "stdout": "provider-owned output\n",
+      "stderr": ""
+    },
+    "execution": {
+      "operation": "read",
+      "mutationOutcome": "not-applicable",
+      "handoff": {
+        "status": "not-requested",
+        "affectedProviderExternalIds": [],
+        "canonicalInstances": [],
+        "unresolvedProviderExternalIds": []
+      }
+    }
+  }
+}
+```
+
+The `provider.stdout` and `provider.stderr` strings are **provider-owned raw command output**. Their contents are not a stable EasyServer schema and may change with that Provider Plugin. Host-owned fields such as provider/feature/command identity and `execution` retain EasyServer's documented compatibility rules.
+
+## Interactive behavior
+
+JSON mode is for automation and never emits interactive confirmation/trust prompts into the machine-readable stream. Operations that require explicit non-interactive authorization still require their existing command inputs, such as `--yes` for risky mutations. SSH first-use trust must be established through an appropriate interactive flow before non-interactive JSON automation can rely on that host.
+
+Human CLI output remains unchanged when the global prefix is absent:
+
+```powershell
+easyserver instances list
+easyserver provider vastai marketplace search --gpu "RTX 4090"
+```
+
+Do not parse spacing, `key=value` display text or prose from human mode for automation.
+
+## Compatibility contract
+
+For the `0.2.x` line:
+
+- `schemaVersion` is `1`;
+- the envelope fields `schemaVersion`, `ok`, `data` and `error` have the meanings documented above;
+- documented core `data` fields and stable error codes are part of the public CLI compatibility contract;
+- patch releases may add fields without changing the meaning of existing fields, so consumers should ignore unknown fields;
+- removing, renaming or repurposing a documented field is a compatibility-breaking change and requires a later pre-1.0 minor line under EasyServer's versioning policy;
+- provider-owned raw transcript contents are outside the core schema compatibility promise.
+
+`easyserver doctor` remains the privacy-safe support/diagnostic payload described by the support documentation. JSON command mode does not turn ordinary raw logs or arbitrary provider text into a privacy-safe diagnostic bundle.

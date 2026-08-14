@@ -338,6 +338,16 @@ const root: CliHelpNode = {
   summary: "Provider-independent compute lifecycle and local connectivity.",
   purpose:
     "EasyServer manages rented compute across Provider Plugins, normalizes lifecycle operations and exposes remote TCP services through local loopback Endpoints.",
+  options: [
+    {
+      syntax: "--json",
+      description:
+        "Prefix a command with --json to emit the documented versioned machine-readable envelope instead of human display text.",
+    },
+  ],
+  notes: [
+    "JSON mode is explicit command mode: use `easyserver --json <command> ...`. The flag is host-owned and must appear before the command, so provider-owned command arguments remain untouched.",
+  ],
   children: coreCommands,
 };
 
@@ -394,6 +404,7 @@ function formatHelpNode(node: CliHelpNode, path: readonly string[]): string {
       "Command/automation use:",
       "  easyserver --help          Show this CLI help entrypoint.",
       "  easyserver --version       Print the EasyServer version without starting the TUI.",
+      "  easyserver --json <command> ...  Emit the versioned machine-readable command result.",
     );
   }
 

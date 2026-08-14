@@ -523,6 +523,11 @@ test("prints version", () => {
 });
 
 test("global --json emits version and help through the stable success envelope", () => {
+  const humanHelp = run("--help");
+  assert.equal(humanHelp.status, 0, humanHelp.stderr);
+  assert.match(humanHelp.stdout, /easyserver --json <command>/);
+  assert.match(humanHelp.stdout, /must appear before the command/);
+
   const version = run("--json", "--version");
   assert.equal(version.status, 0, version.stderr);
   assert.deepEqual(JSON.parse(version.stdout), {

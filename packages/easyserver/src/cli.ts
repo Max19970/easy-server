@@ -1711,7 +1711,7 @@ function reportCliError(error: unknown, args: readonly string[]): void {
             : error instanceof CliUsageError
               ? "usage-error"
               : "command-failed",
-          message: errorMessage(error),
+          message: isNormalizedError(error) ? error.message : errorMessage(error),
           ...(helpCommand === undefined ? {} : { helpCommand }),
         },
       })}\n`,

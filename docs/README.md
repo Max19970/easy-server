@@ -8,6 +8,7 @@ Current public guides:
 
 - [Getting started](getting-started.md)
 - [Interactive TUI](tui.md)
+- [Machine-readable CLI output](cli-json.md)
 - [Install from GitHub Releases](github-release-install.md)
 - [Vast.ai quick start](providers/vastai.md)
 - [Intelion.cloud quick start](providers/intelion.md)

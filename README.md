@@ -166,7 +166,7 @@ easyserver daemon run                  local session owner
 easyserver sessions create|list|close ...
 ```
 
-Run `easyserver --help` for the command groups, then append `--help` to the relevant path (for example `easyserver instances destroy --help`). Package-based Provider Plugins may also publish side-effect-free provider-specific help through their dedicated `./easyserver-help` contribution.
+Run `easyserver --help` for the command groups, then append `--help` to the relevant path (for example `easyserver instances destroy --help`). For automation that needs a stable machine-readable contract, prefix the command with `--json`, for example `easyserver --json instances list`; see [Machine-readable CLI output](docs/cli-json.md). Package-based Provider Plugins may also publish side-effect-free provider-specific help through their dedicated `./easyserver-help` contribution.
 
 ## What EasyServer deliberately does not do
 
@@ -180,6 +180,7 @@ Provider Plugins run in-process and are trusted extensions in `0.2.0`; the plugi
 
 - [Getting started](docs/getting-started.md)
 - [Interactive TUI](docs/tui.md)
+- [Machine-readable CLI output](docs/cli-json.md)
 - [EasyServer 0.2.0 release notes](docs/releases/v0.2.0.md)
 - [Vast.ai quick start](docs/providers/vastai.md)
 - [Intelion.cloud quick start](docs/providers/intelion.md)
