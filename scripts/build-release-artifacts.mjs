@@ -220,9 +220,10 @@ function expandArchive(archive, destination) {
 }
 
 function runPowerShell(command) {
+  const nonInteractiveCommand = `$ProgressPreference = 'SilentlyContinue'; ${command}`;
   const result = spawnSync(
     "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", command],
+    ["-NoProfile", "-NonInteractive", "-Command", nonInteractiveCommand],
     { cwd: repositoryRoot, encoding: "utf8" },
   );
   return assertSuccessful(result, `powershell.exe ${command}`);
