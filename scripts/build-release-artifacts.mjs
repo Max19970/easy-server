@@ -15,6 +15,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const WINDOWS_STATUS_DLL_INIT_FAILED = 0xc0000142;
+const PROCESS_START_ATTEMPTS = 3;
 const npmCli = process.env.npm_execpath;
 assert.ok(npmCli, "release artifacts must be built through npm");
 assert.equal(process.platform, "win32", "release artifacts are qualified on Windows only");
@@ -221,7 +223,7 @@ function expandArchive(archive, destination) {
 
 function runPowerShell(command) {
   const nonInteractiveCommand = `$ProgressPreference = 'SilentlyContinue'; ${command}`;
-  const result = spawnSync(
+  const result = spawnSyncForVerification(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", nonInteractiveCommand],
     { cwd: repositoryRoot, encoding: "utf8" },
@@ -240,7 +242,7 @@ function runNpm(args, cwd) {
 function runPortableExecutable(prefix, args, cwd, env) {
   const executable = join(prefix, "easyserver.cmd");
   const command = `"${executable}" ${args.map(quoteCmdArgument).join(" ")}`;
-  const result = spawnSync(command, {
+  const result = spawnSyncForVerification(command, [], {
     cwd,
     env,
     encoding: "utf8",
@@ -281,8 +283,26 @@ function sha256(buffer) {
 }
 
 function run(command, args, cwd, env = process.env) {
-  const result = spawnSync(command, args, { cwd, env, encoding: "utf8" });
+  const result = spawnSyncForVerification(command, args, {
+    cwd,
+    env,
+    encoding: "utf8",
+  });
   return assertSuccessful(result, `${command} ${args.join(" ")}`);
+}
+
+function spawnSyncForVerification(command, args, options) {
+  let result;
+  for (let attempt = 0; attempt < PROCESS_START_ATTEMPTS; attempt += 1) {
+    result = spawnSync(command, args, options);
+    if (
+      process.platform !== "win32" ||
+      result.status !== WINDOWS_STATUS_DLL_INIT_FAILED
+    ) {
+      return result;
+    }
+  }
+  return result;
 }
 
 function assertSuccessful(result, displayCommand) {
