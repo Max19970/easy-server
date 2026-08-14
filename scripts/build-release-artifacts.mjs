@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WINDOWS_STATUS_DLL_INIT_FAILED = 0xc0000142;
-const PROCESS_START_ATTEMPTS = 4;
+const PROCESS_START_ATTEMPTS = 5;
 const PROCESS_START_RETRY_DELAY_MS = 1_000;
 const npmCli = process.env.npm_execpath;
 assert.ok(npmCli, "release artifacts must be built through npm");
@@ -307,7 +307,7 @@ function spawnSyncForVerification(command, args, options) {
         new Int32Array(new SharedArrayBuffer(4)),
         0,
         0,
-        PROCESS_START_RETRY_DELAY_MS,
+        PROCESS_START_RETRY_DELAY_MS * 2 ** attempt,
       );
     }
   }
