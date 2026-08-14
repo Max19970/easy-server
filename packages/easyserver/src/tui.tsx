@@ -18,6 +18,7 @@ import {
   presentMutationConfirmation,
   presentOperationError,
   presentProviderExecution,
+  presentRetryableCleanupFailure,
   presentWorkingOperation,
   type TuiOperationActionKind,
   type TuiOperationPresentation,
@@ -69,6 +70,7 @@ import {
   type TuiPersistentSessionRequest,
 } from "./tui-daemon-operations.js";
 import {
+  isNormalizedError,
   normalizedError,
   PROVIDER_CAPABILITIES,
   type AvailableAction,
@@ -177,6 +179,10 @@ interface PendingDaemonStopConfirmation {
 }
 
 interface PendingEndpointIntentRemoval {
+  readonly intent: TuiEndpointIntentReadItem;
+}
+
+interface PendingEndpointIntentRemovalRetry {
   readonly intent: TuiEndpointIntentReadItem;
 }
 
@@ -2918,6 +2924,8 @@ export function TuiApp({
     useState<PendingDaemonStopConfirmation | undefined>();
   const [pendingEndpointIntentRemoval, setPendingEndpointIntentRemoval] =
     useState<PendingEndpointIntentRemoval | undefined>();
+  const [pendingEndpointIntentRemovalRetry, setPendingEndpointIntentRemovalRetry] =
+    useState<PendingEndpointIntentRemovalRetry | undefined>();
   const [pendingInstanceConfirmation, setPendingInstanceConfirmation] =
     useState<PendingInstanceConfirmation | undefined>();
   const [pendingProviderMutation, setPendingProviderMutation] =
@@ -2941,6 +2949,7 @@ export function TuiApp({
       return false;
     }
 
+    setPendingEndpointIntentRemovalRetry(undefined);
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -3422,6 +3431,52 @@ export function TuiApp({
     [],
   );
 
+  const removeEndpointIntent = useCallback(
+    async (intent: TuiEndpointIntentReadItem) => {
+      if (daemonOperations === undefined) {
+        return;
+      }
+      setPendingEndpointIntentRemovalRetry(undefined);
+      setOperation(
+        presentWorkingOperation({
+          title: "Remove persisted Endpoint intent",
+          detail: `${intent.name}: removing desired state and cleaning any current realization.`,
+          activity: "verifying-state",
+        }),
+      );
+      try {
+        await daemonOperations.removeEndpointIntent(intent.operationName);
+        await refresh();
+        setOperation(
+          presentCompletedOperation({
+            title: "Persisted Endpoint intent removed",
+            detail: `${intent.name} will not be recovered on daemon restart.`,
+          }),
+        );
+      } catch (error) {
+        if (isNormalizedError(error) && error.code === "not-found") {
+          await refresh({ quiet: true });
+          setOperation(
+            presentCompletedOperation({
+              title: "Persisted Endpoint intent already removed",
+              detail: `${intent.name} is no longer configured and will not be recovered on daemon restart.`,
+            }),
+          );
+          return;
+        }
+        await refresh({ quiet: true });
+        setPendingEndpointIntentRemovalRetry({ intent });
+        setOperation(
+          presentRetryableCleanupFailure(
+            "Remove persisted Endpoint intent",
+            `${intent.name} did not finish cleanly. Desired state may already be deleted while transport cleanup remains. Retry here only for this original intent name; do not recreate the same name elsewhere until cleanup succeeds.`,
+          ),
+        );
+      }
+    },
+    [daemonOperations, refresh],
+  );
+
   const mutateInstance = useCallback(
     async (mutation: TuiInstanceMutation) => {
       if (instanceMutationRunner === undefined) {
@@ -3889,38 +3944,7 @@ export function TuiApp({
           setOperation(undefined);
           return;
         }
-        setOperation(
-          presentWorkingOperation({
-            title: "Remove persisted Endpoint intent",
-            detail:
-              pending.intent.state === "live"
-                ? `${pending.intent.name}: deleting desired state and closing the current realization.`
-                : `${pending.intent.name}: deleting persisted desired state.`,
-            activity: "verifying-state",
-          }),
-        );
-        void daemonOperations.removeEndpointIntent(pending.intent.operationName).then(
-          async () => {
-            await refresh();
-            setOperation(
-              presentCompletedOperation({
-                title: "Persisted Endpoint intent removed",
-                detail: `${pending.intent.name} will not be recovered on daemon restart.`,
-              }),
-            );
-          },
-          async (error) => {
-            await refresh({ quiet: true });
-            setOperation(
-              presentOperationError({
-                title: "Remove persisted Endpoint intent",
-                operation: "read",
-                error,
-                allowRetry: false,
-              }),
-            );
-          },
-        );
+        void removeEndpointIntent(pending.intent);
         return;
       }
       if (
@@ -4002,6 +4026,10 @@ export function TuiApp({
         setOperation(undefined);
         return;
       }
+      if (action === "retry" && pendingEndpointIntentRemovalRetry !== undefined) {
+        void removeEndpointIntent(pendingEndpointIntentRemovalRetry.intent);
+        return;
+      }
       if (action === "retry" || action === "observe" || action === "refresh") {
         void refresh();
         return;
@@ -4010,6 +4038,7 @@ export function TuiApp({
         setPendingHostTrustConfirmation(undefined);
         setPendingDaemonStopConfirmation(undefined);
         setPendingEndpointIntentRemoval(undefined);
+        setPendingEndpointIntentRemovalRetry(undefined);
         setPendingInstanceConfirmation(undefined);
         setPendingProviderMutation(undefined);
         setOperation(undefined);
@@ -4020,11 +4049,13 @@ export function TuiApp({
       mutateProvider,
       pendingDaemonStopConfirmation,
       pendingEndpointIntentRemoval,
+      pendingEndpointIntentRemovalRetry,
       pendingHostTrustConfirmation,
       pendingInstanceConfirmation,
       pendingProviderFlowConfirmation,
       pendingProviderMutation,
       refresh,
+      removeEndpointIntent,
     ],
   );
 

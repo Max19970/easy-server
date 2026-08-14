@@ -252,3 +252,118 @@ test("TuiApp confirms live persisted intent removal and delegates cleanup to the
   assert.match(view.lastFrame(), /Persisted Endpoint intent removed/);
   assert.match(view.lastFrame(), /will not be recovered on daemon restart/);
 });
+
+test("TuiApp retries cleanup by the original intent identity after desired state was already removed", async () => {
+  let desiredStateRemoved = false;
+  const removedNames = [];
+  const liveIntent = intents[0];
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      async readLoader() {
+        return snapshot(desiredStateRemoved ? [] : [liveIntent]);
+      },
+      daemonOperations: {
+        async removeEndpointIntent(name) {
+          removedNames.push(name);
+          desiredStateRemoved = true;
+          if (removedNames.length === 1) {
+            throw new Error("fixture cleanup failure");
+          }
+        },
+        async setEndpointIntentEnabled() {
+          assert.fail("cleanup retry must not toggle desired state");
+        },
+        async retryEndpointIntent() {
+          assert.fail("cleanup retry must not recreate realization");
+        },
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openConnections(view);
+  view.stdin.write("X");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  await tick();
+
+  assert.deepEqual(removedNames, ["comfy"]);
+  assert.match(view.lastFrame(), /cleanup incomplete/);
+  assert.match(view.lastFrame(), /Desired state may already be deleted/);
+  assert.match(view.lastFrame(), /Retry/);
+
+  view.stdin.write("R");
+  await tick();
+  await tick();
+  await tick();
+
+  assert.deepEqual(removedNames, ["comfy", "comfy"]);
+  assert.match(view.lastFrame(), /Persisted Endpoint intent removed/);
+  assert.match(view.lastFrame(), /will not be recovered on daemon restart/);
+});
+
+test("an unrelated failed refresh cannot reuse a stale Endpoint intent cleanup Retry", async () => {
+  let desiredStateRemoved = false;
+  let failRefresh = false;
+  let loaderCalls = 0;
+  const removedNames = [];
+  const liveIntent = intents[0];
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      async readLoader() {
+        loaderCalls += 1;
+        if (failRefresh) {
+          throw new Error("fixture refresh failure");
+        }
+        return snapshot(desiredStateRemoved ? [] : [liveIntent]);
+      },
+      daemonOperations: {
+        async removeEndpointIntent(name) {
+          removedNames.push(name);
+          desiredStateRemoved = true;
+          throw new Error("fixture cleanup failure");
+        },
+        async setEndpointIntentEnabled() {
+          assert.fail("refresh Retry must not toggle desired state");
+        },
+        async retryEndpointIntent() {
+          assert.fail("refresh Retry must not recreate intent realization");
+        },
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openConnections(view);
+  view.stdin.write("X");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  await tick();
+
+  assert.deepEqual(removedNames, ["comfy"]);
+  assert.match(view.lastFrame(), /cleanup incomplete/);
+
+  failRefresh = true;
+  view.stdin.write("r");
+  await tick();
+  await tick();
+  assert.match(view.lastFrame(), /Refresh EasyServer status: failed/);
+
+  failRefresh = false;
+  view.stdin.write("R");
+  await tick();
+  await tick();
+  await tick();
+
+  assert.deepEqual(removedNames, ["comfy"]);
+  assert.ok(loaderCalls >= 4);
+  assert.doesNotMatch(view.lastFrame(), /cleanup incomplete/);
+});

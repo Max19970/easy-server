@@ -286,6 +286,19 @@ export function presentOperationError(
   });
 }
 
+export function presentRetryableCleanupFailure(
+  title: string,
+  detail: string,
+): TuiOperationPresentation {
+  return createPresentation({
+    phase: "failed",
+    tone: "danger",
+    title: `${title}: cleanup incomplete`,
+    detail,
+    actions: [RETRY_ACTION, DISMISS_ACTION],
+  });
+}
+
 export function presentProviderExecution(
   title: string,
   execution: ProviderCommandExecutionResult,
