@@ -397,7 +397,7 @@ export function TuiShell({
   const columns = width ?? windowSize.columns ?? 80;
   const rows = height ?? windowSize.rows ?? 24;
   const narrow = columns < 72;
-  const routeContentRows = Math.max(4, rows - 9);
+  const routeContentRows = Math.max(7, rows - 11);
   const routeContentColumns = Math.max(20, columns - 4);
   const diagnosticsReportRows = Math.max(1, routeContentRows - 3);
   const diagnosticsVisualLines =
@@ -422,6 +422,25 @@ export function TuiShell({
     operationActionFocus.operation === operation
       ? operationActionFocus.cursor
       : defaultOperationActionIndex(operation);
+  const [operationResourceFocus, setOperationResourceFocus] = useState(() => ({
+    operation,
+    scroll: 0,
+  }));
+  const operationResourceScroll =
+    operationResourceFocus.operation === operation
+      ? operationResourceFocus.scroll
+      : 0;
+  const setOperationResourceScroll = (
+    update: React.SetStateAction<number>,
+  ): void => {
+    setOperationResourceFocus((current) => {
+      const currentScroll = current.operation === operation ? current.scroll : 0;
+      return {
+        operation,
+        scroll: typeof update === "function" ? update(currentScroll) : update,
+      };
+    });
+  };
   const setOperationActionCursor = (
     update: React.SetStateAction<number>,
   ): void => {
@@ -1159,6 +1178,22 @@ export function TuiShell({
     }
 
     if (operation !== undefined) {
+      const affectedResourceCount =
+        operation.interaction?.kind === "mutation-confirmation"
+          ? operation.interaction.affectedResources.length
+          : 0;
+      if (!screenReader && affectedResourceCount > 2) {
+        if (key.pageDown) {
+          setOperationResourceScroll((current) =>
+            Math.min(Math.max(0, affectedResourceCount - 2), current + 2),
+          );
+          return;
+        }
+        if (key.pageUp) {
+          setOperationResourceScroll((current) => Math.max(0, current - 2));
+          return;
+        }
+      }
       if (operation.actions.length > 0) {
         if (key.downArrow) {
           setOperationActionCursor((current) =>
@@ -2286,6 +2321,15 @@ export function TuiShell({
 
   const accent = colorEnabled ? "cyan" : undefined;
   const muted = colorEnabled ? "gray" : undefined;
+  const actionMenuMaxRows = Math.max(4, routeContentRows - 2);
+  const actionMenuRows = actionMenuOpen
+    ? contextActionMenuRenderedRows(
+        contextActions.length,
+        Math.min(actionCursor, Math.max(0, contextActions.length - 1)),
+        actionMenuMaxRows,
+      )
+    : 0;
+  const routeSurfaceRows = Math.max(1, routeContentRows - actionMenuRows);
 
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>
@@ -2300,7 +2344,12 @@ export function TuiShell({
       ) : null}
 
       {operationInteractionOpen && operation !== undefined ? (
-        <Box flexGrow={1} minHeight={0} overflowY="hidden" justifyContent="center">
+        <Box
+          flexGrow={1}
+          minHeight={0}
+          overflowY={screenReader ? undefined : "hidden"}
+          justifyContent="center"
+        >
           <TuiOperationDrawer
             operation={operation}
             colorEnabled={colorEnabled}
@@ -2308,6 +2357,8 @@ export function TuiShell({
               operationActionCursor,
               Math.max(0, operation.actions.length - 1),
             )}
+            interactionResourceScroll={operationResourceScroll}
+            screenReader={screenReader}
           />
         </Box>
       ) : helpOpen ? (
@@ -2339,7 +2390,7 @@ export function TuiShell({
               canCopyDiagnostics={onCopyDiagnostics !== undefined}
               screenReader={screenReader}
               narrow={narrow}
-              height={routeContentRows}
+              height={routeSurfaceRows}
               width={routeContentColumns}
               colorEnabled={colorEnabled}
               settingsCursor={settingsCursor}
@@ -2389,7 +2440,7 @@ export function TuiShell({
                 actions={contextActions}
                 cursor={Math.min(actionCursor, Math.max(0, contextActions.length - 1))}
                 colorEnabled={colorEnabled}
-                maxRows={Math.max(4, routeContentRows - 2)}
+                maxRows={actionMenuMaxRows}
               />
             ) : contentFocused &&
               providerInteractiveScreen === undefined &&
@@ -2414,21 +2465,24 @@ export function TuiShell({
               operationActionCursor,
               Math.max(0, operation.actions.length - 1),
             )}
+            interactionResourceScroll={operationResourceScroll}
+            screenReader={screenReader}
           />
         </Box>
       )}
 
-      <Box marginTop={1} flexDirection="column">
-        {status === "Ready." ? null : (
-          <Text color={muted} aria-label={`Status: ${status}`}>{status}</Text>
-        )}
-        {screenReader ? (
-          <Text>Commands: Up and Down move; Enter selects; Escape goes back; question mark opens help; Ctrl+C quits.</Text>
-        ) : (
-          <Text color={muted}>↑/↓ move · Enter select · Esc back · ? help · Ctrl+C quit</Text>
-        )}
-
-      </Box>
+      {operationInteractionOpen || actionMenuOpen ? null : (
+        <Box marginTop={1} flexDirection="column">
+          {status === "Ready." ? null : (
+            <Text color={muted} aria-label={`Status: ${status}`} wrap="truncate">{status}</Text>
+          )}
+          {screenReader ? (
+            <Text>Commands: Up and Down move; Enter selects; Escape goes back; question mark opens help; Ctrl+C quits.</Text>
+          ) : (
+            <Text color={muted}>↑/↓ move · Enter select · Esc back · ? help · Ctrl+C quit</Text>
+          )}
+        </Box>
+      )}
     </Box>
   );
 }
@@ -2471,6 +2525,24 @@ function SettingsSurface({ cursor, colorEnabled }: { readonly cursor: number; re
   );
 }
 
+function contextActionMenuRenderedRows(
+  actionCount: number,
+  cursor: number,
+  maxRows: number,
+): number {
+  const window = tuiFocusWindowWithinRows(
+    cursor,
+    actionCount,
+    Math.max(1, maxRows - 3),
+  );
+  return (
+    3 +
+    (window.end - window.start) +
+    (window.showBefore ? 1 : 0) +
+    (window.showAfter ? 1 : 0)
+  );
+}
+
 function ContextActionMenu({
   actions,
   cursor,
@@ -2484,7 +2556,11 @@ function ContextActionMenu({
 }): React.ReactElement {
   const accent = colorEnabled ? "cyan" : undefined;
   const muted = colorEnabled ? "gray" : undefined;
-  const window = tuiFocusWindow(cursor, actions.length, Math.max(1, maxRows - 2));
+  const window = tuiFocusWindowWithinRows(
+    cursor,
+    actions.length,
+    Math.max(1, maxRows - 3),
+  );
   return (
     <Box marginTop={1} flexDirection="column">
       <Text bold>Actions</Text>
@@ -2642,10 +2718,12 @@ function RouteSurface({
     if (providerInteractiveScreen !== undefined) {
       return (
         <ProviderInteractiveSurface
+          key={`${providerInteractiveScreen.kind}:${providerInteractiveScreen.id}`}
           screen={providerInteractiveScreen}
           colorEnabled={false}
           disabled={providerInteractiveDisabled}
           height={height}
+          screenReader={screenReader}
           onEvent={onProviderInteractiveEvent ?? (() => undefined)}
           onClose={onProviderInteractiveClose ?? (() => undefined)}
         />
@@ -2975,11 +3053,18 @@ function InstancesSurface({
     (instanceId) => !items.some((instance) => instance.id === instanceId),
   );
   const selectedIndex = Math.max(0, items.findIndex((instance) => instance.id === selected?.id));
-  const partialNoticeRows = snapshot.instances.complete ? 0 : 2;
+  const partialNoticeRows = snapshot.instances.complete ? 0 : 3;
+  const bulkSelectionRows =
+    bulkSelectedInstanceIds.length === 0
+      ? 0
+      : 2 +
+        Math.min(2, bulkSelectedInstanceIds.length) +
+        (bulkSelectedInstanceIds.length > 2 ? 1 : 0) +
+        (missingMarkedIds.length > 0 ? 1 : 0);
   const serverWindow = tuiFocusWindowWithinRows(
     selectedIndex,
     items.length,
-    Math.max(1, height - 3 - partialNoticeRows),
+    Math.max(1, height - 2 - partialNoticeRows - bulkSelectionRows),
   );
 
   return (
@@ -2987,7 +3072,7 @@ function InstancesSurface({
       {snapshot.instances.complete ? null : (
         <PartialInventoryNotice failedProviders={failedProviderOutcomes} />
       )}
-      <Text>Choose a server, then press Enter for Start, Stop, Connect and other actions.</Text>
+      <Text>Choose a server. Enter opens its actions.</Text>
       {showDetails ? null : (
         <Box flexDirection="column">
           {serverWindow.showBefore ? <Text>↑ {serverWindow.hiddenBefore} more servers</Text> : null}
@@ -4146,20 +4231,23 @@ function BulkInstanceSelection({
       <Text bold>
         Selected servers ({instanceIds.length})
       </Text>
-      {instanceIds.map((instanceId, targetIndex) => {
+      {instanceIds.slice(0, 2).map((instanceId, targetIndex) => {
         const instanceIndex = instances.findIndex((item) => item.id === instanceId);
         const instance = instanceIndex < 0 ? undefined : instances[instanceIndex];
         return instance === undefined ? (
           <Text key={instanceId}>Selected server #{targetIndex + 1} · no longer visible</Text>
         ) : (
-          <Text key={instanceId}>
+          <Text key={instanceId} wrap="truncate">
             {serverListLabel(instance, instanceIndex, instances)} · {instance.state ?? "status unavailable"}
             {instance.freshness === "fresh" ? "" : " · needs refresh"}
           </Text>
         );
       })}
+      {instanceIds.length <= 2 ? null : (
+        <Text wrap="truncate">+{instanceIds.length - 2} more selected · scroll checked server rows to review.</Text>
+      )}
       {missingInstanceIds.length === 0 ? null : (
-        <Text>Bulk mutation is blocked until missing targets are cleared or visible again.</Text>
+        <Text wrap="truncate">Some selected servers are missing; bulk actions are blocked.</Text>
       )}
     </Box>
   );
@@ -5191,7 +5279,7 @@ export function TuiApp({
                     {
                       ...prompt,
                       summary: `${title}?`,
-                      consequence: "This permanently destroys the selected servers and any EasyServer-managed connections that must be cleaned up first.",
+                      consequence: "Permanently destroys the selected servers and closes their managed connections.",
                     },
                     {
                       target: `${details.targets.length} selected ${details.targets.length === 1 ? "server" : "servers"}`,

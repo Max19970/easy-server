@@ -245,6 +245,64 @@ test("generic provider table supports provider-owned selection and review submit
   assert.deepEqual(events.at(-1), { kind: "action", actionId: "submit" });
 });
 
+test("generic provider review keeps overflow items reachable and screen-reader complete", async () => {
+  const items = Array.from({ length: 12 }, (_, index) => ({
+    label: `Review ${index + 1}`,
+    value: index === 11 ? "CRITICAL PRICE $99/hr" : `Value ${index + 1}`,
+  }));
+  const screen = {
+    kind: "review",
+    id: "long-review",
+    title: "Review provider allocation",
+    items,
+    actions: [
+      { id: "back", label: "Back", kind: "back" },
+      { id: "submit", label: "Provision", kind: "submit" },
+    ],
+  };
+  const view = render(
+    React.createElement(ProviderInteractiveSurface, {
+      colorEnabled: false,
+      height: 11,
+      screen,
+      onEvent() {},
+      onClose() {},
+    }),
+  );
+
+  await tick();
+  assert.match(view.lastFrame(), /Review 1: Value 1/);
+  assert.doesNotMatch(view.lastFrame(), /CRITICAL PRICE/);
+  assert.match(view.lastFrame(), /↓ \d+ more review items/);
+  assert.match(view.lastFrame(), /> Back/);
+  assert.ok(frameRows(view) <= 11);
+
+  view.stdin.write("\u001b[A");
+  await tick();
+  assert.match(view.lastFrame(), /> Review 12: CRITICAL PRICE \$99\/hr/);
+  assert.match(view.lastFrame(), /↑ \d+ more review items/);
+  assert.ok(frameRows(view) <= 11);
+
+  view.stdin.write("\u001b[B");
+  await tick();
+  assert.match(view.lastFrame(), /> Back/);
+
+  view.rerender(
+    React.createElement(ProviderInteractiveSurface, {
+      colorEnabled: false,
+      height: 11,
+      screenReader: true,
+      screen,
+      onEvent() {},
+      onClose() {},
+    }),
+  );
+  await tick();
+  assert.match(view.lastFrame(), /Review 1: Value 1/);
+  assert.match(view.lastFrame(), /Review 12: CRITICAL PRICE \$99\/hr/);
+  assert.match(view.lastFrame(), /> Back/);
+});
+
 test("generic provider forms and choice pickers honor the supplied row budget", async () => {
   const fields = Array.from({ length: 30 }, (_, index) => ({
     kind: "text",

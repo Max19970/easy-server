@@ -24,6 +24,7 @@ export interface ProviderInteractiveSurfaceProps {
   readonly colorEnabled?: boolean;
   readonly disabled?: boolean;
   readonly height?: number;
+  readonly screenReader?: boolean;
   onEvent(event: ProviderInteractiveEvent): void;
   onClose(): void;
 }
@@ -40,13 +41,16 @@ export function ProviderInteractiveSurface({
   colorEnabled = true,
   disabled = false,
   height,
+  screenReader = false,
   onEvent,
   onClose,
 }: ProviderInteractiveSurfaceProps): React.ReactElement {
   const { exit } = useApp();
   const windowSize = useWindowSize();
   const terminalRows = height ?? windowSize.rows ?? 24;
-  const [cursor, setCursor] = useState(0);
+  const [cursor, setCursor] = useState(() =>
+    screen.kind === "review" ? screen.items.length : 0,
+  );
   const [choiceCursor, setChoiceCursor] = useState(0);
   const [choiceFieldId, setChoiceFieldId] = useState<string | undefined>();
   const [draft, setDraft] = useState<DraftValue | undefined>();
@@ -56,7 +60,7 @@ export function ProviderInteractiveSurface({
       ? screen.fields.length
       : screen.kind === "table"
         ? screen.rows.length
-        : 0;
+        : screen.items.length;
   const actions = screen.actions.filter((action) => !action.disabled);
   const selectableCount = contentCount + actions.length;
   const activeField =
@@ -72,8 +76,15 @@ export function ProviderInteractiveSurface({
     (screen.kind === "table" ? 1 + (screen.loading ? 1 : 0) : 0) +
     (activeFieldDetail === undefined ? 0 : 1) +
     (actions.length === 0 ? 0 : actions.length + 1);
-  const contentRowBudget = Math.max(1, terminalRows - fixedRows);
-  const contentCursor = contentCount === 0 ? 0 : Math.min(cursor, contentCount - 1);
+  const contentRowBudget = screenReader
+    ? Math.max(1, contentCount)
+    : Math.max(1, terminalRows - fixedRows);
+  const contentCursor =
+    contentCount === 0
+      ? 0
+      : screen.kind === "review" && cursor >= contentCount
+        ? 0
+        : Math.min(cursor, contentCount - 1);
   const contentWindow = tuiFocusWindowWithinRows(
     contentCursor,
     contentCount,
@@ -81,7 +92,7 @@ export function ProviderInteractiveSurface({
   );
 
   useEffect(() => {
-    setCursor(0);
+    setCursor(screen.kind === "review" ? screen.items.length : 0);
     setChoiceCursor(0);
     setChoiceFieldId(undefined);
     setDraft(undefined);
@@ -331,7 +342,11 @@ export function ProviderInteractiveSurface({
   }
 
   return (
-    <Box flexDirection="column" height={terminalRows} overflowY="hidden">
+    <Box
+      flexDirection="column"
+      height={screenReader ? undefined : terminalRows}
+      overflowY={screenReader ? undefined : "hidden"}
+    >
       <Text bold color={accent} wrap="truncate">{safe(screen.title)}</Text>
       {screen.description === undefined ? null : (
         <Text color={muted} wrap="truncate">{safe(screen.description)}</Text>
@@ -370,11 +385,25 @@ export function ProviderInteractiveSurface({
             colorEnabled={colorEnabled}
           />
         ) : (
-          screen.items.slice(0, Math.max(1, contentRowBudget)).map((item, index) => (
-            <Text key={`${item.label}:${index}`} wrap="truncate">
-              {safe(item.label)}: {safe(item.value)}
-            </Text>
-          ))
+          <>
+            {contentWindow.showBefore ? (
+              <Text color={muted}>↑ {contentWindow.hiddenBefore} more review items</Text>
+            ) : null}
+            {screen.items
+              .slice(contentWindow.start, contentWindow.end)
+              .map((item, visibleIndex) => {
+                const index = contentWindow.start + visibleIndex;
+                const focused = index === cursor;
+                return (
+                  <Text key={`${item.label}:${index}`} bold={focused} wrap="truncate">
+                    {focused ? "> " : "  "}{safe(item.label)}: {safe(item.value)}
+                  </Text>
+                );
+              })}
+            {contentWindow.showAfter ? (
+              <Text color={muted}>↓ {contentWindow.hiddenAfter} more review items</Text>
+            ) : null}
+          </>
         )}
       </Box>
       {activeFieldDetail === undefined ? null : (

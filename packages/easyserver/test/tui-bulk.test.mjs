@@ -134,7 +134,9 @@ test("TuiApp bulk destroy reviews exact targets and preserves mixed outcomes", a
   assert.equal(runnerCalls, 1);
   assert.match(view.lastFrame(), /Confirmation required/);
   assert.match(view.lastFrame(), /Target: 2 selected servers/);
-  assert.match(view.lastFrame(), /Affected EasyServer resources: Server #1, Server #2/);
+  assert.match(view.lastFrame(), /Affected resources \(2\)/);
+  assert.match(view.lastFrame(), /Server #1/);
+  assert.match(view.lastFrame(), /Server #2/);
   assert.doesNotMatch(view.lastFrame(), /instance:a|instance:b|provider=alpha|provider=beta|remote-a|remote-b/);
   assert.match(view.lastFrame(), /Risk: destructive/);
 

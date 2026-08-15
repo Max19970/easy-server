@@ -28,7 +28,9 @@ assert.equal(
 );
 
 runSmoke(cli, ["-ExitMode", "quit", "-ResizeToNarrow"]);
-runSmoke(cli, ["-ExitMode", "quit", "-Columns", "60", "-Rows", "30"]);
+runSmoke(cli, ["-ExitMode", "quit", "-Columns", "60", "-Rows", "20"]);
+runSmoke(cli, ["-ExitMode", "quit", "-Columns", "80", "-Rows", "24"]);
+runSmoke(cli, ["-ExitMode", "quit", "-Columns", "120", "-Rows", "40"]);
 runSmoke(cli, ["-ExitMode", "ctrl-c"]);
 runSmoke(cli, ["-ExitMode", "quit", "-NoColor"]);
 runSmoke(cli, ["-ExitMode", "quit", "-ScreenReader"]);

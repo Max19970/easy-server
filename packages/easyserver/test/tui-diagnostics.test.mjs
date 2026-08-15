@@ -293,8 +293,8 @@ test("visual Diagnostics report remains bounded and reaches the last line at rel
   assert.equal(copied, diagnostics.text, "copy must preserve the exact reviewed payload at any scroll position");
 });
 
-test("screen-reader mode exposes the same Diagnostics payload and remediation navigation", async () => {
-  const report = safeReport();
+test("screen-reader mode exposes the complete long Diagnostics payload and remediation navigation", async () => {
+  const report = longSafeReport();
   const view = render(
     React.createElement(TuiApp, {
       colorEnabled: false,
@@ -319,6 +319,7 @@ test("screen-reader mode exposes the same Diagnostics payload and remediation na
   assert.match(view.lastFrame(), /Full privacy-safe diagnostics report/);
   assert.match(view.lastFrame(), /"version": "0\.2\.0-test"/);
   assert.match(view.lastFrame(), /"ssh": "unavailable"/);
+  assert.match(view.lastFrame(), /fixture-plugin-70/);
   assert.match(view.lastFrame(), /Commands: Up and Down move; Enter selects; Escape goes back/);
 
   view.stdin.write("\u001b");

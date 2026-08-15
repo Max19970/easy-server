@@ -133,6 +133,6 @@ If both primary and recovery Local State are invalid, EasyServer fails closed in
 
 ## Qualified release environment
 
-The `0.2.0` TUI release surface is qualified on **Windows 11 x64** with **Node.js 24.18.1**. Release checks exercise the real terminal path for normal quit, Ctrl+C, resize, compact layout, `NO_COLOR`, screen-reader mode, thrown-error restoration, and two sequential EasyServer launches in the same terminal (including printable input on the second launch), plus TUI launch from both the packed npm installation and the portable ZIP.
+The `0.2.0` TUI release surface is qualified on **Windows 11 x64** with **Node.js 24.18.1**. Release checks exercise the real terminal path at **60×20, 80×24 and 120×40**, plus resize, normal quit, Ctrl+C, `NO_COLOR`, screen-reader mode, thrown-error restoration, and two sequential EasyServer launches in the same terminal (including printable input on the second launch). Fidelity tests additionally keep focused/actionable content visible with **50 servers**, **50 provider-owned offer rows** and a **100+ line Diagnostics report** across the same release sizes. The release gate also launches the TUI from both the packed npm installation and the portable ZIP.
 
 Linux and macOS are not qualified support targets yet. Do not infer a support promise from the fact that the code or Ink may run there; platform expansion is tracked separately and requires its own release-level qualification.

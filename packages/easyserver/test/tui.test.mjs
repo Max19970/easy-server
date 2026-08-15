@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import React from "react";
+import { render as renderInk } from "ink";
 import { cleanup, render } from "ink-testing-library";
 import {
   hostTrustRequiredError,
@@ -161,9 +162,15 @@ async function openDiagnosticsRoute(view) {
 
 class CaptureOutput extends EventEmitter {
   isTTY = true;
-  columns = 100;
-  rows = 30;
+  columns;
+  rows;
   chunks = [];
+
+  constructor(columns = 100, rows = 30) {
+    super();
+    this.columns = columns;
+    this.rows = rows;
+  }
 
   write = (chunk) => {
     this.chunks.push(String(chunk));
@@ -172,6 +179,16 @@ class CaptureOutput extends EventEmitter {
 
   text() {
     return this.chunks.join("");
+  }
+
+  lastFrame() {
+    return this.chunks.at(-1) ?? "";
+  }
+
+  resize(columns, rows) {
+    this.columns = columns;
+    this.rows = rows;
+    this.emit("resize");
   }
 }
 
@@ -197,6 +214,34 @@ class TtyInput extends EventEmitter {
   pause() { return this; }
   ref() { return this; }
   unref() { return this; }
+}
+
+function renderAtTerminal(tree, columns, rows) {
+  const stdin = new TtyInput();
+  const stdout = new CaptureOutput(columns, rows);
+  const stderr = new CaptureOutput(columns, rows);
+  const app = renderInk(tree, {
+    stdin,
+    stdout,
+    stderr,
+    debug: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  return {
+    stdin,
+    stdout,
+    stderr,
+    rerender: app.rerender,
+    lastFrame: () => stdout.lastFrame(),
+    async flush() {
+      await app.waitUntilRenderFlush();
+    },
+    cleanup() {
+      app.unmount();
+      app.cleanup();
+    },
+  };
 }
 
 test.afterEach(() => cleanup());
@@ -309,7 +354,8 @@ test("risky confirmation owns the viewport and defaults focus to cancellation", 
   assert.match(view.lastFrame(), /Confirmation required/);
   assert.match(view.lastFrame(), /Target: Vast\.ai marketplace/);
   assert.match(view.lastFrame(), /Consequence: may create or increase provider charges/);
-  assert.match(view.lastFrame(), /Affected EasyServer resources: Provider inventory/);
+  assert.match(view.lastFrame(), /Affected resources \(1\)/);
+  assert.match(view.lastFrame(), /Provider inventory/);
   assert.match(view.lastFrame(), /> Cancel/);
   assert.doesNotMatch(view.lastFrame(), /Overview \[active\]/);
 
@@ -321,6 +367,44 @@ test("risky confirmation owns the viewport and defaults focus to cancellation", 
   view.stdin.write("\r");
   await tick();
   assert.deepEqual(actions, ["decline"]);
+});
+
+test("50-target destructive confirmation keeps Cancel visible and every target reviewable at 60x20", async (t) => {
+  const operation = presentMutationConfirmation(
+    {
+      summary: "Destroy selected servers?",
+      risks: ["destructive"],
+      consequence: "Permanently destroys the selected servers and closes their managed connections.",
+    },
+    {
+      target: "50 selected servers",
+      affectedResources: Array.from({ length: 50 }, (_, index) => `Server ${String(index + 1).padStart(2, "0")}`),
+    },
+  );
+  const view = renderAtTerminal(
+    shell({ operation, onOperationAction() {} }),
+    60,
+    20,
+  );
+  t.after(() => view.cleanup());
+  await view.flush();
+
+  assert.match(view.lastFrame(), /Consequence: Permanently destroys/);
+  assert.match(view.lastFrame(), /> Cancel/);
+  assert.match(view.lastFrame(), /Affected resources \(50\)/);
+  assert.match(view.lastFrame(), /Server 01/);
+  assert.match(view.lastFrame(), /Showing 1–2 of 50 · PageUp\/PageDown review/);
+  assert.ok(view.lastFrame().split("\n").length <= 20);
+
+  for (let index = 0; index < 24; index += 1) {
+    view.stdin.write("\u001b[6~");
+    await tick();
+    assert.match(view.lastFrame(), /> Cancel/);
+    assert.ok(view.lastFrame().split("\n").length <= 20);
+  }
+  assert.match(view.lastFrame(), /Server 49/);
+  assert.match(view.lastFrame(), /Server 50/);
+  assert.match(view.lastFrame(), /Showing 49–50 of 50/);
 });
 
 test("risky confirmation requires an explicit focus move before approval", async () => {
@@ -553,8 +637,8 @@ test("installed provider picker keeps focus visible inside a narrow bounded view
   assert.ok(view.lastFrame().split("\n").length <= 16);
 });
 
-test("server list keeps the focused server visible inside a narrow bounded viewport", async () => {
-  const servers = Array.from({ length: 30 }, (_, index) => ({
+test("50-server inventory stays focused and actionable across real release terminal widths", async (t) => {
+  const servers = Array.from({ length: 50 }, (_, index) => ({
     id: `instance:viewport-${index + 1}`,
     name: `Server ${String(index + 1).padStart(2, "0")}`,
     providerId: "fixture",
@@ -562,46 +646,176 @@ test("server list keeps the focused server visible inside a narrow bounded viewp
     management: "managed",
     freshness: "fresh",
     state: index % 2 === 0 ? "running" : "stopped",
-    availableActions: [],
+    availableActions: ["instance.stop", "instance.destroy"],
   }));
-  const view = render(
+  const snapshot = readSnapshot({
+    instances: {
+      status: "ready",
+      complete: true,
+      providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+      items: servers,
+    },
+  });
+  const view = renderAtTerminal(
     shell({
-      width: 60,
-      height: 16,
-      readSnapshot: readSnapshot({
-        instances: {
-          status: "ready",
-          complete: true,
-          providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
-          items: servers,
-        },
-      }),
+      readSnapshot: snapshot,
       readStatus: "ready",
+      onInstanceMutation() {},
+      onBulkInstanceMutation() {},
     }),
+    60,
+    20,
   );
+  t.after(() => view.cleanup());
+  await view.flush();
 
   await openServersRoute(view);
-  assert.match(view.lastFrame(), /> Server 01 · running/);
+  assert.match(view.lastFrame(), /> \[ \] Server 01 · running/);
   assert.match(view.lastFrame(), /↓ \d+ more servers/);
-  assert.ok(view.lastFrame().split("\n").length <= 16);
+  assert.ok(
+    view.lastFrame().split("\n").length <= 20,
+    `60x20 server frame overflowed:\n${view.lastFrame()}`,
+  );
 
-  for (let index = 0; index < 15; index += 1) {
+  view.stdin.write(" ");
+  await tick();
+  view.stdin.write("\u001b[B");
+  await tick();
+  view.stdin.write(" ");
+  await tick();
+  assert.match(view.lastFrame(), /Selected servers \(2\)/);
+  assert.ok(view.lastFrame().split("\n").length <= 20);
+
+  view.stdin.write("\r");
+  await tick();
+  for (let index = 0; index < 10 && !view.lastFrame().includes("> stop 2 selected servers"); index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+    assert.ok(
+      view.lastFrame().split("\n").length <= 20,
+      `60x20 server action frame overflowed:\n${view.lastFrame()}`,
+    );
+  }
+  assert.match(view.lastFrame(), /> stop 2 selected servers/);
+  view.stdin.write("\u001b");
+  await flushEscape();
+
+  for (let index = 1; index < 24; index += 1) {
     view.stdin.write("\u001b[B");
     await tick();
   }
-  assert.match(view.lastFrame(), /> Server 16 · stopped/);
+  assert.match(view.lastFrame(), /> \[ \] Server 25 · running/);
   assert.match(view.lastFrame(), /↑ \d+ more servers/);
   assert.match(view.lastFrame(), /↓ \d+ more servers/);
-  assert.ok(view.lastFrame().split("\n").length <= 16);
+  assert.ok(view.lastFrame().split("\n").length <= 20);
 
-  for (let index = 15; index < 29; index += 1) {
+  view.stdout.resize(80, 24);
+  await tick();
+  assert.match(view.lastFrame(), /> \[ \] Server 25 · running/);
+  assert.ok(view.lastFrame().split("\n").length <= 24);
+  view.stdin.write("\r");
+  await tick();
+  assert.ok(view.lastFrame().split("\n").length <= 24);
+  view.stdin.write("\u001b");
+  await flushEscape();
+
+  for (let index = 24; index < 49; index += 1) {
     view.stdin.write("\u001b[B");
     await tick();
   }
-  assert.match(view.lastFrame(), /> Server 30 · stopped/);
+  assert.match(view.lastFrame(), /> \[ \] Server 50 · stopped/);
   assert.match(view.lastFrame(), /↑ \d+ more servers/);
   assert.doesNotMatch(view.lastFrame(), /↓ \d+ more servers/);
-  assert.ok(view.lastFrame().split("\n").length <= 16);
+  assert.ok(view.lastFrame().split("\n").length <= 24);
+
+  view.stdout.resize(120, 40);
+  await tick();
+  assert.match(view.lastFrame(), /> \[ \] Server 50 · stopped/);
+  assert.ok(view.lastFrame().split("\n").length <= 40);
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /> Show technical details/);
+  assert.ok(view.lastFrame().split("\n").length <= 40);
+});
+
+test("50-offer third-party table stays focused and actionable across real release terminal widths", async (t) => {
+  const events = [];
+  const screen = {
+    kind: "table",
+    id: "qualification-offers",
+    title: "Nebula qualification offers",
+    columns: [
+      { id: "name", label: "Name" },
+      { id: "price", label: "Price" },
+    ],
+    rows: Array.from({ length: 50 }, (_, index) => ({
+      id: `offer-${index + 1}`,
+      cells: {
+        name: `Offer ${String(index + 1).padStart(2, "0")}`,
+        price: (index + 1) / 10,
+      },
+    })),
+    selection: "single",
+    selectedRowIds: [],
+    actions: [{ id: "continue", label: "Continue", kind: "primary" }],
+  };
+  const snapshot = readSnapshot();
+  const baseProps = {
+    readSnapshot: snapshot,
+    readStatus: "ready",
+    providerInteractiveDisabled: false,
+    onProviderInteractiveEvent(event) {
+      events.push(event);
+    },
+    onProviderInteractiveClose() {},
+  };
+  const interactiveProps = { ...baseProps, providerInteractiveScreen: screen };
+  const view = renderAtTerminal(shell(baseProps), 60, 20);
+  t.after(() => view.cleanup());
+  await view.flush();
+
+  view.stdin.write("\r");
+  await tick();
+  view.rerender(shell(interactiveProps));
+  await tick();
+  assert.match(view.lastFrame(), /Nebula qualification offers/);
+  assert.match(view.lastFrame(), /> \[ \] Offer 01/);
+  assert.match(view.lastFrame(), /↓ \d+ more offers/);
+  assert.ok(view.lastFrame().split("\n").length <= 20);
+
+  for (let index = 0; index < 24; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> \[ \] Offer 25/);
+  assert.match(view.lastFrame(), /↑ \d+ more offers/);
+  assert.match(view.lastFrame(), /↓ \d+ more offers/);
+  assert.ok(view.lastFrame().split("\n").length <= 20);
+
+  view.stdout.resize(80, 24);
+  await tick();
+  assert.match(view.lastFrame(), /> \[ \] Offer 25/);
+  assert.ok(view.lastFrame().split("\n").length <= 24);
+
+  for (let index = 24; index < 49; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> \[ \] Offer 50/);
+  assert.match(view.lastFrame(), /↑ \d+ more offers/);
+  assert.ok(view.lastFrame().split("\n").length <= 24);
+
+  view.stdout.resize(120, 40);
+  await tick();
+  assert.match(view.lastFrame(), /> \[ \] Offer 50/);
+  assert.ok(view.lastFrame().split("\n").length <= 40);
+  view.stdin.write("\u001b[B");
+  await tick();
+  assert.match(view.lastFrame(), /> Continue/);
+  assert.ok(view.lastFrame().split("\n").length <= 40);
+  view.stdin.write("\r");
+  await tick();
+  assert.deepEqual(events.at(-1), { kind: "action", actionId: "continue" });
 });
 
 test("degraded server notice stays secondary without overflowing the narrow server viewport", async () => {

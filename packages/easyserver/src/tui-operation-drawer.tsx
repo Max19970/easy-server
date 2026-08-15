@@ -9,12 +9,16 @@ export interface TuiOperationDrawerProps {
   readonly operation: TuiOperationPresentation;
   readonly colorEnabled?: boolean;
   readonly selectedActionIndex?: number;
+  readonly interactionResourceScroll?: number;
+  readonly screenReader?: boolean;
 }
 
 export function TuiOperationDrawer({
   operation,
   colorEnabled = true,
   selectedActionIndex = 0,
+  interactionResourceScroll = 0,
+  screenReader = false,
 }: TuiOperationDrawerProps): React.ReactElement {
   assertTuiOperationPresentation(operation);
 
@@ -27,6 +31,18 @@ export function TuiOperationDrawer({
           ? "red"
           : "cyan"
     : undefined;
+  const affectedResources =
+    operation.interaction?.kind === "mutation-confirmation"
+      ? operation.interaction.affectedResources
+      : [];
+  const resourcePageSize = 2;
+  const resourceMaxStart = Math.max(0, affectedResources.length - resourcePageSize);
+  const resourceStart = screenReader
+    ? 0
+    : Math.max(0, Math.min(interactionResourceScroll, resourceMaxStart));
+  const resourceEnd = screenReader
+    ? affectedResources.length
+    : Math.min(affectedResources.length, resourceStart + resourcePageSize);
 
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={toneColor} paddingX={1}>
@@ -35,20 +51,16 @@ export function TuiOperationDrawer({
         <Text>{phaseLabel(operation)}</Text>
       </Box>
 
-      {operation.detail === undefined ? null : <Text wrap="wrap">{operation.detail}</Text>}
+      {operation.detail === undefined || operation.interaction?.kind === "mutation-confirmation"
+        ? null
+        : <Text wrap="wrap">{operation.detail}</Text>}
 
       {operation.interaction?.kind === "mutation-confirmation" ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text>Action: {operation.interaction.summary}</Text>
-          <Text>Target: {operation.interaction.target}</Text>
-          <Text>Risk: {operation.interaction.risks.join(", ")}</Text>
+          <Text wrap="truncate">Action: {operation.interaction.summary}</Text>
+          <Text wrap="truncate">Target: {operation.interaction.target}</Text>
+          <Text wrap="truncate">Risk: {operation.interaction.risks.join(", ")}</Text>
           <Text>Consequence: {operation.interaction.consequence}</Text>
-          <Text>
-            Affected EasyServer resources:{" "}
-            {operation.interaction.affectedResources.length === 0
-              ? "none"
-              : operation.interaction.affectedResources.join(", ")}
-          </Text>
         </Box>
       ) : null}
 
@@ -103,11 +115,33 @@ export function TuiOperationDrawer({
         <Box marginTop={1} flexDirection="column">
           <Text bold>Actions</Text>
           {operation.actions.map((action, index) => (
-            <Text key={action.kind} bold={index === selectedActionIndex}>
+            <Text key={action.kind} bold={index === selectedActionIndex} wrap="truncate">
               {index === selectedActionIndex ? "> " : "  "}{action.label}
             </Text>
           ))}
-          <Text>↑/↓ choose · Enter run{operation.actions.some((action) => action.kind === "decline") ? " · Esc decline" : ""}</Text>
+          <Text wrap="truncate">↑/↓ choose · Enter run{operation.actions.some((action) => action.kind === "decline") ? " · Esc decline" : ""}</Text>
+        </Box>
+      )}
+
+      {operation.interaction?.kind !== "mutation-confirmation" ? null : (
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>Affected resources ({affectedResources.length})</Text>
+          {affectedResources.length === 0 ? (
+            <Text>none</Text>
+          ) : (
+            <>
+              {affectedResources.slice(resourceStart, resourceEnd).map((resource, index) => (
+                <Text key={`${resourceStart + index}:${resource}`} wrap="truncate">
+                  {resource}
+                </Text>
+              ))}
+              {screenReader || affectedResources.length <= resourcePageSize ? null : (
+                <Text wrap="truncate">
+                  Showing {resourceStart + 1}–{resourceEnd} of {affectedResources.length} · PageUp/PageDown review
+                </Text>
+              )}
+            </>
+          )}
         </Box>
       )}
     </Box>
