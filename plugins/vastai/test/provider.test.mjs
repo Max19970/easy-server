@@ -529,14 +529,77 @@ test("marketplace interactive flow searches, selects, reviews and submits throug
   const session = await flow.open(interactiveContext);
 
   assert.equal(session.initialScreen.kind, "form");
-  assert.match(session.initialScreen.title, /Vast.ai marketplace/i);
+  assert.match(session.initialScreen.title, /Find a Vast.ai server/i);
+  assert.doesNotMatch(session.initialScreen.description, /CLI/i);
   assert.deepEqual(
     session.initialScreen.fields.map(({ id, kind }) => ({ id, kind })),
     [
+      { id: "gpu", kind: "text" },
       { id: "max-hourly", kind: "decimal" },
       { id: "min-reliability", kind: "decimal" },
-      { id: "verified", kind: "boolean" },
     ],
+  );
+  assert.deepEqual(
+    session.initialScreen.actions.map(({ id }) => id),
+    ["choose-gpu", "more-filters", "search"],
+  );
+
+  const advanced = await session.dispatch(
+    { kind: "action", actionId: "more-filters" },
+    interactiveContext,
+  );
+  assert.equal(advanced.kind, "screen");
+  assert.equal(advanced.screen.kind, "form");
+  assert.deepEqual(
+    advanced.screen.fields.map(({ id, kind }) => ({ id, kind })),
+    [
+      { id: "min-gpus", kind: "integer" },
+      { id: "verified", kind: "boolean" },
+      { id: "limit", kind: "integer" },
+    ],
+  );
+  await session.dispatch(
+    { kind: "field-change", fieldId: "min-gpus", value: 2 },
+    interactiveContext,
+  );
+  await session.dispatch(
+    { kind: "field-change", fieldId: "verified", value: true },
+    interactiveContext,
+  );
+  await session.dispatch(
+    { kind: "field-change", fieldId: "limit", value: 25 },
+    interactiveContext,
+  );
+  await session.dispatch(
+    { kind: "action", actionId: "back-search" },
+    interactiveContext,
+  );
+
+  const gpuModels = await session.dispatch(
+    { kind: "action", actionId: "choose-gpu" },
+    interactiveContext,
+  );
+  assert.equal(gpuModels.kind, "screen");
+  assert.equal(gpuModels.screen.kind, "table");
+  assert.match(gpuModels.screen.title, /Choose a GPU model/i);
+  assert.deepEqual(gpuModels.screen.rows.map(({ id }) => id), ["RTX 4090"]);
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    rentable: { eq: true },
+    limit: 100,
+  });
+  await session.dispatch(
+    { kind: "table-selection", rowIds: ["RTX 4090"] },
+    interactiveContext,
+  );
+  const primaryWithGpu = await session.dispatch(
+    { kind: "action", actionId: "use-gpu" },
+    interactiveContext,
+  );
+  assert.equal(primaryWithGpu.kind, "screen");
+  assert.equal(primaryWithGpu.screen.kind, "form");
+  assert.equal(
+    primaryWithGpu.screen.fields.find((field) => field.id === "gpu")?.value,
+    "RTX 4090",
   );
 
   await session.dispatch(
@@ -547,10 +610,6 @@ test("marketplace interactive flow searches, selects, reviews and submits throug
     { kind: "field-change", fieldId: "min-reliability", value: 0.99 },
     interactiveContext,
   );
-  await session.dispatch(
-    { kind: "field-change", fieldId: "verified", value: true },
-    interactiveContext,
-  );
   const results = await session.dispatch(
     { kind: "action", actionId: "search" },
     interactiveContext,
@@ -559,15 +618,17 @@ test("marketplace interactive flow searches, selects, reviews and submits throug
   assert.equal(results.screen.kind, "table");
   assert.deepEqual(
     results.screen.columns.map(({ id }) => id),
-    ["offer", "gpu", "count", "memory", "hourly", "reliability", "location"],
+    ["gpu", "count", "hourly", "reliability", "location"],
   );
   assert.deepEqual(results.screen.rows.map(({ id }) => id), ["901"]);
-  assert.deepEqual(JSON.parse(calls[0].init.body), {
+  assert.deepEqual(JSON.parse(calls[1].init.body), {
+    gpu_name: { eq: "RTX 4090" },
+    num_gpus: { gte: 2 },
     dph_total: { lte: 0.5 },
     reliability: { gte: 0.99 },
     verified: { eq: true },
     rentable: { eq: true },
-    limit: 10,
+    limit: 25,
   });
 
   await session.dispatch(
@@ -641,11 +702,42 @@ test("marketplace interactive flow searches, selects, reviews and submits throug
     write() {},
     writeError() {},
   });
-  assert.equal(calls[1].init.method, "PUT");
+  assert.equal(calls[2].init.method, "PUT");
   assert.deepEqual(commandResult, {
     refreshProviderInventory: true,
     affectedProviderExternalIds: ["777"],
   });
+});
+
+test("marketplace GPU suggestions fail soft to manual entry without hiding the rent flow", async () => {
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch() {
+      throw new Error("fixture marketplace unavailable");
+    },
+  });
+  const marketplace = plugin.features[0];
+  const flow = marketplace.interactive?.flows.find(
+    (candidate) => candidate.commandName === "rent",
+  );
+  assert.ok(flow);
+  const providerContext = context();
+  const interactiveContext = {
+    signal: providerContext.signal,
+    resolveCredential: providerContext.resolveCredential,
+  };
+  const session = await flow.open(interactiveContext);
+
+  const fallback = await session.dispatch(
+    { kind: "action", actionId: "choose-gpu" },
+    interactiveContext,
+  );
+  assert.equal(fallback.kind, "screen");
+  assert.equal(fallback.screen.kind, "form");
+  const gpu = fallback.screen.fields.find((field) => field.id === "gpu");
+  assert.equal(gpu?.kind, "text");
+  assert.match(gpu?.description ?? "", /suggestions are temporarily unavailable/i);
+  assert.doesNotMatch(fallback.screen.description ?? "", /CLI/i);
 });
 
 test("marketplace feature searches Vast offers with plugin-owned filters", async () => {

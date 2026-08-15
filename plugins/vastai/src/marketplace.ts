@@ -175,6 +175,20 @@ interface VastRentFlowState {
   readonly label?: string;
 }
 
+type VastRentFlowView =
+  | "search"
+  | "advanced-search"
+  | "gpu-models"
+  | "results"
+  | "rental"
+  | "review";
+
+interface VastGpuModelSummary {
+  readonly name: string;
+  readonly offers: number;
+  readonly lowestHourlyPriceUsd: number;
+}
+
 class VastRentInteractiveSession implements ProviderInteractiveSession {
   readonly initialScreen: ProviderInteractiveScreen;
   #state: VastRentFlowState = {
@@ -182,6 +196,10 @@ class VastRentInteractiveSession implements ProviderInteractiveSession {
     offers: [],
     image: VAST_DEFAULT_IMAGE,
   };
+  #view: VastRentFlowView = "search";
+  #gpuModels: readonly VastGpuModelSummary[] = [];
+  #pendingGpuName?: string;
+  #gpuDiscoveryUnavailable = false;
 
   constructor(private readonly marketplace: MarketplaceFeature) {
     this.initialScreen = vastSearchScreen(this.#state);
@@ -193,32 +211,81 @@ class VastRentInteractiveSession implements ProviderInteractiveSession {
   ): Promise<ProviderInteractiveTransition> {
     if (event.kind === "field-change") {
       this.#state = updateVastFlowField(this.#state, event.fieldId, event.value);
+      if (isVastRentalField(event.fieldId)) {
+        this.#view = "rental";
+        return { kind: "screen", screen: vastRentalScreen(this.#state) };
+      }
+      if (isVastAdvancedSearchField(event.fieldId)) {
+        this.#view = "advanced-search";
+        return { kind: "screen", screen: vastAdvancedSearchScreen(this.#state) };
+      }
+      this.#view = "search";
       return {
         kind: "screen",
-        screen: isVastRentalField(event.fieldId)
-          ? vastRentalScreen(this.#state)
-          : vastSearchScreen(this.#state),
+        screen: vastSearchScreen(this.#state, undefined, this.#gpuDiscoveryUnavailable),
       };
     }
 
     if (event.kind === "table-selection") {
+      if (this.#view === "gpu-models") {
+        this.#pendingGpuName =
+          event.rowIds.length === 1 &&
+          this.#gpuModels.some((model) => model.name === event.rowIds[0])
+            ? event.rowIds[0]
+            : undefined;
+        return {
+          kind: "screen",
+          screen: vastGpuModelsScreen(this.#gpuModels, this.#pendingGpuName),
+        };
+      }
+
       const selectedOfferId =
         event.rowIds.length === 1 &&
         this.#state.offers.some((offer) => offer.id === event.rowIds[0])
           ? event.rowIds[0]
           : undefined;
       this.#state = { ...this.#state, selectedOfferId };
+      this.#view = "results";
       return { kind: "screen", screen: vastResultsScreen(this.#state) };
     }
 
     switch (event.actionId) {
+      case "choose-gpu":
+      case "refresh-gpu-models":
+        return this.#openGpuModels(context);
+      case "use-gpu":
+        this.#state = {
+          ...this.#state,
+          search: { ...this.#state.search, gpuName: this.#pendingGpuName },
+        };
+        this.#view = "search";
+        return { kind: "screen", screen: vastSearchScreen(this.#state) };
+      case "clear-gpu":
+        this.#pendingGpuName = undefined;
+        this.#state = {
+          ...this.#state,
+          search: { ...this.#state.search, gpuName: undefined },
+        };
+        this.#view = "search";
+        return { kind: "screen", screen: vastSearchScreen(this.#state) };
+      case "more-filters":
+        this.#view = "advanced-search";
+        return { kind: "screen", screen: vastAdvancedSearchScreen(this.#state) };
       case "search":
       case "refresh": {
         const validation = validateVastSearch(this.#state.search);
         if (validation !== undefined) {
+          const advanced = isVastAdvancedSearchField(validation.fieldId);
+          this.#view = advanced ? "advanced-search" : "search";
           return {
             kind: "screen",
-            screen: vastSearchScreen(this.#state, validation),
+            screen: advanced
+              ? vastAdvancedSearchScreen(this.#state, validation)
+              : vastSearchScreen(
+                  this.#state,
+                  validation,
+                  this.#gpuDiscoveryUnavailable,
+                ),
           };
         }
         const offers = await this.marketplace.searchOffers(
@@ -234,31 +301,39 @@ class VastRentInteractiveSession implements ProviderInteractiveSession {
             ? this.#state.selectedOfferId
             : undefined,
         };
+        this.#view = "results";
         return { kind: "screen", screen: vastResultsScreen(this.#state) };
       }
       case "back-search":
-        return { kind: "screen", screen: vastSearchScreen(this.#state) };
-      case "continue":
+        this.#view = "search";
         return {
           kind: "screen",
-          screen:
-            this.#state.selectedOfferId === undefined
-              ? vastResultsScreen(this.#state)
-              : vastRentalScreen(this.#state),
+          screen: vastSearchScreen(this.#state, undefined, this.#gpuDiscoveryUnavailable),
         };
+      case "continue":
+        if (this.#state.selectedOfferId === undefined) {
+          this.#view = "results";
+          return { kind: "screen", screen: vastResultsScreen(this.#state) };
+        }
+        this.#view = "rental";
+        return { kind: "screen", screen: vastRentalScreen(this.#state) };
       case "back-results":
+        this.#view = "results";
         return { kind: "screen", screen: vastResultsScreen(this.#state) };
       case "review": {
         const validation = validateVastRental(this.#state);
         if (validation !== undefined) {
+          this.#view = "rental";
           return {
             kind: "screen",
             screen: vastRentalScreen(this.#state, validation),
           };
         }
+        this.#view = "review";
         return { kind: "screen", screen: vastReviewScreen(this.#state) };
       }
       case "back-rental":
+        this.#view = "rental";
         return { kind: "screen", screen: vastRentalScreen(this.#state) };
       case "rent":
         return { kind: "submit", args: vastRentArgs(this.#state) };
@@ -266,9 +341,46 @@ class VastRentInteractiveSession implements ProviderInteractiveSession {
         throw new Error(`Unknown Vast.ai marketplace flow action: ${event.actionId}`);
     }
   }
+
+  async #openGpuModels(
+    context: ProviderInteractiveContext,
+  ): Promise<ProviderInteractiveTransition> {
+    try {
+      const offers = await this.marketplace.searchOffers(
+        { limit: VAST_GPU_DISCOVERY_LIMIT },
+        providerReadContext(context),
+      );
+      this.#gpuModels = summarizeVastGpuModels(offers);
+      this.#pendingGpuName = this.#gpuModels.some(
+        (model) => model.name === this.#state.search.gpuName,
+      )
+        ? this.#state.search.gpuName
+        : undefined;
+      this.#gpuDiscoveryUnavailable = false;
+      this.#view = "gpu-models";
+      return {
+        kind: "screen",
+        screen: vastGpuModelsScreen(this.#gpuModels, this.#pendingGpuName),
+      };
+    } catch (error) {
+      if (
+        isNormalizedError(error) &&
+        (error.code === "cancelled" || error.code === "timeout")
+      ) {
+        throw error;
+      }
+      this.#gpuDiscoveryUnavailable = true;
+      this.#view = "search";
+      return {
+        kind: "screen",
+        screen: vastSearchScreen(this.#state, undefined, true),
+      };
+    }
+  }
 }
 
 const VAST_DEFAULT_IMAGE = "ubuntu:22.04";
+const VAST_GPU_DISCOVERY_LIMIT = 100;
 
 const VAST_RUNTYPES: readonly VastRuntype[] = [
   "ssh",
@@ -288,8 +400,20 @@ interface VastFlowValidation {
 function vastSearchScreen(
   state: VastRentFlowState,
   invalid?: VastFlowValidation,
+  gpuDiscoveryUnavailable = false,
 ): ProviderInteractiveScreen {
   const fields: ProviderInteractiveField[] = [
+    {
+      kind: "text",
+      id: "gpu",
+      label: "GPU model",
+      description: gpuDiscoveryUnavailable
+        ? "Live GPU suggestions are temporarily unavailable. Type a model exactly, or leave this blank to search any GPU."
+        : "Type a model exactly, or use Choose GPU model below to browse live rentable GPU names.",
+      required: false,
+      ...(state.search.gpuName === undefined ? {} : { value: state.search.gpuName }),
+      ...fieldValidation("gpu", invalid),
+    },
     {
       kind: "decimal",
       id: "max-hourly",
@@ -304,12 +428,42 @@ function vastSearchScreen(
       kind: "decimal",
       id: "min-reliability",
       label: "Minimum reliability",
-      description: "Ratio from 0 to 1",
+      description: "Ratio from 0 to 1 (0.99 means 99%).",
       required: false,
       ...(state.search.minReliability === undefined
         ? {}
         : { value: state.search.minReliability }),
       ...fieldValidation("min-reliability", invalid),
+    },
+  ];
+  return {
+    kind: "form",
+    id: "vast-marketplace-search",
+    title: "Find a Vast.ai server",
+    description: "Start with GPU, price and reliability. More filters keeps the remaining marketplace controls available without crowding the first step.",
+    fields,
+    actions: [
+      { id: "choose-gpu", label: "Choose GPU model", kind: "secondary" },
+      { id: "more-filters", label: "More filters", kind: "secondary" },
+      { id: "search", label: "Search offers", kind: "primary" },
+    ],
+  };
+}
+
+function vastAdvancedSearchScreen(
+  state: VastRentFlowState,
+  invalid?: VastFlowValidation,
+): ProviderInteractiveScreen {
+  const fields: ProviderInteractiveField[] = [
+    {
+      kind: "integer",
+      id: "min-gpus",
+      label: "Minimum GPU count",
+      required: false,
+      ...(state.search.minGpuCount === undefined
+        ? {}
+        : { value: state.search.minGpuCount }),
+      ...fieldValidation("min-gpus", invalid),
     },
     {
       kind: "boolean",
@@ -318,14 +472,67 @@ function vastSearchScreen(
       required: false,
       value: state.search.verifiedOnly ?? false,
     },
+    {
+      kind: "integer",
+      id: "limit",
+      label: "Result limit",
+      description: "How many matching offers Vast.ai should return.",
+      required: false,
+      value: state.search.limit ?? 10,
+      ...fieldValidation("limit", invalid),
+    },
   ];
   return {
     kind: "form",
-    id: "vast-marketplace-search",
-    title: "Vast.ai marketplace search",
-    description: "Browse current rentable offers and choose the GPU from live results. These filters are optional; exact GPU/count filters remain available in the CLI for advanced searches.",
+    id: "vast-marketplace-more-filters",
+    title: "More Vast.ai filters",
+    description: "These optional filters are applied together with GPU, price and reliability from the previous step.",
     fields,
-    actions: [{ id: "search", label: "Search offers", kind: "primary" }],
+    actions: [
+      { id: "back-search", label: "Back to primary filters", kind: "back" },
+      { id: "search", label: "Search offers", kind: "primary" },
+    ],
+  };
+}
+
+function vastGpuModelsScreen(
+  models: readonly VastGpuModelSummary[],
+  selectedGpuName?: string,
+): ProviderInteractiveScreen {
+  return {
+    kind: "table",
+    id: "vast-gpu-models",
+    title: "Choose a GPU model",
+    description:
+      models.length === 0
+        ? "No GPU names were returned by the current rentable-offer sample. Go back and type a model manually, or refresh the live list."
+        : "GPU names come from a live sample of currently rentable Vast.ai offers. You can still go back and type an exact model manually.",
+    columns: [
+      { id: "gpu", label: "GPU" },
+      { id: "offers", label: "Offers" },
+      { id: "from", label: "From USD/h" },
+    ],
+    rows: models.map((model) => ({
+      id: model.name,
+      cells: {
+        gpu: model.name,
+        offers: model.offers,
+        from: model.lowestHourlyPriceUsd.toFixed(3),
+      },
+    })),
+    selection: "single",
+    selectedRowIds: selectedGpuName === undefined ? [] : [selectedGpuName],
+    actions: [
+      { id: "back-search", label: "Back", kind: "back" },
+      { id: "refresh-gpu-models", label: "Refresh GPU models", kind: "refresh" },
+      { id: "clear-gpu", label: "Any GPU", kind: "secondary" },
+      {
+        id: "use-gpu",
+        label: "Use selected GPU",
+        kind: "primary",
+        disabled: selectedGpuName === undefined,
+      },
+    ],
   };
 }
 
@@ -339,21 +546,17 @@ function vastResultsScreen(state: VastRentFlowState): ProviderInteractiveScreen 
         ? "No rentable offers matched the current filters. Refresh or go back to change filters."
         : "Select one offer, then continue to rental options.",
     columns: [
-      { id: "offer", label: "Offer" },
       { id: "gpu", label: "GPU" },
-      { id: "count", label: "Count" },
-      { id: "memory", label: "VRAM" },
-      { id: "hourly", label: "USD/hour" },
+      { id: "count", label: "Qty" },
+      { id: "hourly", label: "USD/h" },
       { id: "reliability", label: "Reliability" },
       { id: "location", label: "Location" },
     ],
     rows: state.offers.map((offer) => ({
       id: offer.id,
       cells: {
-        offer: offer.id,
         gpu: offer.gpuName,
         count: offer.gpuCount,
-        memory: `${(offer.gpuRamMb / 1024).toFixed(1)} GiB`,
         hourly: offer.hourlyPriceUsd,
         reliability: `${(offer.reliability * 100).toFixed(1)}%`,
         location: offer.location ?? "unknown",
@@ -593,6 +796,39 @@ function optionalNumber(value: unknown): number | undefined {
 
 function isVastRentalField(fieldId: string): boolean {
   return fieldId === "image" || fieldId === "disk" || fieldId === "runtype" || fieldId === "label";
+}
+
+function isVastAdvancedSearchField(fieldId: string): boolean {
+  return fieldId === "min-gpus" || fieldId === "verified" || fieldId === "limit";
+}
+
+function summarizeVastGpuModels(
+  offers: readonly VastOffer[],
+): readonly VastGpuModelSummary[] {
+  const byName = new Map<string, VastGpuModelSummary>();
+  for (const offer of offers) {
+    const current = byName.get(offer.gpuName);
+    byName.set(
+      offer.gpuName,
+      current === undefined
+        ? {
+            name: offer.gpuName,
+            offers: 1,
+            lowestHourlyPriceUsd: offer.hourlyPriceUsd,
+          }
+        : {
+            ...current,
+            offers: current.offers + 1,
+            lowestHourlyPriceUsd: Math.min(
+              current.lowestHourlyPriceUsd,
+              offer.hourlyPriceUsd,
+            ),
+          },
+    );
+  }
+  return [...byName.values()].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
 }
 
 function providerReadContext(

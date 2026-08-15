@@ -500,12 +500,12 @@ function TableView({
   const muted = colorEnabled ? "gray" : undefined;
   return (
     <Box flexDirection="column">
-      <Text>{screen.columns.map((column) => safe(column.label)).join(" · ")}</Text>
+      <Text wrap="truncate">{screen.columns.map((column) => safe(column.label)).join(" · ")}</Text>
       {hiddenBefore > 0 ? <Text color={muted}>↑ {hiddenBefore} more offers</Text> : null}
       {screen.rows.slice(windowStart, windowEnd).map((row, visibleIndex) => {
         const index = windowStart + visibleIndex;
         return (
-          <Text key={row.id} bold={index === cursor}>
+          <Text key={row.id} bold={index === cursor} wrap="truncate">
             {index === cursor ? "> " : "  "}{selected.has(row.id) ? "[x] " : "[ ] "}
             {screen.columns
               .map((column) => safe(String(row.cells[column.id] ?? "")))

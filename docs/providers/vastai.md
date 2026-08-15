@@ -53,9 +53,11 @@ The Vast.ai plugin declares `api-key` as its required credential name. Before co
 
 ## 3. Search the marketplace
 
-Vast.ai acquisition is a Provider Feature named `marketplace`. In the TUI, open **New instance** and start the Vast.ai rental flow. The ordinary TUI path browses live rentable offers without requiring an exact GPU-name string; choose the GPU/count you want from the returned offer table. The initial TUI filters are deliberately limited to price, reliability and verified-host preference. Exact GPU/count/result-limit filtering remains available through the advanced CLI surface.
+Vast.ai acquisition is a Provider Feature named `marketplace`. In the TUI, choose **Rent a server** from Home and open the Vast.ai rental flow. The first search step keeps GPU model, maximum hourly price and minimum reliability visible. **Choose GPU model** loads current rentable GPU names from Vast.ai so ordinary use does not depend on memorized spelling; exact manual entry remains available when a model is not present in that live sample or the suggestion read is temporarily unavailable.
 
-After selecting an offer, the TUI uses `ubuntu:22.04` as a usable default container image. Keep it for a normal Ubuntu server or edit the field to another Docker/OCI image reference when the workload needs a custom environment.
+**More filters** keeps the remaining Vast controls in the same guided flow: minimum GPU count, verified-only hosts and result limit. Searching applies all six filters together. Large offer lists remain a bounded terminal list; select an offer and continue to rental options without switching to command mode.
+
+After selecting an offer, the TUI uses `ubuntu:22.04` as a usable default container image. Keep it for a normal Ubuntu server or edit the field to another Docker/OCI image reference when the workload needs a custom environment. Disk size, runtype and label remain available in the same TUI flow.
 
 The command-specific arguments are discoverable directly from the CLI:
 
