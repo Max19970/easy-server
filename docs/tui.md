@@ -109,7 +109,7 @@ The Connections surface keeps desired persisted Endpoint intents separate from l
 
 ## Degraded and recovery states
 
-Healthy TUI sections remain usable when the host can represent a partial failure. Examples include:
+Healthy TUI sections remain usable when the host can represent a partial failure. The Instances surface shows results from available Providers first; a failed Provider is a secondary availability notice, not a prerequisite that blocks unrelated inventory. Examples include:
 
 - one Provider is unavailable while another has fresh inventory;
 - last-known instance observations are stale or a canonical instance is still unobserved;

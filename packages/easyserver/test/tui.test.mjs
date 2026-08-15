@@ -1342,7 +1342,7 @@ test("degraded provider state remains visible while healthy instance inventory s
   await tick();
   view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /Inventory is partial/);
+  assert.match(view.lastFrame(), /Some providers are unavailable/);
   assert.match(view.lastFrame(), /offline.*provider-unavailable/);
   assert.match(view.lastFrame(), /Healthy GPU/);
   assert.match(view.lastFrame(), /Normalized state: running/);
@@ -1427,6 +1427,7 @@ test("empty instance guidance reflects configured but degraded providers", async
       complete: false,
       items: [],
       providerOutcomes: [
+        { providerId: "healthy", status: "fresh" },
         {
           providerId: "fixture",
           status: "failed",
@@ -1440,15 +1441,19 @@ test("empty instance guidance reflects configured but degraded providers", async
   });
   const view = render(shell({ width: 100, readSnapshot: snapshot, readStatus: "ready" }));
 
-  assert.match(view.lastFrame(), /provider inventory is\s+incomplete/i);
+  assert.match(view.lastFrame(), /No instances reported by available providers/i);
+  assert.match(view.lastFrame(), /unavailable providers may have\s+additional instances/i);
+  assert.doesNotMatch(view.lastFrame(), /because provider inventory is incomplete/i);
   assert.doesNotMatch(view.lastFrame(), /Configure a provider first/);
 
   view.stdin.write("\t");
   await tick();
   view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /Inventory is partial/);
-  assert.match(view.lastFrame(), /Review the provider issue/);
+  assert.match(view.lastFrame(), /Some providers are unavailable/);
+  assert.match(view.lastFrame(), /Available provider results remain usable/);
+  assert.match(view.lastFrame(), /Open Providers or Diagnostics/);
+  assert.doesNotMatch(view.lastFrame(), /Review the provider issue/);
   assert.doesNotMatch(view.lastFrame(), /Configure a provider first/);
 });
 

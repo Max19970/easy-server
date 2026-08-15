@@ -2623,7 +2623,7 @@ function PartialInventoryNotice({
 }): React.ReactElement {
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Text bold>Inventory is partial.</Text>
+      <Text>Some providers are unavailable.</Text>
       <Text>Available provider results remain usable.</Text>
       {failedProviders.map((provider) =>
         provider.status === "failed" ? (
@@ -2632,7 +2632,7 @@ function PartialInventoryNotice({
           </Text>
         ) : null,
       )}
-      <Text>Review the provider issue and press r to refresh.</Text>
+      <Text>Open Providers or Diagnostics if you need to fix an unavailable provider, then refresh.</Text>
     </Box>
   );
 }
@@ -2649,7 +2649,7 @@ function instanceEmptyGuidance(snapshot: TuiReadSnapshot): string {
     !snapshot.instances.complete &&
     snapshot.instances.providerOutcomes.some((provider) => provider.status === "failed")
   ) {
-    return "No compute instances are currently visible because provider inventory is incomplete. Review the provider issue above and press r to refresh.";
+    return "No instances reported by available providers. Unavailable providers may have additional instances that are not visible right now.";
   }
   return "No compute instances yet. Providers are configured; use New instance when acquisition is enabled.";
 }
