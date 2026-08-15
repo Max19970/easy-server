@@ -4,6 +4,7 @@ import {
   Text,
   useApp,
   useInput,
+  useWindowSize,
 } from "ink";
 import type {
   ProviderInteractiveAction,
@@ -12,12 +13,14 @@ import type {
   ProviderInteractiveFieldValue,
   ProviderInteractiveScreen,
 } from "@easyai101/easyserver-plugin-sdk";
+import { moveTuiFocus, tuiFocusWindow } from "./tui-focus.js";
 import { escapeTerminalText } from "./terminal-text.js";
 
 export interface ProviderInteractiveSurfaceProps {
   readonly screen: ProviderInteractiveScreen;
   readonly colorEnabled?: boolean;
   readonly disabled?: boolean;
+  readonly height?: number;
   onEvent(event: ProviderInteractiveEvent): void;
   onClose(): void;
 }
@@ -33,10 +36,13 @@ export function ProviderInteractiveSurface({
   screen,
   colorEnabled = true,
   disabled = false,
+  height,
   onEvent,
   onClose,
 }: ProviderInteractiveSurfaceProps): React.ReactElement {
   const { exit } = useApp();
+  const windowSize = useWindowSize();
+  const terminalRows = height ?? windowSize.rows ?? 24;
   const [cursor, setCursor] = useState(0);
   const [choiceCursor, setChoiceCursor] = useState(0);
   const [draft, setDraft] = useState<DraftValue | undefined>();
@@ -49,6 +55,15 @@ export function ProviderInteractiveSurface({
         : 0;
   const actions = screen.actions.filter((action) => !action.disabled);
   const selectableCount = contentCount + actions.length;
+  const fixedRows = 5 + (screen.description === undefined ? 0 : 1) +
+    (actions.length === 0 ? 0 : actions.length + 1);
+  const contentCapacity = Math.max(1, terminalRows - fixedRows);
+  const contentCursor = contentCount === 0 ? 0 : Math.min(cursor, contentCount - 1);
+  const contentWindow = tuiFocusWindow(
+    contentCursor,
+    contentCount,
+    contentCapacity,
+  );
 
   useEffect(() => {
     setCursor(0);
@@ -149,11 +164,11 @@ export function ProviderInteractiveSurface({
     }
 
     if (key.downArrow && selectableCount > 0) {
-      setCursor((current) => (current + 1) % selectableCount);
+      setCursor((current) => moveTuiFocus(current, selectableCount, 1));
       return;
     }
     if (key.upArrow && selectableCount > 0) {
-      setCursor((current) => (current - 1 + selectableCount) % selectableCount);
+      setCursor((current) => moveTuiFocus(current, selectableCount, -1));
       return;
     }
 
@@ -274,19 +289,40 @@ export function ProviderInteractiveSurface({
       )}
       <Box marginTop={1} flexDirection="column">
         {screen.kind === "form" ? (
-          screen.fields.map((field, index) => (
-            <FieldLine
-              key={field.id}
-              field={field}
-              focused={index === cursor}
-              choiceCursor={index === cursor ? choiceCursor : 0}
-              draft={draft?.fieldId === field.id ? draft.value : undefined}
-            />
-          ))
+          <>
+            {contentWindow.hiddenBefore > 0 ? (
+              <Text color={muted}>↑ {contentWindow.hiddenBefore} more</Text>
+            ) : null}
+            {screen.fields
+              .slice(contentWindow.start, contentWindow.end)
+              .map((field, visibleIndex) => {
+                const index = contentWindow.start + visibleIndex;
+                return (
+                  <FieldLine
+                    key={field.id}
+                    field={field}
+                    focused={index === cursor}
+                    choiceCursor={index === cursor ? choiceCursor : 0}
+                    draft={draft?.fieldId === field.id ? draft.value : undefined}
+                  />
+                );
+              })}
+            {contentWindow.hiddenAfter > 0 ? (
+              <Text color={muted}>↓ {contentWindow.hiddenAfter} more</Text>
+            ) : null}
+          </>
         ) : screen.kind === "table" ? (
-          <TableView screen={screen} cursor={cursor} />
+          <TableView
+            screen={screen}
+            cursor={cursor}
+            windowStart={contentWindow.start}
+            windowEnd={contentWindow.end}
+            hiddenBefore={contentWindow.hiddenBefore}
+            hiddenAfter={contentWindow.hiddenAfter}
+            colorEnabled={colorEnabled}
+          />
         ) : (
-          screen.items.map((item, index) => (
+          screen.items.slice(0, Math.max(1, contentCapacity)).map((item, index) => (
             <Text key={`${item.label}:${index}`}>
               {safe(item.label)}: {safe(item.value)}
             </Text>
@@ -357,23 +393,39 @@ function FieldLine({
 function TableView({
   screen,
   cursor,
+  windowStart,
+  windowEnd,
+  hiddenBefore,
+  hiddenAfter,
+  colorEnabled,
 }: {
   readonly screen: Extract<ProviderInteractiveScreen, { readonly kind: "table" }>;
   readonly cursor: number;
+  readonly windowStart: number;
+  readonly windowEnd: number;
+  readonly hiddenBefore: number;
+  readonly hiddenAfter: number;
+  readonly colorEnabled: boolean;
 }): React.ReactElement {
   const selected = new Set(screen.selectedRowIds);
+  const muted = colorEnabled ? "gray" : undefined;
   return (
     <Box flexDirection="column">
       <Text>{screen.columns.map((column) => safe(column.label)).join(" · ")}</Text>
-      {screen.rows.map((row, index) => (
-        <Text key={row.id} bold={index === cursor}>
-          {index === cursor ? "> " : "  "}{selected.has(row.id) ? "[x] " : "[ ] "}
-          {screen.columns
-            .map((column) => safe(String(row.cells[column.id] ?? "")))
-            .join(" · ")}
-          {row.disabled ? " · unavailable" : ""}
-        </Text>
-      ))}
+      {hiddenBefore > 0 ? <Text color={muted}>↑ {hiddenBefore} more offers</Text> : null}
+      {screen.rows.slice(windowStart, windowEnd).map((row, visibleIndex) => {
+        const index = windowStart + visibleIndex;
+        return (
+          <Text key={row.id} bold={index === cursor}>
+            {index === cursor ? "> " : "  "}{selected.has(row.id) ? "[x] " : "[ ] "}
+            {screen.columns
+              .map((column) => safe(String(row.cells[column.id] ?? "")))
+              .join(" · ")}
+            {row.disabled ? " · unavailable" : ""}
+          </Text>
+        );
+      })}
+      {hiddenAfter > 0 ? <Text color={muted}>↓ {hiddenAfter} more offers</Text> : null}
       {screen.loading ? <Text>Loading provider results…</Text> : null}
     </Box>
   );

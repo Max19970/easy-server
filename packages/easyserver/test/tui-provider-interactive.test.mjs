@@ -234,3 +234,51 @@ test("generic provider table supports provider-owned selection and review submit
   await tick();
   assert.deepEqual(events.at(-1), { kind: "action", actionId: "submit" });
 });
+
+test("generic provider tables keep focused rows inside a bounded terminal viewport", async () => {
+  const rows = Array.from({ length: 50 }, (_, index) => ({
+    id: `offer-${index + 1}`,
+    cells: { name: `Offer ${index + 1}`, price: index + 1 },
+  }));
+  const view = render(
+    React.createElement(ProviderInteractiveSurface, {
+      colorEnabled: false,
+      height: 12,
+      screen: {
+        kind: "table",
+        id: "many-results",
+        title: "Many offers",
+        columns: [
+          { id: "name", label: "Name" },
+          { id: "price", label: "Price" },
+        ],
+        rows,
+        selection: "single",
+        selectedRowIds: [],
+        actions: [{ id: "continue", label: "Continue", kind: "primary" }],
+      },
+      onEvent() {},
+      onClose() {},
+    }),
+  );
+
+  assert.match(view.lastFrame(), /> \[ \] Offer 1/);
+  assert.match(view.lastFrame(), /↓ 45 more offers/);
+  assert.doesNotMatch(view.lastFrame(), /Offer 50/);
+
+  for (let index = 0; index < 49; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+
+  assert.match(view.lastFrame(), /> \[ \] Offer 50/);
+  assert.match(view.lastFrame(), /↑ 45 more offers/);
+  assert.doesNotMatch(view.lastFrame(), /Offer 1 · 1/);
+
+  view.stdin.write("\u001b[B");
+  await tick();
+  assert.match(view.lastFrame(), /> Continue/);
+  view.stdin.write("\u001b[B");
+  await tick();
+  assert.match(view.lastFrame(), /> Continue/);
+});

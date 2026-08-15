@@ -40,7 +40,7 @@ The main surfaces deliberately use progressive disclosure. Instance, Provider an
 
 ## Narrow terminals and accessibility
 
-EasyServer has both wide and compact layouts. The compact layout is selected below 72 terminal columns and preserves the active destination, canonical selections and focus state across resize.
+EasyServer has both wide and compact layouts. The compact layout is selected below 72 terminal columns and preserves the active destination, canonical selections and focus state across resize. Long provider-backed lists and action menus keep the focused logical item inside the available terminal rows instead of rendering an unbounded list below the screen.
 
 For a linear screen-reader-oriented terminal presentation, set:
 

@@ -268,6 +268,9 @@ test("TuiApp confirms live persisted intent removal and delegates cleanup to the
   assert.match(view.lastFrame(), /Consequence:/);
   assert.match(view.lastFrame(), /Current live Endpoint[\s\S]*127\.0\.0\.1:55123/);
 
+  assert.match(view.lastFrame(), /> Cancel/);
+  view.stdin.write("\u001b[A");
+  await tick();
   view.stdin.write("\r");
   await tick();
   await tick();

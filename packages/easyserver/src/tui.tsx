@@ -83,7 +83,7 @@ import {
   type ProviderInteractiveEvent,
   type ProviderInteractiveScreen,
 } from "@easyai101/easyserver-plugin-sdk";
-import { moveTuiFocus } from "./tui-focus.js";
+import { moveTuiFocus, tuiFocusWindow } from "./tui-focus.js";
 import { escapeTerminalText } from "./terminal-text.js";
 import { EASYSERVER_VERSION } from "./version.js";
 
@@ -318,6 +318,7 @@ export function TuiShell({
   const columns = width ?? windowSize.columns ?? 80;
   const rows = height ?? windowSize.rows ?? 24;
   const narrow = columns < 72;
+  const routeContentRows = Math.max(6, rows - (narrow ? routes.length + 8 : 7));
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const [contentFocused, setContentFocused] = useState(false);
@@ -2157,7 +2158,7 @@ export function TuiShell({
   const muted = colorEnabled ? "gray" : undefined;
 
   return (
-    <Box flexDirection="column" width="100%" height={screenReader ? undefined : rows} paddingX={1}>
+    <Box flexDirection="column" width="100%" paddingX={1}>
       <Box justifyContent="space-between">
         <Text bold color={accent} aria-label={`EasyServer ${EASYSERVER_VERSION}`}>
           EasyServer
@@ -2182,9 +2183,6 @@ export function TuiShell({
       ) : (
       <Box
         flexDirection={narrow ? "column" : "row"}
-        flexGrow={1}
-        minHeight={0}
-        overflowY="hidden"
         marginTop={1}
         gap={narrow ? 1 : 3}
       >
@@ -2233,6 +2231,7 @@ export function TuiShell({
                   diagnostics={diagnostics}
                   canCopyDiagnostics={onCopyDiagnostics !== undefined}
                   narrow={narrow}
+                  height={routeContentRows}
                   selectedInstanceId={selectedInstanceId}
                   showInstanceDetails={instanceDetailsOpen}
                   bulkSelectedInstanceIds={bulkSelectedInstanceIds}
@@ -2278,6 +2277,7 @@ export function TuiShell({
                     actions={contextActions}
                     cursor={Math.min(actionCursor, Math.max(0, contextActions.length - 1))}
                     colorEnabled={colorEnabled}
+                    maxRows={Math.max(4, routeContentRows - 2)}
                   />
                 ) : contentFocused && providerInteractiveScreen === undefined ? (
                   <Box marginTop={1}>
@@ -2340,24 +2340,33 @@ function ContextActionMenu({
   actions,
   cursor,
   colorEnabled,
+  maxRows = 6,
 }: {
   readonly actions: readonly TuiContextAction[];
   readonly cursor: number;
   readonly colorEnabled: boolean;
+  readonly maxRows?: number;
 }): React.ReactElement {
   const accent = colorEnabled ? "cyan" : undefined;
+  const muted = colorEnabled ? "gray" : undefined;
+  const window = tuiFocusWindow(cursor, actions.length, Math.max(1, maxRows - 2));
   return (
     <Box marginTop={1} flexDirection="column">
       <Text bold>Actions</Text>
-      {actions.map((action, index) => (
-        <Text
-          key={action.id}
-          bold={index === cursor}
-          color={index === cursor ? accent : undefined}
-        >
-          {index === cursor ? "> " : "  "}{action.label}
-        </Text>
-      ))}
+      {window.hiddenBefore > 0 ? <Text color={muted}>↑ {window.hiddenBefore} more</Text> : null}
+      {actions.slice(window.start, window.end).map((action, visibleIndex) => {
+        const index = window.start + visibleIndex;
+        return (
+          <Text
+            key={action.id}
+            bold={index === cursor}
+            color={index === cursor ? accent : undefined}
+          >
+            {index === cursor ? "> " : "  "}{action.label}
+          </Text>
+        );
+      })}
+      {window.hiddenAfter > 0 ? <Text color={muted}>↓ {window.hiddenAfter} more</Text> : null}
       <Text>↑/↓ choose · Enter run · Esc close</Text>
     </Box>
   );
@@ -2370,6 +2379,7 @@ interface RouteSurfaceProps {
   readonly diagnostics: TuiDiagnosticsView;
   readonly canCopyDiagnostics: boolean;
   readonly narrow: boolean;
+  readonly height: number;
   readonly selectedInstanceId?: string;
   readonly showInstanceDetails: boolean;
   readonly bulkSelectedInstanceIds: readonly string[];
@@ -2406,6 +2416,7 @@ function RouteSurface({
   diagnostics,
   canCopyDiagnostics,
   narrow,
+  height,
   selectedInstanceId,
   showInstanceDetails,
   bulkSelectedInstanceIds,
@@ -2474,6 +2485,7 @@ function RouteSurface({
           screen={providerInteractiveScreen}
           colorEnabled={false}
           disabled={providerInteractiveDisabled}
+          height={height}
           onEvent={onProviderInteractiveEvent ?? (() => undefined)}
           onClose={onProviderInteractiveClose ?? (() => undefined)}
         />

@@ -838,6 +838,9 @@ test("TuiApp confirms credential removal before deleting the stored value", asyn
   await tick();
   view.stdin.write("\r");
   await tick();
+  assert.match(view.lastFrame(), /> Cancel/);
+  view.stdin.write("\u001b[A");
+  await tick();
   view.stdin.write("\r");
   await tick();
   await tick();
@@ -1289,6 +1292,10 @@ test("TuiApp runs a generic provider workflow through host confirmation and navi
   assert.match(view.lastFrame(), /Confirmation required/);
   assert.match(view.lastFrame(), /billable/);
 
+  assert.match(view.lastFrame(), /> Cancel/);
+
+  view.stdin.write("\u001b[A");
+  await tick();
   view.stdin.write("\r");
   await tick();
   await tick();
@@ -2218,6 +2225,10 @@ test("first-use SSH trust is reviewed and accepted inside the foreground connect
   assert.match(view.lastFrame(), /Fingerprint: SHA256:tui-fixture/);
   assert.match(view.lastFrame(), /Trust this fingerprint/);
 
+  assert.match(view.lastFrame(), /> Decline/);
+
+  view.stdin.write("\u001b[A");
+  await tick();
   view.stdin.write("\r");
   await tick();
   await tick();
