@@ -5,6 +5,7 @@ import { cleanup, render } from "ink-testing-library";
 import { ProviderInteractiveSurface } from "../dist/tui-provider-interactive.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+const frameRows = (view) => view.lastFrame().split("\n").length;
 
 test.afterEach(() => cleanup());
 
@@ -244,6 +245,87 @@ test("generic provider table supports provider-owned selection and review submit
   assert.deepEqual(events.at(-1), { kind: "action", actionId: "submit" });
 });
 
+test("generic provider forms and choice pickers honor the supplied row budget", async () => {
+  const fields = Array.from({ length: 30 }, (_, index) => ({
+    kind: "text",
+    id: `field-${index + 1}`,
+    label: `Field ${index + 1}`,
+    description: `Long provider-owned description for field ${index + 1}`,
+    required: false,
+    value: `value-${index + 1}`,
+  }));
+  const view = render(
+    React.createElement(ProviderInteractiveSurface, {
+      colorEnabled: false,
+      height: 12,
+      screen: {
+        kind: "form",
+        id: "many-fields",
+        title: "Many fields",
+        description: "Provider-owned form description",
+        fields,
+        actions: [{ id: "continue", label: "Continue", kind: "primary" }],
+      },
+      onEvent() {},
+      onClose() {},
+    }),
+  );
+
+  assert.match(view.lastFrame(), /> Field 1/);
+  assert.ok(frameRows(view) <= 12);
+  for (let index = 0; index < 15; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> Field 16/);
+  assert.match(view.lastFrame(), /↑ \d+ more/);
+  assert.match(view.lastFrame(), /↓ \d+ more/);
+  assert.ok(frameRows(view) <= 12);
+
+  view.rerender(
+    React.createElement(ProviderInteractiveSurface, {
+      colorEnabled: false,
+      height: 12,
+      screen: {
+        kind: "form",
+        id: "many-choices",
+        title: "Many choices",
+        fields: [
+          {
+            kind: "single-choice",
+            id: "gpu",
+            label: "GPU",
+            description: "Choose one provider-owned GPU",
+            required: false,
+            choices: Array.from({ length: 30 }, (_, index) => ({
+              id: `gpu-${index + 1}`,
+              label: `GPU ${index + 1}`,
+              description: `GPU ${index + 1} provider description`,
+            })),
+          },
+        ],
+        actions: [],
+      },
+      onEvent() {},
+      onClose() {},
+    }),
+  );
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Choose GPU/);
+  assert.match(view.lastFrame(), /> \[ \] GPU 1/);
+  assert.ok(frameRows(view) <= 12);
+  for (let index = 0; index < 15; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> \[ \] GPU 16/);
+  assert.match(view.lastFrame(), /↑ \d+ more/);
+  assert.match(view.lastFrame(), /↓ \d+ more/);
+  assert.ok(frameRows(view) <= 12);
+});
+
 test("generic provider tables keep focused rows inside a bounded terminal viewport", async () => {
   const rows = Array.from({ length: 50 }, (_, index) => ({
     id: `offer-${index + 1}`,
@@ -272,21 +354,33 @@ test("generic provider tables keep focused rows inside a bounded terminal viewpo
   );
 
   assert.match(view.lastFrame(), /> \[ \] Offer 1/);
-  assert.match(view.lastFrame(), /↓ 45 more offers/);
+  assert.match(view.lastFrame(), /↓ \d+ more offers/);
   assert.doesNotMatch(view.lastFrame(), /Offer 50/);
+  assert.ok(frameRows(view) <= 12, `start frame exceeded height: ${frameRows(view)}`);
 
-  for (let index = 0; index < 49; index += 1) {
+  for (let index = 0; index < 24; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> \[ \] Offer 25/);
+  assert.match(view.lastFrame(), /↑ \d+ more offers/);
+  assert.match(view.lastFrame(), /↓ \d+ more offers/);
+  assert.ok(frameRows(view) <= 12, `middle frame exceeded height: ${frameRows(view)}`);
+
+  for (let index = 24; index < 49; index += 1) {
     view.stdin.write("\u001b[B");
     await tick();
   }
 
   assert.match(view.lastFrame(), /> \[ \] Offer 50/);
-  assert.match(view.lastFrame(), /↑ 45 more offers/);
+  assert.match(view.lastFrame(), /↑ \d+ more offers/);
   assert.doesNotMatch(view.lastFrame(), /Offer 1 · 1/);
+  assert.ok(frameRows(view) <= 12, `end frame exceeded height: ${frameRows(view)}`);
 
   view.stdin.write("\u001b[B");
   await tick();
   assert.match(view.lastFrame(), /> Continue/);
+  assert.ok(frameRows(view) <= 12, `action frame exceeded height: ${frameRows(view)}`);
   view.stdin.write("\u001b[B");
   await tick();
   assert.match(view.lastFrame(), /> Continue/);

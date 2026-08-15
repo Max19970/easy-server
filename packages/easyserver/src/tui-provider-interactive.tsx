@@ -13,7 +13,10 @@ import type {
   ProviderInteractiveFieldValue,
   ProviderInteractiveScreen,
 } from "@easyai101/easyserver-plugin-sdk";
-import { moveTuiFocus, tuiFocusWindow } from "./tui-focus.js";
+import {
+  moveTuiFocus,
+  tuiFocusWindowWithinRows,
+} from "./tui-focus.js";
 import { escapeTerminalText } from "./terminal-text.js";
 
 export interface ProviderInteractiveSurfaceProps {
@@ -56,14 +59,25 @@ export function ProviderInteractiveSurface({
         : 0;
   const actions = screen.actions.filter((action) => !action.disabled);
   const selectableCount = contentCount + actions.length;
-  const fixedRows = 5 + (screen.description === undefined ? 0 : 1) +
+  const activeField =
+    screen.kind === "form" && cursor < screen.fields.length
+      ? screen.fields[cursor]
+      : undefined;
+  const activeFieldDetail = activeField === undefined
+    ? undefined
+    : fieldDetailText(activeField);
+  const fixedRows =
+    2 +
+    (screen.description === undefined ? 0 : 1) +
+    (screen.kind === "table" ? 1 + (screen.loading ? 1 : 0) : 0) +
+    (activeFieldDetail === undefined ? 0 : 1) +
     (actions.length === 0 ? 0 : actions.length + 1);
-  const contentCapacity = Math.max(1, terminalRows - fixedRows);
+  const contentRowBudget = Math.max(1, terminalRows - fixedRows);
   const contentCursor = contentCount === 0 ? 0 : Math.min(cursor, contentCount - 1);
-  const contentWindow = tuiFocusWindow(
+  const contentWindow = tuiFocusWindowWithinRows(
     contentCursor,
     contentCount,
-    contentCapacity,
+    contentRowBudget,
   );
 
   useEffect(() => {
@@ -81,10 +95,6 @@ export function ProviderInteractiveSurface({
     setCursor((current) => Math.min(current, selectableCount - 1));
   }, [selectableCount]);
 
-  const activeField =
-    screen.kind === "form" && cursor < screen.fields.length
-      ? screen.fields[cursor]
-      : undefined;
   const activeAction =
     cursor >= contentCount ? actions[cursor - contentCount] : undefined;
   const activeChoices =
@@ -321,15 +331,15 @@ export function ProviderInteractiveSurface({
   }
 
   return (
-    <Box flexDirection="column">
-      <Text bold color={accent}>{safe(screen.title)}</Text>
+    <Box flexDirection="column" height={terminalRows} overflowY="hidden">
+      <Text bold color={accent} wrap="truncate">{safe(screen.title)}</Text>
       {screen.description === undefined ? null : (
-        <Text color={muted}>{safe(screen.description)}</Text>
+        <Text color={muted} wrap="truncate">{safe(screen.description)}</Text>
       )}
-      <Box marginTop={1} flexDirection="column">
+      <Box flexDirection="column">
         {screen.kind === "form" ? (
           <>
-            {contentWindow.hiddenBefore > 0 ? (
+            {contentWindow.showBefore ? (
               <Text color={muted}>↑ {contentWindow.hiddenBefore} more</Text>
             ) : null}
             {screen.fields
@@ -345,7 +355,7 @@ export function ProviderInteractiveSurface({
                   />
                 );
               })}
-            {contentWindow.hiddenAfter > 0 ? (
+            {contentWindow.showAfter ? (
               <Text color={muted}>↓ {contentWindow.hiddenAfter} more</Text>
             ) : null}
           </>
@@ -355,33 +365,41 @@ export function ProviderInteractiveSurface({
             cursor={cursor}
             windowStart={contentWindow.start}
             windowEnd={contentWindow.end}
-            hiddenBefore={contentWindow.hiddenBefore}
-            hiddenAfter={contentWindow.hiddenAfter}
+            hiddenBefore={contentWindow.showBefore ? contentWindow.hiddenBefore : 0}
+            hiddenAfter={contentWindow.showAfter ? contentWindow.hiddenAfter : 0}
             colorEnabled={colorEnabled}
           />
         ) : (
-          screen.items.slice(0, Math.max(1, contentCapacity)).map((item, index) => (
-            <Text key={`${item.label}:${index}`}>
+          screen.items.slice(0, Math.max(1, contentRowBudget)).map((item, index) => (
+            <Text key={`${item.label}:${index}`} wrap="truncate">
               {safe(item.label)}: {safe(item.value)}
             </Text>
           ))
         )}
       </Box>
+      {activeFieldDetail === undefined ? null : (
+        <Text color={muted} wrap="truncate">{activeFieldDetail}</Text>
+      )}
       {actions.length === 0 ? null : (
-        <Box marginTop={1} flexDirection="column">
+        <Box flexDirection="column">
           <Text bold>Actions</Text>
           {actions.map((action, index) => {
             const focused = cursor === contentCount + index;
             return (
-              <Text key={action.id} bold={focused} color={focused ? accent : undefined}>
+              <Text
+                key={action.id}
+                bold={focused}
+                color={focused ? accent : undefined}
+                wrap="truncate"
+              >
                 {focused ? "> " : "  "}{safe(action.label)}
               </Text>
             );
           })}
         </Box>
       )}
-      <Box marginTop={1}>
-        <Text color={muted} wrap="wrap">
+      <Box>
+        <Text color={muted} wrap="truncate">
           {draft === undefined
             ? "↑/↓ move · Enter select/edit/action · Esc back · Ctrl+C quit"
             : "Enter apply · Backspace edit · Esc cancel input"}
@@ -402,20 +420,25 @@ function FieldLine({
 }): React.ReactElement {
   const value = draft ?? fieldDisplayValue(field);
   return (
-    <Box flexDirection="column">
-      <Text bold={focused}>
-        {focused ? "> " : "  "}{safe(field.label)}{field.required ? " *" : ""}: {safe(value)}
-      </Text>
-      {field.description === undefined ? null : (
-        <Text>    {safe(field.description)}</Text>
-      )}
-      {field.validation?.state === "invalid" ? (
-        <Text>    Invalid{field.validation.message === undefined ? "" : `: ${safe(field.validation.message)}`}</Text>
-      ) : field.validation?.state === "pending" ? (
-        <Text>    Validating…</Text>
-      ) : null}
-    </Box>
+    <Text bold={focused} wrap="truncate">
+      {focused ? "> " : "  "}{safe(field.label)}{field.required ? " *" : ""}: {safe(value)}
+    </Text>
   );
+}
+
+function fieldDetailText(field: ProviderInteractiveField): string | undefined {
+  const parts: string[] = [];
+  if (field.description !== undefined) {
+    parts.push(safe(field.description));
+  }
+  if (field.validation?.state === "invalid") {
+    parts.push(
+      `Invalid${field.validation.message === undefined ? "" : `: ${safe(field.validation.message)}`}`,
+    );
+  } else if (field.validation?.state === "pending") {
+    parts.push("Validating…");
+  }
+  return parts.length === 0 ? undefined : parts.join(" · ");
 }
 
 function ChoicePicker({
@@ -432,7 +455,19 @@ function ChoicePicker({
   readonly colorEnabled: boolean;
 }): React.ReactElement {
   const choices = field.choices.filter((choice) => !choice.disabled);
-  const window = tuiFocusWindow(cursor, choices.length, Math.max(1, height - 6));
+  const focusedChoice =
+    choices.length === 0
+      ? undefined
+      : choices[Math.max(0, Math.min(cursor, choices.length - 1))];
+  const fixedRows =
+    2 +
+    (field.description === undefined ? 0 : 1) +
+    (focusedChoice?.description === undefined ? 0 : 1);
+  const window = tuiFocusWindowWithinRows(
+    cursor,
+    choices.length,
+    Math.max(1, height - fixedRows),
+  );
   const selected = new Set(
     field.kind === "single-choice"
       ? field.value === undefined
@@ -442,16 +477,15 @@ function ChoicePicker({
   );
   const muted = colorEnabled ? "gray" : undefined;
   const accent = colorEnabled ? "cyan" : undefined;
-  const focusedChoice = choices[window.cursor];
 
   return (
-    <Box flexDirection="column">
-      <Text bold color={accent}>Choose {safe(field.label)}</Text>
+    <Box flexDirection="column" height={height} overflowY="hidden">
+      <Text bold color={accent} wrap="truncate">Choose {safe(field.label)}</Text>
       {field.description === undefined ? null : (
-        <Text color={muted}>{safe(field.description)}</Text>
+        <Text color={muted} wrap="truncate">{safe(field.description)}</Text>
       )}
-      <Box marginTop={1} flexDirection="column">
-        {window.hiddenBefore > 0 ? <Text color={muted}>↑ {window.hiddenBefore} more</Text> : null}
+      <Box flexDirection="column">
+        {window.showBefore ? <Text color={muted}>↑ {window.hiddenBefore} more</Text> : null}
         {choices.slice(window.start, window.end).map((choice, visibleIndex) => {
           const index = window.start + visibleIndex;
           const focused = index === window.cursor;
@@ -461,15 +495,13 @@ function ChoicePicker({
             </Text>
           );
         })}
-        {window.hiddenAfter > 0 ? <Text color={muted}>↓ {window.hiddenAfter} more</Text> : null}
+        {window.showAfter ? <Text color={muted}>↓ {window.hiddenAfter} more</Text> : null}
       </Box>
       {focusedChoice?.description === undefined ? null : (
-        <Box marginTop={1}>
-          <Text>{safe(focusedChoice.description)}</Text>
-        </Box>
+        <Text wrap="truncate">{safe(focusedChoice.description)}</Text>
       )}
-      <Box marginTop={1}>
-        <Text color={muted} wrap="wrap">
+      <Box>
+        <Text color={muted} wrap="truncate">
           {field.kind === "single-choice"
             ? "↑/↓ move · Enter choose · Esc back"
             : "↑/↓ move · Enter toggle · Esc done"}

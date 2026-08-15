@@ -508,6 +508,49 @@ test("Providers adds a discoverable installed plugin by human display identity",
   assert.doesNotMatch(view.lastFrame(), /Add an installed provider/);
 });
 
+test("installed provider picker keeps focus visible inside a narrow bounded viewport", async () => {
+  const candidates = Array.from({ length: 30 }, (_, index) => ({
+    source: `@fixture/provider-${index + 1}`,
+    displayName: `Provider ${String(index + 1).padStart(2, "0")}`,
+    description: `Provider ${index + 1} description`,
+  }));
+  const view = render(
+    shell({
+      width: 60,
+      height: 16,
+      readSnapshot: readSnapshot({
+        providerCandidates: { status: "ready", items: candidates },
+      }),
+      readStatus: "ready",
+      onProviderMutation() {},
+    }),
+  );
+
+  await openProvidersRoute(view);
+  await chooseVisibleAction(view, "Add installed provider");
+  assert.match(view.lastFrame(), /> Provider 01/);
+  assert.match(view.lastFrame(), /↓ \d+ more/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+
+  for (let index = 0; index < 15; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> Provider 16/);
+  assert.match(view.lastFrame(), /↑ \d+ more/);
+  assert.match(view.lastFrame(), /↓ \d+ more/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+
+  for (let index = 15; index < 29; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> Provider 30/);
+  assert.match(view.lastFrame(), /↑ \d+ more/);
+  assert.doesNotMatch(view.lastFrame(), /↓ \d+ more/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+});
+
 test("Providers keeps literal module or path registration behind Advanced", async () => {
   const mutations = [];
   const view = render(

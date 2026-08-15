@@ -84,7 +84,11 @@ import {
   type ProviderInteractiveEvent,
   type ProviderInteractiveScreen,
 } from "@easyai101/easyserver-plugin-sdk";
-import { moveTuiFocus, tuiFocusWindow } from "./tui-focus.js";
+import {
+  moveTuiFocus,
+  tuiFocusWindow,
+  tuiFocusWindowWithinRows,
+} from "./tui-focus.js";
 import { escapeTerminalText } from "./terminal-text.js";
 import { EASYSERVER_VERSION } from "./version.js";
 
@@ -378,7 +382,7 @@ export function TuiShell({
   const columns = width ?? windowSize.columns ?? 80;
   const rows = height ?? windowSize.rows ?? 24;
   const narrow = columns < 72;
-  const routeContentRows = Math.max(6, rows - 7);
+  const routeContentRows = Math.max(4, rows - 9);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [settingsCursor, setSettingsCursor] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -2325,7 +2329,11 @@ export function TuiShell({
                 colorEnabled={colorEnabled}
                 maxRows={Math.max(4, routeContentRows - 2)}
               />
-            ) : contentFocused && providerInteractiveScreen === undefined ? (
+            ) : contentFocused &&
+              providerInteractiveScreen === undefined &&
+              providerCandidatePickerView === undefined &&
+              providerSourceInput === undefined &&
+              providerCredentialFlowView === undefined ? (
               <Box marginTop={1}>
                 <Text color={muted}>Enter actions · Esc back</Text>
               </Box>
@@ -2608,6 +2616,7 @@ function RouteSurface({
   return (
     <ProvidersSurface
       snapshot={snapshot}
+      height={height}
       candidatePicker={providerCandidatePicker}
       sourceInput={providerSourceInput}
       credentialFlow={providerCredentialFlow}
@@ -3286,6 +3295,7 @@ function NewInstanceSurface({
 
 function ProvidersSurface({
   snapshot,
+  height,
   candidatePicker,
   sourceInput,
   credentialFlow,
@@ -3294,6 +3304,7 @@ function ProvidersSurface({
   canRegister,
 }: {
   readonly snapshot: TuiReadSnapshot;
+  readonly height: number;
   readonly candidatePicker?: ProviderCandidatePickerView;
   readonly sourceInput?: string;
   readonly credentialFlow?: ProviderCredentialFlowView;
@@ -3302,26 +3313,36 @@ function ProvidersSurface({
   readonly canRegister: boolean;
 }): React.ReactElement {
   if (candidatePicker !== undefined) {
+    const focusedCandidate = candidatePicker.items[candidatePicker.cursor];
+    const fixedRows = 2 + (focusedCandidate?.description === undefined ? 0 : 1);
+    const window = tuiFocusWindowWithinRows(
+      candidatePicker.cursor,
+      candidatePicker.items.length,
+      Math.max(1, height - fixedRows),
+    );
     return (
-      <Box flexDirection="column">
-        <Text bold>Add an installed provider</Text>
+      <Box flexDirection="column" height={height} overflowY="hidden">
+        <Text bold wrap="truncate">Add an installed provider</Text>
         {candidatePicker.items.length === 0 ? (
-          <Text>No discoverable installed Provider Plugins are available.</Text>
+          <Text wrap="truncate">No discoverable installed Provider Plugins are available.</Text>
         ) : (
-          candidatePicker.items.map((candidate, index) => (
-            <Box key={candidate.source} flexDirection="column" marginTop={index === 0 ? 1 : 0}>
-              <Text bold={index === candidatePicker.cursor}>
-                {index === candidatePicker.cursor ? "> " : "  "}{candidate.displayName}
-              </Text>
-              {index !== candidatePicker.cursor || candidate.description === undefined ? null : (
-                <Text>    {candidate.description}</Text>
-              )}
-            </Box>
-          ))
+          <>
+            {window.showBefore ? <Text>↑ {window.hiddenBefore} more</Text> : null}
+            {candidatePicker.items.slice(window.start, window.end).map((candidate, visibleIndex) => {
+              const index = window.start + visibleIndex;
+              return (
+                <Text key={candidate.source} bold={index === candidatePicker.cursor} wrap="truncate">
+                  {index === candidatePicker.cursor ? "> " : "  "}{candidate.displayName}
+                </Text>
+              );
+            })}
+            {window.showAfter ? <Text>↓ {window.hiddenAfter} more</Text> : null}
+          </>
         )}
-        <Box marginTop={1}>
-          <Text>↑/↓ choose · Enter add · Esc back</Text>
-        </Box>
+        {focusedCandidate?.description === undefined ? null : (
+          <Text wrap="truncate">{focusedCandidate.description}</Text>
+        )}
+        <Text wrap="truncate">↑/↓ choose · Enter add · Esc back</Text>
       </Box>
     );
   }
