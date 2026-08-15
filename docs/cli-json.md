@@ -43,7 +43,7 @@ The outer envelope is uniform; `data` remains command-specific so EasyServer doe
 Common core shapes include:
 
 - `plugins list` → `data.plugins`;
-- `instances list` → `data.inventory`, including per-provider completeness/failure state;
+- `instances list` → `data.inventory`, including per-provider completeness/failure state. Each `data.inventory.instances[]` entry exposes stable recovery identity fields: canonical `id`, `providerId`, `providerExternalId`, `management`, and `freshness`; `name` is present when the provider supplied a normalized display name. Fresh entries additionally expose their current normalized `state`, `observedAt`, and `availableActions`. Stale entries preserve only last-known normalized observation data and have no available actions; unobserved entries carry identity/management only. Automation that uses a provider-side ownership marker must require an exactly-one **fresh** `providerId` + `name` match. A stale/unobserved match or `data.inventory.complete: false` is not authoritative evidence that a resource is absent;
 - `instances inspect` → `data.instance`;
 - single lifecycle mutations → `data.action`, `data.instanceId`, `data.status` and any host warnings;
 - bulk lifecycle mutations → `data.result` plus any host warnings, preserving every per-target result and summary;

@@ -1266,7 +1266,16 @@ test("global JSON mode exposes stable core plugin, inventory, lifecycle and erro
   assert.equal(inventory.ok, true);
   assert.equal(inventory.data.inventory.complete, true);
   assert.equal(inventory.data.inventory.instances.length, 1);
-  const instanceId = inventory.data.inventory.instances[0].id;
+  const listedInstance = inventory.data.inventory.instances[0];
+  assert.equal(listedInstance.providerId, "inventory");
+  assert.equal(listedInstance.providerExternalId, "remote-1");
+  assert.equal(listedInstance.name, "Fixture GPU");
+  assert.equal(listedInstance.management, "discovered");
+  assert.equal(listedInstance.freshness, "fresh");
+  assert.equal(listedInstance.state, "running");
+  assert.deepEqual(listedInstance.availableActions, ["instance.stop"]);
+  assert.match(listedInstance.observedAt, /^\d{4}-\d{2}-\d{2}T/);
+  const instanceId = listedInstance.id;
 
   const inspected = JSON.parse(
     runWithState(stateFile, "--json", "instances", "inspect", instanceId).stdout,
@@ -1873,9 +1882,26 @@ test("instances list returns useful partial inventory with explicit degraded sta
   const envelope = JSON.parse(jsonResult.stdout);
   assert.equal(envelope.ok, true);
   assert.equal(envelope.data.inventory.complete, false);
+  const fresh = envelope.data.inventory.instances.find(
+    (instance) => instance.providerId === "partial-healthy",
+  );
+  assert.equal(fresh.providerExternalId, "healthy-remote");
+  assert.equal(fresh.name, "Healthy GPU");
+  assert.equal(fresh.management, "discovered");
+  assert.equal(fresh.freshness, "fresh");
+  const stale = envelope.data.inventory.instances.find(
+    (instance) => instance.providerId === "partial-failing",
+  );
+  assert.equal(stale.id, staleId);
+  assert.equal(stale.providerExternalId, "stale-remote");
+  assert.equal(stale.name, "Last known GPU");
+  assert.equal(stale.management, "discovered");
+  assert.equal(stale.freshness, "stale");
+  assert.deepEqual(stale.availableActions, []);
   assert.equal(
     envelope.data.inventory.providers.some(
-      (provider) => provider.providerId === "partial-failing" && provider.status === "failed",
+      (provider) =>
+        provider.providerId === "partial-failing" && provider.status === "failed",
     ),
     true,
   );
