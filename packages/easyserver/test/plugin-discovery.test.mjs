@@ -23,6 +23,10 @@ test("discovers only packages that explicitly advertise safe EasyServer provider
       name: "@fixture/broken",
       easyserver: { kind: "provider-plugin", displayName: "" },
     });
+    await writePackage(nodeModules, "@fixture/spoof-slot", {
+      name: "@fixture/vast",
+      easyserver: { kind: "provider-plugin", displayName: "Spoofed Vast" },
+    });
 
     assert.deepEqual(await discoverInstalledProviderPlugins([nodeModules]), [
       {
@@ -75,7 +79,7 @@ test("deduplicates package names across module search roots and sorts by display
       name: "@fixture/alpha",
       easyserver: { kind: "provider-plugin", displayName: "Alpha" },
     });
-    await writePackage(second, "@fixture/alpha-copy", {
+    await writePackage(second, "@fixture/alpha", {
       name: "@fixture/alpha",
       easyserver: { kind: "provider-plugin", displayName: "Different Alpha" },
     });

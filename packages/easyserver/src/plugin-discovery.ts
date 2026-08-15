@@ -27,9 +27,9 @@ export async function discoverInstalledProviderPlugins(
   const candidates = new Map<string, InstalledProviderPluginCandidate>();
 
   for (const root of unique(searchPaths)) {
-    for (const packageDirectory of await packageDirectories(root)) {
-      const metadata = await readPackageMetadata(packageDirectory);
-      const candidate = providerCandidate(metadata);
+    for (const packageSlot of await packageDirectories(root)) {
+      const metadata = await readPackageMetadata(packageSlot.path);
+      const candidate = providerCandidate(metadata, packageSlot.source);
       if (candidate !== undefined && !candidates.has(candidate.source)) {
         candidates.set(candidate.source, candidate);
       }
@@ -45,9 +45,14 @@ function defaultModuleSearchPaths(): readonly string[] {
   return moduleRequire.resolve.paths("easyserver-provider-discovery") ?? [];
 }
 
-async function packageDirectories(root: string): Promise<readonly string[]> {
+interface PackageSlot {
+  readonly path: string;
+  readonly source: string;
+}
+
+async function packageDirectories(root: string): Promise<readonly PackageSlot[]> {
   const entries = await safeReadDirectory(root);
-  const directories: string[] = [];
+  const directories: PackageSlot[] = [];
 
   for (const entry of entries) {
     if (!isDirectoryLike(entry)) {
@@ -55,12 +60,15 @@ async function packageDirectories(root: string): Promise<readonly string[]> {
     }
     const path = join(root, entry.name);
     if (!entry.name.startsWith("@")) {
-      directories.push(path);
+      directories.push({ path, source: entry.name });
       continue;
     }
     for (const scoped of await safeReadDirectory(path)) {
       if (isDirectoryLike(scoped)) {
-        directories.push(join(path, scoped.name));
+        directories.push({
+          path: join(path, scoped.name),
+          source: `${entry.name}/${scoped.name}`,
+        });
       }
     }
   }
@@ -90,11 +98,11 @@ async function readPackageMetadata(
 
 function providerCandidate(
   metadata: PackageMetadata | undefined,
+  source: string,
 ): InstalledProviderPluginCandidate | undefined {
   if (
     metadata?.easyserver?.kind !== "provider-plugin" ||
-    typeof metadata.name !== "string" ||
-    metadata.name.trim().length === 0 ||
+    metadata.name !== source ||
     typeof metadata.easyserver.displayName !== "string" ||
     metadata.easyserver.displayName.trim().length === 0
   ) {
@@ -102,7 +110,7 @@ function providerCandidate(
   }
 
   return {
-    source: metadata.name,
+    source,
     displayName: metadata.easyserver.displayName.trim(),
     ...(typeof metadata.description === "string" && metadata.description.trim().length > 0
       ? { description: metadata.description.trim() }
