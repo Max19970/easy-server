@@ -79,6 +79,7 @@ export async function createHostRuntime(
   const providerFeatureHost =
     options.providerFeatureHost ?? new ProviderFeatureHost();
   const sshAdapter = options.sshAdapter ?? new OpenSshAccessAdapter();
+  await sshAdapter.initializeCredentialRecovery();
   const accessAdapters = new AccessAdapterRegistry([sshAdapter]);
   const pluginHost = new PluginHost(
     providerRegistry,

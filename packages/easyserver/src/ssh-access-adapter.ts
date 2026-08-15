@@ -1,8 +1,8 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, open, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, open, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { Duplex } from "node:stream";
@@ -24,6 +24,7 @@ import {
   FilesystemLockCancelledError,
   FilesystemLockTimeoutError,
 } from "./filesystem-lock.js";
+import { SshCredentialMaterialManager } from "./ssh-credential-material.js";
 
 interface CommandSpec {
   readonly executable: string;
@@ -71,6 +72,7 @@ export class OpenSshAccessAdapter implements AccessAdapter {
   readonly #sshCommand: CommandSpec;
   readonly #keyscanCommands: readonly CommandSpec[];
   readonly #icaclsCommand: CommandSpec;
+  readonly #credentialMaterial: SshCredentialMaterialManager;
 
   constructor(options: OpenSshAccessAdapterOptions = {}) {
     this.#knownHostsPath =
@@ -88,6 +90,15 @@ export class OpenSshAccessAdapter implements AccessAdapter {
               : [options.keyscanFallbackCommand]),
           ];
     this.#icaclsCommand = options.icaclsCommand ?? { executable: "icacls.exe" };
+    this.#credentialMaterial = new SshCredentialMaterialManager({
+      root: join(dirname(this.#knownHostsPath), "sessions"),
+      secureDirectory: (path, signal) =>
+        securePrivateDirectory(path, this.#icaclsCommand, signal),
+    });
+  }
+
+  initializeCredentialRecovery(): Promise<void> {
+    return this.#credentialMaterial.initialize();
   }
 
   async openTcpForward(
@@ -99,19 +110,29 @@ export class OpenSshAccessAdapter implements AccessAdapter {
     assertSshMethod(method);
     await this.#assertHostTrusted(method, context.signal);
 
+    const needsCredentialMaterial =
+      method.ssh.privateKeySecretRef !== undefined ||
+      method.ssh.passwordCredentialId !== undefined;
+    const credentialMaterial = needsCredentialMaterial
+      ? await this.#credentialMaterial.create(context.signal)
+      : undefined;
+    if (credentialMaterial !== undefined) {
+      context.registerCleanup(() => credentialMaterial.cleanup());
+    }
+
     const identityFile =
       method.ssh.privateKeySecretRef === undefined
         ? undefined
         : await this.#materializePrivateKey(
             await context.resolveSecret(method.ssh.privateKeySecretRef),
-            context,
+            credentialMaterial!.directory,
           );
     const passwordAuth =
       method.ssh.passwordCredentialId === undefined
         ? undefined
         : await this.#materializePassword(
             await context.resolveCredential(method.ssh.passwordCredentialId),
-            context,
+            credentialMaterial!.directory,
           );
 
     return new OpenSshTransportSession(
@@ -205,17 +226,8 @@ export class OpenSshAccessAdapter implements AccessAdapter {
 
   async #materializePrivateKey(
     secret: string,
-    context: AccessSetupContext,
+    directory: string,
   ): Promise<string> {
-    const directory = join(
-      dirname(this.#knownHostsPath),
-      "sessions",
-      randomUUID(),
-    );
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    context.registerCleanup(() => rm(directory, { recursive: true, force: true }));
-    await securePrivateDirectory(directory, this.#icaclsCommand, context.signal);
-
     const path = join(directory, "identity");
     const file = await open(path, "wx", 0o600);
     try {
@@ -232,17 +244,8 @@ export class OpenSshAccessAdapter implements AccessAdapter {
 
   async #materializePassword(
     secret: string,
-    context: AccessSetupContext,
+    directory: string,
   ): Promise<PasswordAuth> {
-    const directory = join(
-      dirname(this.#knownHostsPath),
-      "sessions",
-      randomUUID(),
-    );
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    context.registerCleanup(() => rm(directory, { recursive: true, force: true }));
-    await securePrivateDirectory(directory, this.#icaclsCommand, context.signal);
-
     const passwordFile = join(directory, "password");
     const password = await open(passwordFile, "wx", 0o600);
     try {
@@ -694,7 +697,7 @@ function defaultOpenSshCommand(windowsName: string, fallback: string): CommandSp
 async function securePrivateDirectory(
   path: string,
   icacls: CommandSpec,
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (process.platform !== "win32") {
     await chmod(path, 0o700);

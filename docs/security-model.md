@@ -68,11 +68,15 @@ Intelion's provider-deferred SSH password is fetched only after host trust succe
 
 OpenSSH requires some credentials in forms it can consume. EasyServer therefore materializes private-key or password-helper data in a random per-setup directory below `.easyserver/sessions` when necessary.
 
-On Windows, EasyServer removes inherited ACLs from that temporary directory and grants full access to the current user through `icacls`. Secret contents are never placed in the OpenSSH argument list: a private key argument contains only the temporary file path, and password authentication uses an askpass helper whose environment contains only the path to the protected password file.
+On Windows, EasyServer removes inherited ACLs from the temporary-material root and each credential directory, then grants full access only to the current user through `icacls`. ACL hardening completes before any private key or password is written. Secret contents are never placed in the OpenSSH argument list: a private key argument contains only the temporary file path, and password authentication uses an askpass helper whose environment contains only the path to the protected password file.
 
-The setup cleanup scope recursively removes this directory on normal teardown, including failure paths. Focused tests verify that password/private-key files are gone after cleanup.
+Private-key and password-helper files for one access setup share one random credential directory. The ACL-protected `sessions` root keeps a non-secret sibling ownership record for that directory with the creating process PID and an OS-stable process-creation identity. Keeping deletion authority outside the recursively removed credential directory means a crash partway through cleanup cannot strand remaining secret files without an owner record. On the qualified Windows path, EasyServer obtains that identity from the operating system rather than treating elapsed time or a heartbeat timeout as proof that a process died.
 
-A hard process or machine crash can bypass in-process cleanup and leave user-private temporary credential material on disk. This does not cross the qualified Windows OS-user trust boundary when its ACL remains intact, but it extends at-rest lifetime beyond the intended session scope. Crash-safe multi-process cleanup is tracked separately as [#42](https://github.com/Max19970/easy-server/issues/42).
+The setup cleanup scope marks the directory abandoned in that external metadata **before** recursive deletion starts, then removes the credential directory and only afterward removes the ownership metadata. If deletion cannot complete after bounded filesystem retries or the process dies mid-delete, the external deletion authority remains for a later safe scavenger.
+
+Host-runtime initialization and later SSH credential setup scavenge only directories whose ownership is provable. A directory is removable when it was explicitly abandoned, when its recorded process no longer exists, or when its PID now belongs to a process with a different creation identity. A live matching process is never reclaimed merely because it is slow, suspended or has stopped servicing timers. If process identity cannot be verified, cleanup fails closed by leaving the directory intact.
+
+Legacy directories created by older builds have no trustworthy ownership record and are deliberately **not** auto-purged: deleting them could race a still-live older EasyServer process. If such a pre-0.2.0 crash residue exists, remove it only while all older EasyServer processes are stopped. New 0.2.0 credential material uses the verifiable ownership format and is automatically recoverable after a process crash on the qualified Windows path.
 
 ## SSH host trust
 
@@ -149,7 +153,7 @@ The following are explicit limitations rather than hidden security claims:
 - same-OS-user hostile-process isolation is not provided;
 - local Endpoints are unauthenticated loopback TCP listeners;
 - EasyServer is not an application-layer TLS/authentication proxy for the tunneled workload;
-- abrupt termination can leave ACL-protected temporary SSH credential material until separately cleaned;
+- pre-0.2.0 lease-less temporary SSH credential directories are not automatically purged because their live ownership cannot be proven safely;
 - only Windows 11 x64 has the complete `0.2.0` platform/security integration qualification.
 
 ## Release security verification

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -22,6 +23,9 @@ const fakeSshExit = fileURLToPath(
 );
 const noopCommand = fileURLToPath(
   new URL("./fixtures/noop-command.mjs", import.meta.url),
+);
+const sshCredentialOwner = fileURLToPath(
+  new URL("./fixtures/ssh-credential-owner.mjs", import.meta.url),
 );
 const context = { signal: new AbortController().signal };
 
@@ -117,7 +121,7 @@ function setupContext({
 }
 
 async function waitForFile(path) {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
       return await readFile(path, "utf8");
     } catch (error) {
@@ -128,6 +132,53 @@ async function waitForFile(path) {
     }
   }
   throw new Error(`Timed out waiting for ${path}`);
+}
+
+async function waitForJsonFile(path) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      return JSON.parse(await readFile(path, "utf8"));
+    } catch (error) {
+      if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw new Error(`Timed out waiting for valid JSON in ${path}`);
+}
+
+async function directoryEntriesOrEmpty(path) {
+  try {
+    return await readdir(path);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+function spawnCredentialOwner(directory, keySpecPath, readyPath, mode) {
+  return spawn(
+    process.execPath,
+    [sshCredentialOwner, directory, keySpecPath, readyPath, mode],
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    },
+  );
+}
+
+async function childResult(child) {
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const [code, signal] = await once(child, "exit");
+  return { code, signal, stdout, stderr };
 }
 
 async function captureTrustError(run) {
@@ -594,5 +645,199 @@ test("private SSH identity is resolved only after trust and cleaned with setup s
     await transport.close();
     await setup.cleanup();
     await assert.rejects(readFile(identityPath, "utf8"), (error) => error?.code === "ENOENT");
+  });
+});
+
+test("crash-owned SSH credential material is scavenged after the exact owner process exits", async () => {
+  if (process.platform !== "win32" && process.platform !== "linux") {
+    return;
+  }
+  await withTempDirectory(async (directory) => {
+    const keySpecPath = join(directory, "host-key.json");
+    const readyPath = join(directory, "owner-ready.json");
+    const hostKey = key("crash-owner-host-key");
+    await writeFile(keySpecPath, JSON.stringify(hostKey), "utf8");
+    await writeFile(
+      join(directory, "known_hosts"),
+      `[ssh.example.test]:2222 ${hostKey.keyType} ${hostKey.key}\n`,
+      "utf8",
+    );
+
+    const child = spawnCredentialOwner(directory, keySpecPath, readyPath, "exit");
+    const result = await childResult(child);
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    const ready = await waitForJsonFile(readyPath);
+    assert.equal(ready.sessions.length, 1);
+    const credentialDirectory = join(directory, "sessions", ready.sessions[0]);
+    assert.match(
+      await readFile(join(credentialDirectory, "identity"), "utf8"),
+      /crash-fixture-private-material/,
+    );
+
+    const recovery = adapter(
+      directory,
+      keySpecPath,
+      join(directory, "recovery-ssh-args.json"),
+    );
+    await recovery.initializeCredentialRecovery();
+    assert.deepEqual(await directoryEntriesOrEmpty(join(directory, "sessions")), []);
+  });
+});
+
+test("credential scavenging never deletes material owned by another live process", async () => {
+  if (process.platform !== "win32" && process.platform !== "linux") {
+    return;
+  }
+  await withTempDirectory(async (directory) => {
+    const keySpecPath = join(directory, "host-key.json");
+    const readyPath = join(directory, "live-owner-ready.json");
+    const hostKey = key("live-owner-host-key");
+    await writeFile(keySpecPath, JSON.stringify(hostKey), "utf8");
+    await writeFile(
+      join(directory, "known_hosts"),
+      `[ssh.example.test]:2222 ${hostKey.keyType} ${hostKey.key}\n`,
+      "utf8",
+    );
+
+    const child = spawnCredentialOwner(directory, keySpecPath, readyPath, "hold");
+    try {
+      const ready = await waitForJsonFile(readyPath);
+      assert.equal(ready.sessions.length, 1);
+      const credentialDirectory = join(directory, "sessions", ready.sessions[0]);
+      const recovery = adapter(
+        directory,
+        keySpecPath,
+        join(directory, "live-recovery-ssh-args.json"),
+      );
+      await recovery.initializeCredentialRecovery();
+      assert.match(
+        await readFile(join(credentialDirectory, "identity"), "utf8"),
+        /crash-fixture-private-material/,
+      );
+    } finally {
+      const exited = once(child, "exit");
+      child.kill();
+      await exited;
+    }
+
+    const afterExit = adapter(
+      directory,
+      keySpecPath,
+      join(directory, "after-exit-ssh-args.json"),
+    );
+    await afterExit.initializeCredentialRecovery();
+    assert.deepEqual(await directoryEntriesOrEmpty(join(directory, "sessions")), []);
+  });
+});
+
+test("interrupted recursive cleanup keeps external deletion authority until remaining secrets are gone", async () => {
+  if (process.platform !== "win32" && process.platform !== "linux") {
+    return;
+  }
+  await withTempDirectory(async (directory) => {
+    const keySpecPath = join(directory, "host-key.json");
+    const readyPath = join(directory, "partial-cleanup-ready.json");
+    const hostKey = key("partial-cleanup-host-key");
+    await writeFile(keySpecPath, JSON.stringify(hostKey), "utf8");
+    await writeFile(
+      join(directory, "known_hosts"),
+      `[ssh.example.test]:2222 ${hostKey.keyType} ${hostKey.key}\n`,
+      "utf8",
+    );
+
+    const child = spawnCredentialOwner(directory, keySpecPath, readyPath, "hold");
+    let credentialId;
+    try {
+      const ready = await waitForJsonFile(readyPath);
+      assert.equal(ready.sessions.length, 1);
+      credentialId = ready.sessions[0];
+      const sessionsRoot = join(directory, "sessions");
+      const credentialDirectory = join(sessionsRoot, credentialId);
+      const ownerPath = join(sessionsRoot, `${credentialId}.owner.json`);
+      assert.match(await readFile(ownerPath, "utf8"), /"processIdentity"/);
+      assert.match(
+        await readFile(join(credentialDirectory, "identity"), "utf8"),
+        /crash-fixture-private-material/,
+      );
+      await rm(join(credentialDirectory, "password"), { force: true });
+      await rm(join(credentialDirectory, "askpass.cjs"), { force: true });
+      assert.match(await readFile(ownerPath, "utf8"), /"processIdentity"/);
+    } finally {
+      const exited = once(child, "exit");
+      child.kill();
+      await exited;
+    }
+
+    const recovery = adapter(
+      directory,
+      keySpecPath,
+      join(directory, "partial-recovery-ssh-args.json"),
+    );
+    await recovery.initializeCredentialRecovery();
+    assert.deepEqual(await directoryEntriesOrEmpty(join(directory, "sessions")), []);
+  });
+});
+
+test("legacy ownerless SSH credential directories are never auto-purged", async () => {
+  await withTempDirectory(async (directory) => {
+    const keySpecPath = join(directory, "host-key.json");
+    const sessionsRoot = join(directory, "sessions");
+    const legacyDirectory = join(sessionsRoot, "legacy-pre-0.2.0");
+    await mkdir(legacyDirectory, { recursive: true });
+    await writeFile(join(legacyDirectory, "identity"), "legacy-material", "utf8");
+    await writeFile(keySpecPath, JSON.stringify(key("legacy-owner-host-key")), "utf8");
+
+    const recovery = adapter(
+      directory,
+      keySpecPath,
+      join(directory, "legacy-recovery-ssh-args.json"),
+    );
+    await recovery.initializeCredentialRecovery();
+    assert.equal(
+      await readFile(join(legacyDirectory, "identity"), "utf8"),
+      "legacy-material",
+    );
+  });
+});
+
+test("Windows ACL hardening fails before temporary SSH secret material is written", async () => {
+  if (process.platform !== "win32") {
+    return;
+  }
+  await withTempDirectory(async (directory) => {
+    const keySpecPath = join(directory, "host-key.json");
+    const hostKey = key("acl-failure-host-key");
+    await writeFile(keySpecPath, JSON.stringify(hostKey), "utf8");
+    await writeFile(
+      join(directory, "known_hosts"),
+      `[ssh.example.test]:2222 ${hostKey.keyType} ${hostKey.key}\n`,
+      "utf8",
+    );
+    const access = new OpenSshAccessAdapter({
+      knownHostsPath: join(directory, "known_hosts"),
+      keyscanCommand: {
+        executable: process.execPath,
+        prefixArgs: [fakeKeyscan, keySpecPath],
+      },
+      icaclsCommand: {
+        executable: process.execPath,
+        prefixArgs: ["-e", "process.exit(7)"],
+      },
+    });
+    const setup = setupContext({
+      async resolveSecret() {
+        return "fixture-secret-that-must-not-be-written";
+      },
+    });
+
+    await assert.rejects(() =>
+      access.openTcpForward(
+        sshMethod("secret:550e8400-e29b-41d4-a716-446655440000"),
+        "remote-1",
+        { host: "127.0.0.1", port: 8000 },
+        setup.context,
+      ),
+    );
+    assert.deepEqual(await directoryEntriesOrEmpty(join(directory, "sessions")), []);
   });
 });
