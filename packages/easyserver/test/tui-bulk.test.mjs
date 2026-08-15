@@ -44,17 +44,32 @@ function snapshot(action) {
   };
 }
 
+async function chooseVisibleAction(view, label, { open = true } = {}) {
+  if (open) {
+    view.stdin.write("\r");
+    await tick();
+  }
+  for (let index = 0; index < 20; index += 1) {
+    if (view.lastFrame()?.includes(`> ${label}`)) {
+      view.stdin.write("\r");
+      await tick();
+      return;
+    }
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.fail(`Visible action not found: ${label}\n${view.lastFrame()}`);
+}
+
 async function openInstancesAndMarkBoth(view) {
-  view.stdin.write("\t");
+  view.stdin.write("\u001b[B");
   await tick();
   view.stdin.write("\r");
   await tick();
-  view.stdin.write(" ");
+  await chooseVisibleAction(view, "Add to bulk selection");
+  view.stdin.write("\u001b[B");
   await tick();
-  view.stdin.write("j");
-  await tick();
-  view.stdin.write(" ");
-  await tick();
+  await chooseVisibleAction(view, "Add to bulk selection");
 }
 
 test("TuiApp bulk destroy reviews exact targets and preserves mixed outcomes", async () => {
@@ -114,8 +129,7 @@ test("TuiApp bulk destroy reviews exact targets and preserves mixed outcomes", a
   await tick();
   await tick();
   await openInstancesAndMarkBoth(view);
-  view.stdin.write("1");
-  await tick();
+  await chooseVisibleAction(view, "destroy 2 selected instances");
 
   assert.equal(runnerCalls, 1);
   assert.match(view.lastFrame(), /Confirmation required/);
@@ -124,6 +138,9 @@ test("TuiApp bulk destroy reviews exact targets and preserves mixed outcomes", a
   assert.match(view.lastFrame(), /provider=beta · management=managed/);
   assert.match(view.lastFrame(), /Risk: destructive/);
 
+  assert.match(view.lastFrame(), /> Cancel/);
+  view.stdin.write("\u001b[A");
+  await tick();
   view.stdin.write("\r");
   await tick();
   await tick();
@@ -211,15 +228,18 @@ test("TuiApp bulk cancellation keeps cancelled and outcome-unknown targets disti
   await tick();
   await tick();
   await openInstancesAndMarkBoth(view);
-  view.stdin.write("1");
-  await tick();
+  await chooseVisibleAction(view, "destroy 2 selected instances");
   assert.match(view.lastFrame(), /Confirmation required/);
+  assert.match(view.lastFrame(), /> Cancel/);
+  view.stdin.write("\u001b[A");
+  await tick();
   view.stdin.write("\r");
   await tick();
   assert.match(view.lastFrame(), /dispatching/);
   assert.match(view.lastFrame(), /Cancel/);
 
-  view.stdin.write("c");
+  assert.match(view.lastFrame(), /> Cancel/);
+  view.stdin.write("\r");
   await tick();
   assert.equal(aborted, true);
   await tick();

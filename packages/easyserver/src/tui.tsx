@@ -99,9 +99,10 @@ type TuiDiagnosticsView =
 type TuiRouteId =
   | "overview"
   | "instances"
+  | "sessions"
+  | "settings"
   | "providers"
   | "new-instance"
-  | "sessions"
   | "diagnostics";
 
 interface TuiRoute {
@@ -124,41 +125,88 @@ type TuiConnectionTarget =
 const routes: readonly TuiRoute[] = [
   {
     id: "overview",
-    label: "Overview",
-    description: "EasyServer at a glance",
-    body: "Choose a section to inspect or manage your EasyServer environment.",
+    label: "Home",
+    description: "Start with what you want to do",
+    body: "Choose a task. EasyServer keeps provider and control-plane details out of the way until you need them.",
   },
   {
     id: "instances",
-    label: "Instances",
-    description: "Compute inventory and lifecycle",
-    body: "Instance inventory and lifecycle workflows will appear on this surface.",
-  },
-  {
-    id: "providers",
-    label: "Providers",
-    description: "Plugins, setup and acquisition",
-    body: "Provider readiness, credentials and provider-owned flows will appear here.",
-  },
-  {
-    id: "new-instance",
-    label: "New instance",
-    description: "Provider-owned acquisition workflows",
-    body: "Interactive provider acquisition workflows will appear here.",
+    label: "Servers",
+    description: "Your rented and discovered compute",
+    body: "Server inventory and lifecycle actions appear here.",
   },
   {
     id: "sessions",
     label: "Connections",
-    description: "Foreground Endpoints and persistent sessions",
-    body: "TUI-owned foreground Endpoints and persistent sessions will appear here.",
+    description: "Local access to services on your servers",
+    body: "Open and manage local connections to remote services here.",
+  },
+  {
+    id: "settings",
+    label: "Settings & Support",
+    description: "Providers, credentials and support tools",
+    body: "Configure providers or inspect privacy-safe support information.",
+  },
+  {
+    id: "providers",
+    label: "Providers",
+    description: "Provider setup and credentials",
+    body: "Configure installed providers and their credentials here.",
+  },
+  {
+    id: "new-instance",
+    label: "Rent server",
+    description: "Find and rent compute from a configured provider",
+    body: "Choose a configured provider and follow its guided rental flow.",
   },
   {
     id: "diagnostics",
     label: "Diagnostics",
-    description: "Health and support information",
-    body: "Privacy-safe health and support information will appear here.",
+    description: "Privacy-safe health and support information",
+    body: "Review support information without exposing secrets.",
   },
 ];
+
+const homeDestinations = [
+  { routeId: "new-instance" as const, label: "Rent a server", description: "Find compute and create a new server" },
+  { routeId: "instances" as const, label: "My servers", description: "View, start, stop or manage rented servers" },
+  { routeId: "sessions" as const, label: "Connections", description: "Expose a remote service on this computer" },
+  { routeId: "settings" as const, label: "Settings & Support", description: "Providers, credentials and diagnostics" },
+] as const;
+
+const settingsDestinations = [
+  { routeId: "providers" as const, label: "Providers", description: "Configure installed providers and credentials" },
+  { routeId: "diagnostics" as const, label: "Diagnostics", description: "Check health and review a safe support report" },
+] as const;
+
+function parentRoute(routeId: TuiRouteId): TuiRouteId {
+  if (routeId === "new-instance") {
+    return "instances";
+  }
+  if (routeId === "providers" || routeId === "diagnostics") {
+    return "settings";
+  }
+  return "overview";
+}
+
+function routeBreadcrumb(routeId: TuiRouteId): string {
+  switch (routeId) {
+    case "overview":
+      return "Home";
+    case "instances":
+      return "Home › Servers";
+    case "new-instance":
+      return "Home › Servers › Rent server";
+    case "sessions":
+      return "Home › Connections";
+    case "settings":
+      return "Home › Settings & Support";
+    case "providers":
+      return "Home › Settings & Support › Providers";
+    case "diagnostics":
+      return "Home › Settings & Support › Diagnostics";
+  }
+}
 
 export type TuiReadStatus = "idle" | "loading" | "ready" | "stale" | "failed";
 
@@ -318,15 +366,36 @@ export function TuiShell({
   const columns = width ?? windowSize.columns ?? 80;
   const rows = height ?? windowSize.rows ?? 24;
   const narrow = columns < 72;
-  const routeContentRows = Math.max(6, rows - (narrow ? routes.length + 8 : 7));
+  const routeContentRows = Math.max(6, rows - 7);
   const [focusedIndex, setFocusedIndex] = useState(0);
+  const [settingsCursor, setSettingsCursor] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const [contentFocused, setContentFocused] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [actionCursor, setActionCursor] = useState(0);
-  const [operationActionCursor, setOperationActionCursor] = useState(() =>
-    defaultOperationActionIndex(operation),
-  );
+  const [operationActionFocus, setOperationActionFocus] = useState(() => ({
+    operation,
+    cursor: defaultOperationActionIndex(operation),
+  }));
+  const operationActionCursor =
+    operationActionFocus.operation === operation
+      ? operationActionFocus.cursor
+      : defaultOperationActionIndex(operation);
+  const setOperationActionCursor = (
+    update: React.SetStateAction<number>,
+  ): void => {
+    setOperationActionFocus((current) => {
+      const currentCursor =
+        current.operation === operation
+          ? current.cursor
+          : defaultOperationActionIndex(operation);
+      return {
+        operation,
+        cursor:
+          typeof update === "function" ? update(currentCursor) : update,
+      };
+    });
+  };
   const [instanceDetailsOpen, setInstanceDetailsOpen] = useState(false);
   const [providerDetailsOpen, setProviderDetailsOpen] = useState(false);
   const [connectionDetailsOpen, setConnectionDetailsOpen] = useState(false);
@@ -515,10 +584,6 @@ export function TuiShell({
   }, [effectiveSelectedProviderSource]);
 
   useEffect(() => {
-    setOperationActionCursor(defaultOperationActionIndex(operation));
-  }, [operation?.phase, operation?.title]);
-
-  useEffect(() => {
     if (navigateToInstanceId === undefined) {
       return;
     }
@@ -530,22 +595,14 @@ export function TuiShell({
       return;
     }
     const instancesIndex = routes.findIndex((route) => route.id === "instances");
+    const homeIndex = homeDestinations.findIndex((destination) => destination.routeId === "instances");
     setSelectedInstanceId(navigateToInstanceId);
     setActiveIndex(instancesIndex);
-    setFocusedIndex(instancesIndex);
+    setFocusedIndex(Math.max(0, homeIndex));
+    setContentFocused(true);
     setStatus(`Opened ${navigateToInstanceId}.`);
     onInstanceNavigationHandled?.();
   }, [navigateToInstanceId, readSnapshot, onInstanceNavigationHandled]);
-
-  const navigation = useMemo(
-    () =>
-      routes.map((route, index) => ({
-        ...route,
-        active: index === activeIndex,
-        focused: !contentFocused && index === focusedIndex,
-      })),
-    [activeIndex, contentFocused, focusedIndex],
-  );
 
   const openRoute = (routeId: TuiRouteId, message?: string): void => {
     const index = routes.findIndex((route) => route.id === routeId);
@@ -553,11 +610,14 @@ export function TuiShell({
       return;
     }
     setActiveIndex(index);
-    setFocusedIndex(index);
-    setContentFocused(true);
+    const homeIndex = homeDestinations.findIndex((destination) => destination.routeId === routeId);
+    if (homeIndex >= 0) {
+      setFocusedIndex(homeIndex);
+    }
+    setContentFocused(routeId !== "overview");
     setActionMenuOpen(false);
     setActionCursor(0);
-    setStatus(message ?? `Opened ${routes[index]?.label ?? "Overview"}.`);
+    setStatus(message ?? `Opened ${routes[index]?.label ?? "Home"}.`);
     if (routeId === "diagnostics") {
       onRefresh?.("diagnostics");
     }
@@ -661,15 +721,14 @@ export function TuiShell({
       : undefined;
 
   const contextActions: readonly TuiContextAction[] = (() => {
-    if (activeRoute.id === "overview") {
-      return [
-        { id: "refresh", label: "Refresh status" },
-        { id: "new-instance", label: "Create a new instance" },
-        { id: "providers", label: "Manage providers" },
-      ];
+    if (activeRoute.id === "overview" || activeRoute.id === "settings") {
+      return [];
     }
     if (activeRoute.id === "instances") {
-      const actions: TuiContextAction[] = [{ id: "refresh", label: "Refresh instances" }];
+      const actions: TuiContextAction[] = [
+        { id: "new-instance", label: "Rent a server" },
+        { id: "refresh", label: "Refresh servers" },
+      ];
       if (selectedInstance !== undefined) {
         actions.unshift({
           id: "instance-details",
@@ -1463,13 +1522,11 @@ export function TuiShell({
         return;
       }
       if (key.downArrow) {
-        setActionCursor((current) => (current + 1) % contextActions.length);
+        setActionCursor((current) => moveTuiFocus(current, contextActions.length, 1));
         return;
       }
       if (key.upArrow) {
-        setActionCursor(
-          (current) => (current - 1 + contextActions.length) % contextActions.length,
-        );
+        setActionCursor((current) => moveTuiFocus(current, contextActions.length, -1));
         return;
       }
       if (key.return) {
@@ -1483,26 +1540,19 @@ export function TuiShell({
     }
 
     if (contentFocused && key.escape) {
-      setContentFocused(false);
-      setActionMenuOpen(false);
-      setActionCursor(0);
-      setStatus(`${activeRoute.label} remains open; section navigation has focus.`);
-      return;
-    }
-
-    if (contentFocused && key.tab) {
-      setContentFocused(false);
-      setFocusedIndex((current) =>
-        key.shift
-          ? (current - 1 + routes.length) % routes.length
-          : (current + 1) % routes.length,
-      );
-      setStatus("Section navigation has focus.");
+      const parent = parentRoute(activeRoute.id);
+      openRoute(parent, `Back to ${routes.find((route) => route.id === parent)?.label ?? "Home"}.`);
       return;
     }
 
     if (contentFocused && (key.downArrow || key.upArrow)) {
       const forwards = key.downArrow;
+      if (activeRoute.id === "settings") {
+        setSettingsCursor((current) =>
+          moveTuiFocus(current, settingsDestinations.length, forwards ? 1 : -1),
+        );
+        return;
+      }
       if (activeRoute.id === "instances" && inventoryItems.length > 0) {
         const currentIndex = Math.max(
           0,
@@ -1562,6 +1612,13 @@ export function TuiShell({
     }
 
     if (contentFocused && key.return) {
+      if (activeRoute.id === "settings") {
+        const destination = settingsDestinations[Math.min(settingsCursor, settingsDestinations.length - 1)];
+        if (destination !== undefined) {
+          openRoute(destination.routeId);
+        }
+        return;
+      }
       if (
         activeRoute.id === "new-instance" &&
         effectiveSelectedWorkflowKey !== undefined
@@ -1574,7 +1631,7 @@ export function TuiShell({
           setStatus(`Opening ${selected.providerId}/${selected.commandName}.`);
         } else if (selected !== undefined) {
           setStatus(
-            `CLI fallback: easyserver provider ${selected.providerId} ${selected.featureId} ${selected.commandName}`,
+            `${selected.providerId} does not expose a guided TUI flow for this operation. Open Advanced provider tools for manual operations.`,
           );
         }
         return;
@@ -1600,10 +1657,8 @@ export function TuiShell({
     if (key.escape) {
       if (helpOpen) {
         setHelpOpen(false);
-      } else if (activeIndex !== 0 || focusedIndex !== 0) {
-        setActiveIndex(0);
-        setFocusedIndex(0);
-        setStatus("Returned to Overview.");
+      } else if (activeRoute.id !== "overview") {
+        openRoute(parentRoute(activeRoute.id));
       }
       return;
     }
@@ -2009,7 +2064,7 @@ export function TuiShell({
           setStatus(`Opening ${selected.providerId}/${selected.commandName}.`);
         } else {
           setStatus(
-            `CLI fallback: easyserver provider ${selected.providerId} ${selected.featureId} ${selected.commandName}`,
+            `${selected.providerId} does not expose a guided TUI flow for this operation. Open Advanced provider tools for manual operations.`,
           );
         }
       }
@@ -2133,25 +2188,20 @@ export function TuiShell({
     }
 
     if (key.return) {
-      const route = routes[focusedIndex];
-      if (route !== undefined) {
-        openRoute(route.id);
+      const destination = homeDestinations[Math.min(focusedIndex, homeDestinations.length - 1)];
+      if (destination !== undefined) {
+        openRoute(destination.routeId);
       }
       return;
     }
 
-    const backwards = key.upArrow || key.leftArrow || (key.tab && key.shift);
-    const forwards = key.downArrow || key.rightArrow || (key.tab && !key.shift);
-    if (!backwards && !forwards) {
+    if (key.upArrow) {
+      setFocusedIndex((current) => moveTuiFocus(current, homeDestinations.length, -1));
       return;
     }
-
-    setFocusedIndex((current) => {
-      if (backwards) {
-        return (current - 1 + routes.length) % routes.length;
-      }
-      return (current + 1) % routes.length;
-    });
+    if (key.downArrow) {
+      setFocusedIndex((current) => moveTuiFocus(current, homeDestinations.length, 1));
+    }
   });
 
   const accent = colorEnabled ? "cyan" : undefined;
@@ -2165,9 +2215,9 @@ export function TuiShell({
         </Text>
         <Text color={muted}>v{EASYSERVER_VERSION}</Text>
       </Box>
-      <Text color={muted}>
-        Control center · {narrow ? "compact layout" : "wide layout"}
-      </Text>
+      {activeRoute.id === "overview" && !operationInteractionOpen ? (
+        <Text color={muted}>Remote compute, without the provider control panel.</Text>
+      ) : null}
 
       {operationInteractionOpen && operation !== undefined ? (
         <Box flexGrow={1} minHeight={0} overflowY="hidden" justifyContent="center">
@@ -2180,119 +2230,89 @@ export function TuiShell({
             )}
           />
         </Box>
+      ) : helpOpen ? (
+        <Box marginTop={1} flexDirection="column">
+          <Text color={muted}>{routeBreadcrumb(activeRoute.id)}</Text>
+          <HelpPanel colorEnabled={colorEnabled} />
+        </Box>
+      ) : activeRoute.id === "overview" ? (
+        <HomeSurface cursor={Math.min(focusedIndex, homeDestinations.length - 1)} colorEnabled={colorEnabled} />
       ) : (
-      <Box
-        flexDirection={narrow ? "column" : "row"}
-        marginTop={1}
-        gap={narrow ? 1 : 3}
-      >
-        <Box
-          flexDirection="column"
-          width={narrow ? "100%" : 25}
-          aria-role="tablist"
-        >
-          {navigation.map((route) => (
-            <Box
-              key={route.id}
-              aria-role="tab"
-              aria-state={{ selected: route.active }}
-              aria-label={`${route.label}${route.active ? ", active" : ""}${route.focused ? ", focused" : ""}`}
-            >
-              <Text
-                bold={route.focused}
-                color={route.focused ? accent : undefined}
-              >
-                {route.focused ? "> " : "  "}
-                {route.label}
-                {route.active ? " [active]" : ""}
-              </Text>
-            </Box>
-          ))}
-        </Box>
-
-        <Box flexDirection="column" flexGrow={1} minWidth={0}>
-          {helpOpen ? (
-            <HelpPanel colorEnabled={colorEnabled} />
-          ) : (
-            <Box flexDirection="column">
-              <Text bold>{activeRoute.label}</Text>
-              <Text color={muted}>{activeRoute.description}</Text>
-              <Box marginTop={1} flexDirection="column">
-                {readSnapshot !== undefined && readStatus === "stale" ? (
-                  <Box flexDirection="column" marginBottom={1}>
-                    <Text bold>Last refresh failed.</Text>
-                    <Text>Showing the previous snapshot; open Actions to refresh.</Text>
-                  </Box>
-                ) : null}
-                <RouteSurface
-                  route={activeRoute}
-                  snapshot={readSnapshot}
-                  readStatus={readStatus}
-                  diagnostics={diagnostics}
-                  canCopyDiagnostics={onCopyDiagnostics !== undefined}
-                  narrow={narrow}
-                  height={routeContentRows}
-                  selectedInstanceId={selectedInstanceId}
-                  showInstanceDetails={instanceDetailsOpen}
-                  bulkSelectedInstanceIds={bulkSelectedInstanceIds}
-                  canMutateInstances={onInstanceMutation !== undefined}
-                  canBulkMutateInstances={onBulkInstanceMutation !== undefined}
-                  foregroundConnectionFlow={foregroundConnectionFlow}
-                  foregroundConnectionBusy={foregroundConnectionBusy}
-                  foregroundConnections={foregroundConnections}
-                  selectedForegroundConnectionId={selectedForegroundConnectionId}
-                  selectedPersistentSessionId={selectedPersistentSessionId}
-                  selectedEndpointIntentName={effectiveSelectedEndpointIntentName}
-                  selectedConnectionTarget={selectedConnectionTarget}
-                  showConnectionDetails={connectionDetailsOpen}
-                  canManageForegroundConnections={
-                    onOpenForegroundConnection !== undefined &&
-                    onCloseForegroundConnection !== undefined
-                  }
-                  canManagePersistentSessions={
-                    onCreatePersistentSession !== undefined &&
-                    onClosePersistentSession !== undefined
-                  }
-                  canManageEndpointIntents={
-                    onSetEndpointIntentEnabled !== undefined &&
-                    onRetryEndpointIntent !== undefined &&
-                    onRemoveEndpointIntent !== undefined
-                  }
-                  canManageDaemon={
-                    onStartDaemon !== undefined && onStopDaemon !== undefined
-                  }
-                  providerSourceInput={providerSourceInput}
-                  providerCredentialFlow={providerCredentialFlowView}
-                  selectedProviderSource={effectiveSelectedProviderSource}
-                  showProviderDetails={providerDetailsOpen}
-                  canRegisterProvider={onProviderMutation !== undefined}
-                  selectedWorkflowKey={effectiveSelectedWorkflowKey}
-                  providerInteractiveScreen={providerInteractiveScreen}
-                  providerInteractiveDisabled={providerInteractiveDisabled}
-                  onProviderInteractiveEvent={onProviderInteractiveEvent}
-                  onProviderInteractiveClose={onProviderInteractiveClose}
-                />
-                {actionMenuOpen ? (
-                  <ContextActionMenu
-                    actions={contextActions}
-                    cursor={Math.min(actionCursor, Math.max(0, contextActions.length - 1))}
-                    colorEnabled={colorEnabled}
-                    maxRows={Math.max(4, routeContentRows - 2)}
-                  />
-                ) : contentFocused && providerInteractiveScreen === undefined ? (
-                  <Box marginTop={1}>
-                    <Text color={muted}>
-                      {activeRoute.id === "new-instance"
-                        ? "↑/↓ choose · Enter start · Esc sections"
-                        : "↑/↓ choose · Enter actions · Esc sections"}
-                    </Text>
-                  </Box>
-                ) : null}
+        <Box marginTop={1} flexDirection="column" flexGrow={1} minHeight={0}>
+          <Text color={muted}>{routeBreadcrumb(activeRoute.id)}</Text>
+          <Text bold>{activeRoute.label}</Text>
+          <Text color={muted}>{activeRoute.description}</Text>
+          <Box marginTop={1} flexDirection="column" flexGrow={1} minHeight={0}>
+            {readSnapshot !== undefined && readStatus === "stale" ? (
+              <Box flexDirection="column" marginBottom={1}>
+                <Text bold>Some information could not be refreshed.</Text>
+                <Text>Showing the previous snapshot; open Actions to try again.</Text>
               </Box>
-            </Box>
-          )}
+            ) : null}
+            <RouteSurface
+              route={activeRoute}
+              snapshot={readSnapshot}
+              readStatus={readStatus}
+              diagnostics={diagnostics}
+              canCopyDiagnostics={onCopyDiagnostics !== undefined}
+              narrow={narrow}
+              height={routeContentRows}
+              colorEnabled={colorEnabled}
+              settingsCursor={settingsCursor}
+              selectedInstanceId={selectedInstanceId}
+              showInstanceDetails={instanceDetailsOpen}
+              bulkSelectedInstanceIds={bulkSelectedInstanceIds}
+              canMutateInstances={onInstanceMutation !== undefined}
+              canBulkMutateInstances={onBulkInstanceMutation !== undefined}
+              foregroundConnectionFlow={foregroundConnectionFlow}
+              foregroundConnectionBusy={foregroundConnectionBusy}
+              foregroundConnections={foregroundConnections}
+              selectedForegroundConnectionId={selectedForegroundConnectionId}
+              selectedPersistentSessionId={selectedPersistentSessionId}
+              selectedEndpointIntentName={effectiveSelectedEndpointIntentName}
+              selectedConnectionTarget={selectedConnectionTarget}
+              showConnectionDetails={connectionDetailsOpen}
+              canManageForegroundConnections={
+                onOpenForegroundConnection !== undefined &&
+                onCloseForegroundConnection !== undefined
+              }
+              canManagePersistentSessions={
+                onCreatePersistentSession !== undefined &&
+                onClosePersistentSession !== undefined
+              }
+              canManageEndpointIntents={
+                onSetEndpointIntentEnabled !== undefined &&
+                onRetryEndpointIntent !== undefined &&
+                onRemoveEndpointIntent !== undefined
+              }
+              canManageDaemon={
+                onStartDaemon !== undefined && onStopDaemon !== undefined
+              }
+              providerSourceInput={providerSourceInput}
+              providerCredentialFlow={providerCredentialFlowView}
+              selectedProviderSource={effectiveSelectedProviderSource}
+              showProviderDetails={providerDetailsOpen}
+              canRegisterProvider={onProviderMutation !== undefined}
+              selectedWorkflowKey={effectiveSelectedWorkflowKey}
+              providerInteractiveScreen={providerInteractiveScreen}
+              providerInteractiveDisabled={providerInteractiveDisabled}
+              onProviderInteractiveEvent={onProviderInteractiveEvent}
+              onProviderInteractiveClose={onProviderInteractiveClose}
+            />
+            {actionMenuOpen ? (
+              <ContextActionMenu
+                actions={contextActions}
+                cursor={Math.min(actionCursor, Math.max(0, contextActions.length - 1))}
+                colorEnabled={colorEnabled}
+                maxRows={Math.max(4, routeContentRows - 2)}
+              />
+            ) : contentFocused && providerInteractiveScreen === undefined ? (
+              <Box marginTop={1}>
+                <Text color={muted}>Enter actions · Esc back</Text>
+              </Box>
+            ) : null}
+          </Box>
         </Box>
-      </Box>
       )}
 
       {operation === undefined || operationInteractionOpen ? null : (
@@ -2309,28 +2329,53 @@ export function TuiShell({
       )}
 
       <Box marginTop={1} flexDirection="column">
-        <Text aria-label={`Status: ${status}`}>Status: {status}</Text>
-        {operationInteractionOpen ? (
-          <Text color={muted} wrap="wrap">
-            Confirmation has focus · ↑/↓ choose · Enter run · Esc decline · Ctrl+C quit
-          </Text>
-        ) : operation !== undefined ? (
-          <Text color={muted} wrap="wrap">
-            Operation status shown · ↑/↓ choose drawer actions · Enter run · Tab returns to sections · Ctrl+C quit
-          </Text>
-        ) : providerInteractiveScreen !== undefined ? (
-          <Text color={muted} wrap="wrap">
-            Provider workflow has focus · use the commands shown in the workflow · Ctrl+C quit
-          </Text>
-        ) : screenReader ? (
-          <Text>
-            Commands: arrows move; Enter opens, selects or shows actions; Escape goes back; Tab returns to section navigation; question mark opens help; Ctrl+C quits.
-          </Text>
-        ) : (
-          <Text color={muted} wrap="wrap">
-            Arrows move · Enter select/open/actions · Esc back · Tab sections · ? help · Ctrl+C quit
-          </Text>
+        {status === "Ready." ? null : (
+          <Text color={muted} aria-label={`Status: ${status}`}>{status}</Text>
         )}
+        {screenReader ? (
+          <Text>Commands: Up and Down move; Enter selects; Escape goes back; question mark opens help; Ctrl+C quits.</Text>
+        ) : (
+          <Text color={muted}>↑/↓ move · Enter select · Esc back · ? help · Ctrl+C quit</Text>
+        )}
+
+      </Box>
+    </Box>
+  );
+}
+
+function HomeSurface({ cursor, colorEnabled }: { readonly cursor: number; readonly colorEnabled: boolean }): React.ReactElement {
+  const muted = colorEnabled ? "gray" : undefined;
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text bold>What do you want to do?</Text>
+      <Box flexDirection="column" marginTop={1}>
+        {homeDestinations.map((destination, index) => (
+          <Box key={destination.routeId} flexDirection="column" marginBottom={index === homeDestinations.length - 1 ? 0 : 1}>
+            <Text bold={index === cursor}>
+              {index === cursor ? "> " : "  "}{destination.label}
+            </Text>
+            <Text color={muted}>  {destination.description}</Text>
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  );
+}
+
+function SettingsSurface({ cursor, colorEnabled }: { readonly cursor: number; readonly colorEnabled: boolean }): React.ReactElement {
+  const muted = colorEnabled ? "gray" : undefined;
+  return (
+    <Box flexDirection="column">
+      <Text>Choose what you want to configure or inspect.</Text>
+      <Box flexDirection="column" marginTop={1}>
+        {settingsDestinations.map((destination, index) => (
+          <Box key={destination.routeId} flexDirection="column" marginBottom={index === settingsDestinations.length - 1 ? 0 : 1}>
+            <Text bold={index === cursor}>
+              {index === cursor ? "> " : "  "}{destination.label}
+            </Text>
+            <Text color={muted}>  {destination.description}</Text>
+          </Box>
+        ))}
       </Box>
     </Box>
   );
@@ -2380,6 +2425,8 @@ interface RouteSurfaceProps {
   readonly canCopyDiagnostics: boolean;
   readonly narrow: boolean;
   readonly height: number;
+  readonly colorEnabled: boolean;
+  readonly settingsCursor: number;
   readonly selectedInstanceId?: string;
   readonly showInstanceDetails: boolean;
   readonly bulkSelectedInstanceIds: readonly string[];
@@ -2417,6 +2464,8 @@ function RouteSurface({
   canCopyDiagnostics,
   narrow,
   height,
+  colorEnabled,
+  settingsCursor,
   selectedInstanceId,
   showInstanceDetails,
   bulkSelectedInstanceIds,
@@ -2451,6 +2500,7 @@ function RouteSurface({
     route.id !== "providers" &&
     route.id !== "new-instance" &&
     route.id !== "sessions" &&
+    route.id !== "settings" &&
     route.id !== "diagnostics"
   ) {
     return <Text wrap="wrap">{route.body}</Text>;
@@ -2463,6 +2513,10 @@ function RouteSurface({
         canCopy={canCopyDiagnostics}
       />
     );
+  }
+
+  if (route.id === "settings") {
+    return <SettingsSurface cursor={settingsCursor} colorEnabled={colorEnabled} />;
   }
 
   if (snapshot === undefined) {
@@ -2657,7 +2711,7 @@ function DiagnosticsSurface({
       <Box marginTop={1} flexDirection="column">
         <Text bold>Support guidance</Text>
         <Text>Raw logs are not the same as this sanitized payload. Review raw logs separately and never share credentials, tokens or private keys.</Text>
-        <Text>Providers and Connections are available from Actions or the section navigation.</Text>
+        <Text>Providers and Connections are available from Settings & Support or the Home task list.</Text>
       </Box>
     </Box>
   );
@@ -3177,7 +3231,7 @@ function NewInstanceSurface({
     return (
       <Box flexDirection="column">
         <Text>No provider acquisition workflows are available.</Text>
-        <Text>Configure a provider first, or use its CLI commands when it exposes no interactive flow.</Text>
+        <Text>Configure a provider first. Providers without a guided rental flow remain available under Advanced provider tools.</Text>
       </Box>
     );
   }
@@ -3762,10 +3816,9 @@ function HelpPanel({ colorEnabled }: { readonly colorEnabled: boolean }): React.
       aria-role="menu"
     >
       <Text bold>Keyboard help</Text>
-      <Text>Arrow keys — move through sections, items and actions</Text>
+      <Text>Arrow keys — move through visible choices, items and actions</Text>
       <Text>Enter — open, select, edit or run the focused action</Text>
       <Text>Esc — go back one level or close help</Text>
-      <Text>Tab — return to section navigation</Text>
       <Text>Ctrl+C — quit safely</Text>
       <Text>? — toggle this help</Text>
       <Box marginTop={1} flexDirection="column">

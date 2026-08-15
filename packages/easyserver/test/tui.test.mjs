@@ -107,11 +107,53 @@ function persistentConnectionSnapshot(items = []) {
   });
 }
 
-async function openConnectionsRoute(view) {
-  for (let index = 0; index < 4; index += 1) {
-    view.stdin.write("\t");
+async function returnHome(view) {
+  for (let index = 0; index < 3; index += 1) {
+    view.stdin.write("\u001b");
+    await flushEscape();
+  }
+}
+
+async function moveHomeCursor(view, count) {
+  for (let index = 0; index < count; index += 1) {
+    view.stdin.write("\u001b[B");
     await tick();
   }
+}
+
+async function openHomeDestination(view, index) {
+  await returnHome(view);
+  await moveHomeCursor(view, index);
+  view.stdin.write("\r");
+  await tick();
+}
+
+async function openRentRoute(view) {
+  await openHomeDestination(view, 0);
+}
+
+async function openServersRoute(view) {
+  await openHomeDestination(view, 1);
+}
+
+async function openConnectionsRoute(view) {
+  await openHomeDestination(view, 2);
+}
+
+async function openSettingsRoute(view) {
+  await openHomeDestination(view, 3);
+}
+
+async function openProvidersRoute(view) {
+  await openSettingsRoute(view);
+  view.stdin.write("\r");
+  await tick();
+}
+
+async function openDiagnosticsRoute(view) {
+  await openSettingsRoute(view);
+  view.stdin.write("\u001b[B");
+  await tick();
   view.stdin.write("\r");
   await tick();
 }
@@ -191,7 +233,7 @@ test("interactive TUI restores alternate screen on Ctrl+C", async () => {
   assert.equal(stderr.text(), "");
 });
 
-test("screen-reader runtime stays linear and preserves route, focus, content and help semantics", async () => {
+test("screen-reader runtime stays linear and preserves task navigation and help semantics", async () => {
   const stdin = new TtyInput();
   const stdout = new CaptureOutput();
   const stderr = new CaptureOutput();
@@ -205,29 +247,30 @@ test("screen-reader runtime stays linear and preserves route, focus, content and
   await app.waitUntilRenderFlush();
   assert.doesNotMatch(stdout.text(), /\u001b\[\?1049h/);
   assert.doesNotMatch(stdout.text(), /\u001b\[(?:3[0-9]|9[0-7])m/);
-  assert.match(stdout.text(), /Overview, active, focused/);
-  assert.match(stdout.text(), /EasyServer at a glance/);
-  assert.match(stdout.text(), /Choose a section to inspect or manage/);
-  assert.match(stdout.text(), /Commands: arrows move; Enter opens, selects or shows actions/);
+  assert.match(stdout.text(), /What do you want to do/);
+  assert.match(stdout.text(), /Rent a server/);
+  assert.match(stdout.text(), /My servers/);
+  assert.match(stdout.text(), /Settings & Support/);
+  assert.match(stdout.text(), /Commands: Up and Down move; Enter selects; Escape goes back/);
 
   let offset = stdout.text().length;
-  stdin.write("\t");
+  stdin.write("\u001b[B");
   await app.waitUntilRenderFlush();
-  assert.match(stdout.text().slice(offset), /Instances, focused/);
+  assert.match(stdout.text().slice(offset), /My servers/);
 
   offset = stdout.text().length;
   stdin.write("\r");
   await app.waitUntilRenderFlush();
-  const openedInstances = stdout.text().slice(offset);
-  assert.match(openedInstances, /Instances, active/);
-  assert.match(openedInstances, /Instance inventory and lifecycle workflows/);
+  const openedServers = stdout.text().slice(offset);
+  assert.match(openedServers, /Home › Servers/);
+  assert.match(openedServers, /Servers/);
 
   offset = stdout.text().length;
   stdin.write("?");
   await app.waitUntilRenderFlush();
   const helpUpdate = stdout.text().slice(offset);
   assert.match(helpUpdate, /Keyboard help/);
-  assert.match(helpUpdate, /Arrow keys — move through sections, items and actions/);
+  assert.match(helpUpdate, /Arrow keys — move through visible choices, items and actions/);
   assert.match(helpUpdate, /Ctrl\+C — quit safely/);
 
   stdin.write("q");
@@ -340,10 +383,6 @@ test("outcome-unknown drawer maps the shared R shortcut to Refresh, never Retry"
   assert.deepEqual(actions, ["refresh", "observe"]);
   assert.equal(actions.includes("retry"), false);
 
-  view.stdin.write("\t");
-  await tick();
-  assert.match(view.lastFrame(), /> Instances/);
-  assert.match(view.lastFrame(), /Rent GPU: outcome unknown/);
 });
 
 test("untrusted structural operation presentations fail closed at the shell seam", async () => {
@@ -414,22 +453,16 @@ test("read-only surfaces make zero-provider and zero-instance states actionable"
     shell({ width: 100, readSnapshot: readSnapshot(), readStatus: "ready" }),
   );
 
-  assert.match(view.lastFrame(), /No provider plugins configured/);
-  assert.match(view.lastFrame(), /No compute instances yet/);
-  assert.match(view.lastFrame(), /Open Providers/);
+  assert.match(view.lastFrame(), /What do you want to do/);
+  assert.match(view.lastFrame(), /Rent a server/);
+  assert.match(view.lastFrame(), /My servers/);
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
-  assert.match(view.lastFrame(), /Instances/);
+  await openServersRoute(view);
+  assert.match(view.lastFrame(), /Home › Servers/);
   assert.match(view.lastFrame(), /No compute instances yet/);
   assert.match(view.lastFrame(), /Configure a provider first/);
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   assert.match(view.lastFrame(), /Providers/);
   assert.match(view.lastFrame(), /easyserver plugins add <module>/);
 });
@@ -447,12 +480,7 @@ test("Providers can register an already-installed plugin module without leaving 
     }),
   );
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   assert.match(view.lastFrame(), /Press Enter for actions, then choose Register installed provider/);
 
   view.stdin.write("\r");
@@ -487,12 +515,7 @@ test("provider registration prompt can be cancelled without mutation", async () 
     }),
   );
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   view.stdin.write("\r");
   await tick();
   view.stdin.write("\r");
@@ -544,12 +567,7 @@ test("TuiApp refreshes provider state after registration mutation succeeds", asy
 
   await tick();
   await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   view.stdin.write("\r");
   await tick();
   view.stdin.write("\r");
@@ -601,12 +619,7 @@ test("Providers enable and disable the selected configured plugin by source", as
     }),
   );
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   assert.match(view.lastFrame(), /> Enabled Provider/);
 
   view.stdin.write("e");
@@ -672,12 +685,7 @@ test("Providers configure only declared credentials through masked input", async
     }),
   );
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   view.stdin.write("c");
   await tick();
 
@@ -748,12 +756,7 @@ test("Providers remove a configured declared credential without reading its valu
     }),
   );
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   await chooseVisibleAction(view, "Manage credentials");
   assert.match(view.lastFrame(), /> api-key · required · configured/);
   assert.match(view.lastFrame(), /> Set or rotate/);
@@ -811,12 +814,7 @@ test("TuiApp confirms credential removal before deleting the stored value", asyn
 
   await tick();
   await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   await chooseVisibleAction(view, "Manage credentials");
   view.stdin.write("\u001b[C");
   await tick();
@@ -884,12 +882,7 @@ test("Providers explain credential eligibility for providers without usable desc
     }),
   );
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   assert.match(view.lastFrame(), /> Disabled Provider · disabled/);
 
   view.stdin.write("c");
@@ -931,12 +924,7 @@ test("credential secret input cancels without emitting or revealing secret", asy
     }),
   );
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   view.stdin.write("c");
   await tick();
   view.stdin.write("\r");
@@ -1000,12 +988,7 @@ test("TuiApp never exposes credential values while mutating and refreshes readin
 
   await tick();
   await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   view.stdin.write("c");
   await tick();
   view.stdin.write("\r");
@@ -1066,12 +1049,7 @@ test("credential mutation failures cannot echo the submitted secret into the ope
 
   await tick();
   await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   view.stdin.write("c");
   await tick();
   view.stdin.write("\r");
@@ -1118,12 +1096,7 @@ test("provider selection is preserved by source across refreshed ordering", asyn
     }),
   );
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   view.stdin.write("j");
   await tick();
   assert.match(view.lastFrame(), /> Provider B/);
@@ -1268,15 +1241,8 @@ test("TuiApp runs a generic provider workflow through host confirmation and navi
 
   await tick();
   await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
-  assert.match(view.lastFrame(), /New instance/);
+  await openRentRoute(view);
+  assert.match(view.lastFrame(), /Home › Servers › Rent server/);
   assert.match(view.lastFrame(), /nebula · Allocation · provision · interactive/);
 
   view.stdin.write("\r");
@@ -1301,7 +1267,7 @@ test("TuiApp runs a generic provider workflow through host confirmation and navi
   await tick();
   await tick();
   await tick();
-  assert.match(view.lastFrame(), /Instances/);
+  assert.match(view.lastFrame(), /Home › Servers/);
   assert.match(view.lastFrame(), /> instance:nebula-42 · nebula · running/);
   assert.doesNotMatch(view.lastFrame(), /EasyServer ID: instance:nebula-42/);
   assert.equal(closeCalls, 0);
@@ -1380,15 +1346,12 @@ test("degraded provider state remains visible while healthy instance inventory s
   });
   const view = render(shell({ width: 100, readSnapshot: snapshot, readStatus: "ready" }));
 
-  assert.match(view.lastFrame(), /Provider issues/);
-  assert.match(view.lastFrame(), /offline.*provider-unavailable/);
-  assert.match(view.lastFrame(), /Instances: 1 total/);
-  assert.match(view.lastFrame(), /Daemon: running · 1 live persistent/);
+  assert.match(view.lastFrame(), /What do you want to do/);
+  assert.match(view.lastFrame(), /My servers/);
+  assert.doesNotMatch(view.lastFrame(), /Provider issues/);
+  assert.doesNotMatch(view.lastFrame(), /Daemon:/);
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openServersRoute(view);
   assert.match(view.lastFrame(), /Some providers are unavailable/);
   assert.match(view.lastFrame(), /offline.*provider-unavailable/);
   assert.match(view.lastFrame(), /> Healthy GPU · healthy · running/);
@@ -1397,10 +1360,7 @@ test("degraded provider state remains visible while healthy instance inventory s
   assert.match(view.lastFrame(), /Normalized state: running/);
   assert.match(view.lastFrame(), /Available actions: none/);
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openProvidersRoute(view);
   assert.match(view.lastFrame(), /Healthy Provider · ready/);
   assert.match(view.lastFrame(), /broken-plugin\.mjs · failed/);
 });
@@ -1442,10 +1402,7 @@ test("stale retained instance state is visibly distinct from a fresh provider ob
     onInstanceMutation() {},
   }));
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openServersRoute(view);
 
   assert.match(view.lastFrame(), /> Retained GPU · offline · running · stale/);
   assert.doesNotMatch(view.lastFrame(), /Last observed:/);
@@ -1490,15 +1447,12 @@ test("empty instance guidance reflects configured but degraded providers", async
   });
   const view = render(shell({ width: 100, readSnapshot: snapshot, readStatus: "ready" }));
 
+  await openServersRoute(view);
   assert.match(view.lastFrame(), /No instances reported by available providers/i);
   assert.match(view.lastFrame(), /unavailable providers may have\s+additional instances/i);
   assert.doesNotMatch(view.lastFrame(), /because provider inventory is incomplete/i);
   assert.doesNotMatch(view.lastFrame(), /Configure a provider first/);
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
   assert.match(view.lastFrame(), /Some providers are unavailable/);
   assert.match(view.lastFrame(), /Available provider results remain usable/);
   assert.match(view.lastFrame(), /Open Providers or Diagnostics/);
@@ -1538,10 +1492,7 @@ test("instance actions come only from provider-declared availableActions", async
   });
   const view = render(shell({ width: 100, readSnapshot: snapshot, readStatus: "ready" }));
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openServersRoute(view);
   assert.match(view.lastFrame(), /> instance:a · fixture · running/);
   assert.doesNotMatch(view.lastFrame(), /Available actions:/);
   await chooseVisibleAction(view, "Show instance details");
@@ -1598,10 +1549,7 @@ test("Instances multi-select preserves the exact target set and uses host bulk a
     },
   }));
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openServersRoute(view);
   view.stdin.write(" ");
   await tick();
   view.stdin.write("j");
@@ -1663,17 +1611,14 @@ test("instance selection is preserved by canonical ID across reorder and narrow 
   });
   const view = render(shell({ width: 100, readSnapshot: first, readStatus: "ready" }));
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openServersRoute(view);
   view.stdin.write("\u001b[B");
   await tick();
   assert.match(view.lastFrame(), /> instance:b · fixture · stopped/);
 
   view.rerender(shell({ width: 60, readSnapshot: reordered, readStatus: "ready" }));
   await tick();
-  assert.match(view.lastFrame(), /Control center · compact layout/);
+  assert.match(view.lastFrame(), /Home › Servers/);
   assert.match(view.lastFrame(), /> instance:b · fixture · stopped/);
   await chooseVisibleAction(view, "Show instance details");
   assert.match(view.lastFrame(), /Provider: fixture/);
@@ -1713,10 +1658,7 @@ test("discovered instances expose adoption and reversible provider actions but n
     }),
   );
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openServersRoute(view);
 
   assert.match(view.lastFrame(), /> instance:discovered · fixture · running/);
   view.stdin.write("\r");
@@ -1782,10 +1724,7 @@ test("disappearing selected instance never silently retargets lifecycle input", 
     }),
   );
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openServersRoute(view);
   view.stdin.write("\u001b[B");
   await tick();
   assert.match(view.lastFrame(), /> instance:b · fixture · stopped/);
@@ -1892,12 +1831,8 @@ test("TuiApp destroy review shows provenance and connection consequences before 
 
   await tick();
   await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
-  view.stdin.write("1");
-  await tick();
+  await openServersRoute(view);
+  await chooseVisibleAction(view, "destroy instance");
 
   assert.equal(runnerCalls, 1);
   assert.match(view.lastFrame(), /Confirmation required/);
@@ -1909,6 +1844,9 @@ test("TuiApp destroy review shows provenance and connection consequences before 
   assert.match(view.lastFrame(), /Endpoint intent comfy/);
   assert.match(view.lastFrame(), /will close 1 active session and 1 Endpoint intent/);
 
+  assert.match(view.lastFrame(), /> Cancel/);
+  view.stdin.write("\u001b[A");
+  await tick();
   view.stdin.write("\r");
   await tick();
   await tick();
@@ -1968,10 +1906,7 @@ test("TuiApp outcome-unknown offers observation refresh without redispatching th
 
   await tick();
   await tick();
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await openServersRoute(view);
   await chooseVisibleAction(view, "start instance");
   await tick();
   await tick();
@@ -2037,7 +1972,7 @@ test("TuiApp guides foreground Endpoint creation with visible deterministic Acce
   await tick();
   await tick();
   await openConnectionsRoute(view);
-  assert.match(view.lastFrame(), /Status: Opened Connections\./);
+  assert.match(view.lastFrame(), /Opened Connections\./);
   assert.match(view.lastFrame(), /TUI-owned foreground Endpoints/);
 
   await chooseVisibleAction(view, "New foreground Endpoint");
@@ -2472,14 +2407,16 @@ test("daemon Stop reviews live persistent impact before shutdown dispatch", asyn
   await tick();
   await tick();
   await openConnectionsRoute(view);
-  view.stdin.write("d");
-  await tick();
+  await chooseVisibleAction(view, "Stop daemon");
   await tick();
   assert.equal(stopCalls, 0);
   assert.match(view.lastFrame(), /Stop EasyServer daemon/);
   assert.match(view.lastFrame(), /closes 2 live persistent sessions and 1 active Endpoint intent/);
   assert.match(view.lastFrame(), /2 live persistent session\(s\)/);
 
+  assert.match(view.lastFrame(), /> Cancel/);
+  view.stdin.write("\u001b[A");
+  await tick();
   view.stdin.write("\r");
   await tick();
   await tick();
@@ -2772,19 +2709,19 @@ test("failed refresh keeps prior snapshot visibly stale after error drawer dismi
 
   await tick();
   await tick();
-  assert.match(view.lastFrame(), /Providers: 1 configured/);
+  await openProvidersRoute(view);
+  assert.match(view.lastFrame(), /> fixture · ready/);
 
-  view.stdin.write("r");
-  await tick();
+  await chooseVisibleAction(view, "Refresh providers");
   await tick();
   assert.match(view.lastFrame(), /Refresh EasyServer status: failed/);
   assert.match(view.lastFrame(), /Showing the previous snapshot/);
 
-  view.stdin.write("x");
-  await tick();
+  view.stdin.write("\u001b");
+  await flushEscape();
   assert.doesNotMatch(view.lastFrame(), /Refresh EasyServer status: failed/);
   assert.match(view.lastFrame(), /Showing the previous snapshot/);
-  assert.match(view.lastFrame(), /Providers: 1 configured/);
+  assert.match(view.lastFrame(), /> fixture · ready/);
 });
 
 test("TuiApp loads and refreshes read data through an injected loader", async () => {
@@ -2817,91 +2754,97 @@ test("TuiApp loads and refreshes read data through an injected loader", async ()
   await tick();
   await tick();
   assert.equal(calls, 1);
-  assert.match(view.lastFrame(), /Providers: 1 configured/);
+  await openProvidersRoute(view);
+  assert.match(view.lastFrame(), /> fixture · ready/);
 
-  view.stdin.write("r");
-  await tick();
+  await chooseVisibleAction(view, "Refresh providers");
   await tick();
   assert.equal(calls, 2);
+  assert.match(view.lastFrame(), /> fixture · ready/);
 });
 
-test("TUI shell exposes discoverable focus and keyboard navigation", async () => {
+test("TUI v2 Home exposes task-first navigation without a permanent sidebar", async () => {
   const view = render(shell({ width: 100 }));
 
-  assert.match(view.lastFrame(), /Control center · wide layout/);
-  assert.match(view.lastFrame(), /> Overview \[active\]/);
-  assert.match(view.lastFrame(), /Arrows move · Enter select\/open\/actions/);
+  assert.match(view.lastFrame(), /What do you want to do/);
+  assert.match(view.lastFrame(), /> Rent a server/);
+  assert.match(view.lastFrame(), /My servers/);
+  assert.match(view.lastFrame(), /Connections/);
+  assert.match(view.lastFrame(), /Settings & Support/);
+  assert.doesNotMatch(view.lastFrame(), /Control center/);
+  assert.doesNotMatch(view.lastFrame(), /\[active\]/);
 
-  view.stdin.write("\t");
+  view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /> Instances/);
-  assert.doesNotMatch(view.lastFrame(), /> Overview/);
-
+  assert.match(view.lastFrame(), /> My servers/);
   view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /Instances \[active\]/);
-  assert.match(view.lastFrame(), /Opened Instances\./);
+  assert.match(view.lastFrame(), /Home › Servers/);
+  assert.doesNotMatch(view.lastFrame(), /Settings & Support[\s\S]*Providers, credentials and diagnostics/);
 
-  await chooseVisibleAction(view, "Refresh instances");
-  assert.match(view.lastFrame(), /Refresh requested for Instances\./);
+  await chooseVisibleAction(view, "Refresh servers");
+  assert.match(view.lastFrame(), /Refresh requested for Servers\./);
 });
 
-test("TUI arrows and Shift+Tab share the focus-navigation path", async () => {
+test("TUI v2 arrows clamp task focus and Escape follows the page hierarchy", async () => {
   const view = render(shell({ width: 100 }));
 
-  view.stdin.write("\u001b[B");
+  view.stdin.write("\u001b[A");
   await tick();
-  assert.match(view.lastFrame(), /> Instances/);
+  assert.match(view.lastFrame(), /> Rent a server/);
 
   view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /> Providers/);
-
-  view.stdin.write("\u001b[Z");
+  view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /> Instances/);
+  assert.match(view.lastFrame(), /> Connections/);
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Home › Connections/);
+
+  view.stdin.write("\u001b");
+  await flushEscape();
+  assert.match(view.lastFrame(), /What do you want to do/);
+  assert.match(view.lastFrame(), /> Connections/);
 });
 
-test("TUI help behaves like a modal and Escape returns to the active surface", async () => {
+test("TUI help behaves like a modal and Escape returns to the current task surface", async () => {
   const view = render(shell({ width: 100 }));
 
   view.stdin.write("?");
   await tick();
   assert.match(view.lastFrame(), /Keyboard help/);
-  assert.match(view.lastFrame(), /Ctrl\+C — quit safely/);
+  assert.match(view.lastFrame(), /Arrow keys — move through visible choices, items and actions/);
+  assert.doesNotMatch(view.lastFrame(), /Tab —/);
 
   view.stdin.write("\u001b");
   await flushEscape();
   assert.doesNotMatch(view.lastFrame(), /Keyboard help/);
-  assert.match(view.lastFrame(), /EasyServer at a glance/);
+  assert.match(view.lastFrame(), /What do you want to do/);
 });
 
-test("TUI keeps route and focus state across wide-to-narrow resize", async () => {
+test("TUI keeps the focused working page across wide-to-narrow resize", async () => {
   const view = render(shell({ width: 100 }));
 
-  view.stdin.write("\t");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
-  view.stdin.write("\t");
-  await tick();
-  assert.match(view.lastFrame(), /> Providers/);
-  assert.match(view.lastFrame(), /Instances \[active\]/);
+  await openServersRoute(view);
+  assert.match(view.lastFrame(), /Home › Servers/);
+  assert.doesNotMatch(view.lastFrame(), /Control center/);
 
   view.rerender(shell({ width: 60 }));
   await tick();
-  assert.match(view.lastFrame(), /Control center · compact layout/);
-  assert.match(view.lastFrame(), /> Providers/);
-  assert.match(view.lastFrame(), /Instances \[active\]/);
+  assert.match(view.lastFrame(), /Home › Servers/);
+  assert.doesNotMatch(view.lastFrame(), /Control center/);
 });
 
-test("TUI screen-reader mode renders a calm linear command summary", () => {
+test("TUI screen-reader mode renders the task-first Home as a calm linear summary", () => {
   const view = render(shell({ width: 60, screenReader: true }));
 
-  assert.match(view.lastFrame(), /Control center · compact layout/);
+  assert.match(view.lastFrame(), /What do you want to do/);
+  assert.match(view.lastFrame(), /> Rent a server/);
+  assert.match(view.lastFrame(), /My servers/);
+  assert.match(view.lastFrame(), /Settings & Support/);
   assert.match(
     view.lastFrame(),
-    /Commands: arrows move; Enter opens, selects or shows actions; Escape goes back;/,
+    /Commands: Up and Down move; Enter selects; Escape goes back; question mark opens help; Ctrl\+C\s+quits\./,
   );
-  assert.match(view.lastFrame(), /> Overview \[active\]/);
 });

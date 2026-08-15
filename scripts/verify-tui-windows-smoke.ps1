@@ -238,7 +238,9 @@ process.exit(second.status ?? 1);
     throw "TUI did not render expected text before input: $ExpectedText. Observed: $observed"
   }
 
+  $beforeResizeLength = 0
   if ($ResizeToNarrow) {
+    $beforeResizeLength = (Read-SharedText $log).Length
     $rect = New-Object EasyServerTuiSmokeNative+RECT
     if (-not [EasyServerTuiSmokeNative]::GetWindowRect($windowProcess.MainWindowHandle, [ref]$rect)) {
       throw "Could not inspect the TUI terminal window before resize."
@@ -255,6 +257,18 @@ process.exit(second.status ?? 1);
       throw "Could not resize the TUI terminal window."
     }
     Start-Sleep -Seconds 1
+    $afterResize = Read-SharedText $log
+    $resizeUpdate = if ($afterResize.Length -gt $beforeResizeLength) {
+      $afterResize.Substring($beforeResizeLength)
+    } else {
+      ""
+    }
+    if (-not $resizeUpdate.Contains("What do you want to do?") -or -not $resizeUpdate.Contains("Rent a server")) {
+      throw "TUI did not preserve the task-first Home after narrow-terminal resize."
+    }
+    if ($resizeUpdate.Contains("Control center")) {
+      throw "TUI narrow-terminal resize regressed to the retired control-center shell."
+    }
   }
 
   if ($ExitMode -ne "error") {
@@ -288,8 +302,8 @@ process.exit(second.status ?? 1);
     if ($enter -ge 0 -or $leave -ge 0) {
       throw "Screen-reader mode must not use the alternate screen."
     }
-    if (-not $text.Contains("Overview, active, focused")) {
-      throw "Screen-reader smoke did not render the linear navigation state."
+    if (-not $text.Contains("What do you want to do?") -or -not $text.Contains("Rent a server")) {
+      throw "Screen-reader smoke did not render the task-first linear navigation state."
     }
   }
   else {
@@ -309,9 +323,6 @@ process.exit(second.status ?? 1);
   }
   if (-not $text.Contains($ExpectedText)) {
     throw "TUI smoke did not render expected text: $ExpectedText"
-  }
-  if (($ResizeToNarrow -or $Columns -lt 72) -and -not $text.Contains("compact layout")) {
-    throw "TUI did not render the compact layout in a narrow terminal."
   }
   if ($NoColor -and $text -match ([char]27 + '\[(?:3[0-9]|9[0-7])m')) {
     throw "NO_COLOR smoke observed ANSI foreground color output."

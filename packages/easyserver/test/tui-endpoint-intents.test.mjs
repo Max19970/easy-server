@@ -134,10 +134,10 @@ const intents = [
 ].map((intent) => ({ ...intent, operationName: intent.operationName ?? intent.name }));
 
 async function openConnections(view) {
-  for (let index = 0; index < 4; index += 1) {
-    view.stdin.write("\t");
-    await tick();
-  }
+  view.stdin.write("\u001b[B");
+  await tick();
+  view.stdin.write("\u001b[B");
+  await tick();
   view.stdin.write("\r");
   await tick();
 }
@@ -313,7 +313,9 @@ test("TuiApp retries cleanup by the original intent identity after desired state
   await tick();
   await tick();
   await openConnections(view);
-  view.stdin.write("X");
+  await chooseVisibleAction(view, "Remove selected saved Endpoint");
+  assert.match(view.lastFrame(), /> Cancel/);
+  view.stdin.write("\u001b[A");
   await tick();
   view.stdin.write("\r");
   await tick();
@@ -325,7 +327,8 @@ test("TuiApp retries cleanup by the original intent identity after desired state
   assert.match(view.lastFrame(), /Desired state may already be deleted/);
   assert.match(view.lastFrame(), /Retry/);
 
-  view.stdin.write("R");
+  assert.match(view.lastFrame(), /> Retry/);
+  view.stdin.write("\r");
   await tick();
   await tick();
   await tick();
@@ -370,7 +373,9 @@ test("an unrelated failed refresh cannot reuse a stale Endpoint intent cleanup R
   await tick();
   await tick();
   await openConnections(view);
-  view.stdin.write("X");
+  await chooseVisibleAction(view, "Remove selected saved Endpoint");
+  assert.match(view.lastFrame(), /> Cancel/);
+  view.stdin.write("\u001b[A");
   await tick();
   view.stdin.write("\r");
   await tick();

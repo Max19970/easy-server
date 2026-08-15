@@ -30,6 +30,26 @@ async function chooseVisibleAction(view, label, { open = true } = {}) {
   assert.fail(`Visible action not found: ${label}\n${view.lastFrame()}`);
 }
 
+async function openConnections(view) {
+  view.stdin.write("\u001b[B");
+  await tick();
+  view.stdin.write("\u001b[B");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+}
+
+async function openProviders(view) {
+  for (let index = 0; index < 3; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+}
+
 test.afterEach(() => cleanup());
 
 function readSnapshot() {
@@ -127,7 +147,7 @@ test("TUI reviews the shared sanitized Diagnostics payload before copying the ex
   assert.match(frame, /shared sanitized diagnostics model/);
   assert.match(frame, /Use Actions to copy exactly the JSON shown below/);
   assert.match(frame, /Raw logs are not the same as this sanitized payload/);
-  assert.match(frame, /Providers and Connections are available from Actions/);
+  assert.match(frame, /Providers and Connections are available from Settings & Support or the Home task list/);
   assert.match(frame, /"version": "0\.2\.0-test"/);
   assert.equal(copied, undefined);
 
@@ -169,14 +189,14 @@ test("screen-reader mode exposes the same Diagnostics payload and remediation na
   await tick();
   await openDiagnostics(view);
   assert.match(view.lastFrame(), /"version": "0\.2\.0-test"/);
-  assert.match(view.lastFrame(), /Commands: arrows move; Enter opens, selects or shows actions/);
+  assert.match(view.lastFrame(), /Commands: Up and Down move; Enter selects; Escape goes back/);
 
   await chooseVisibleAction(view, "Open Providers");
-  assert.match(view.lastFrame(), /Providers \[active\]/);
+  assert.match(view.lastFrame(), /Home › Settings & Support › Providers/);
 
   await openDiagnostics(view);
   await chooseVisibleAction(view, "Open Connections");
-  assert.match(view.lastFrame(), /Status: Opened Connections/);
+  assert.match(view.lastFrame(), /Opened Connections/);
 });
 
 test("Diagnostics collection failures stay generic and never echo the raw error", async () => {
@@ -258,12 +278,7 @@ test("connection-flow failures can open Diagnostics without discarding the guide
 
   await tick();
   await tick();
-  for (let index = 0; index < 4; index += 1) {
-    view.stdin.write("\t");
-    await tick();
-  }
-  view.stdin.write("\r");
-  await tick();
+  await openConnections(view);
   view.stdin.write("n");
   await tick();
   view.stdin.write("\r");
@@ -330,12 +345,7 @@ test("provider readiness and operation failures expose a direct privacy-safe Dia
       readStatus: "ready",
     }),
   );
-  providerView.stdin.write("\t");
-  await tick();
-  providerView.stdin.write("\t");
-  await tick();
-  providerView.stdin.write("\r");
-  await tick();
+  await openProviders(providerView);
   assert.match(providerView.lastFrame(), /fixture-provider · credentials-missing/);
 
   cleanup();
@@ -359,7 +369,7 @@ test("provider readiness and operation failures expose a direct privacy-safe Dia
   failureView.stdin.write("g");
   await tick();
   assert.equal(diagnosticRoute, "diagnostics");
-  assert.match(failureView.lastFrame(), /Diagnostics \[active\]|Diagnostics[\s\S]*\[active\]/);
+  assert.match(failureView.lastFrame(), /Home › Settings & Support › Diagnostics/);
 });
 
 test("clipboard integration passes the reviewed text unchanged and uses native platform commands", () => {
