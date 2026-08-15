@@ -53,7 +53,11 @@ The Vast.ai plugin declares `api-key` as its required credential name. Before co
 
 ## 3. Search the marketplace
 
-Vast.ai acquisition is a Provider Feature named `marketplace`. Its command-specific arguments are discoverable directly from the CLI:
+Vast.ai acquisition is a Provider Feature named `marketplace`. In the TUI, open **New instance** and start the Vast.ai rental flow. The ordinary TUI path browses live rentable offers without requiring an exact GPU-name string; choose the GPU/count you want from the returned offer table. The initial TUI filters are deliberately limited to price, reliability and verified-host preference. Exact GPU/count/result-limit filtering remains available through the advanced CLI surface.
+
+After selecting an offer, the TUI uses `ubuntu:22.04` as a usable default container image. Keep it for a normal Ubuntu server or edit the field to another Docker/OCI image reference when the workload needs a custom environment.
+
+The command-specific arguments are discoverable directly from the CLI:
 
 ```sh
 easyserver provider vastai marketplace search --help

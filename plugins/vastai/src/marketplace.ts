@@ -180,7 +180,7 @@ class VastRentInteractiveSession implements ProviderInteractiveSession {
   #state: VastRentFlowState = {
     search: { limit: 10 },
     offers: [],
-    image: "",
+    image: VAST_DEFAULT_IMAGE,
   };
 
   constructor(private readonly marketplace: MarketplaceFeature) {
@@ -268,6 +268,8 @@ class VastRentInteractiveSession implements ProviderInteractiveSession {
   }
 }
 
+const VAST_DEFAULT_IMAGE = "ubuntu:22.04";
+
 const VAST_RUNTYPES: readonly VastRuntype[] = [
   "ssh",
   "jupyter",
@@ -288,25 +290,6 @@ function vastSearchScreen(
   invalid?: VastFlowValidation,
 ): ProviderInteractiveScreen {
   const fields: ProviderInteractiveField[] = [
-    {
-      kind: "text",
-      id: "gpu",
-      label: "GPU model/name",
-      description: "Optional exact Vast.ai GPU name filter",
-      required: false,
-      ...(state.search.gpuName === undefined ? {} : { value: state.search.gpuName }),
-      ...fieldValidation("gpu", invalid),
-    },
-    {
-      kind: "integer",
-      id: "min-gpus",
-      label: "Minimum GPU count",
-      required: false,
-      ...(state.search.minGpuCount === undefined
-        ? {}
-        : { value: state.search.minGpuCount }),
-      ...fieldValidation("min-gpus", invalid),
-    },
     {
       kind: "decimal",
       id: "max-hourly",
@@ -335,20 +318,12 @@ function vastSearchScreen(
       required: false,
       value: state.search.verifiedOnly ?? false,
     },
-    {
-      kind: "integer",
-      id: "limit",
-      label: "Result limit",
-      required: false,
-      value: state.search.limit ?? 10,
-      ...fieldValidation("limit", invalid),
-    },
   ];
   return {
     kind: "form",
     id: "vast-marketplace-search",
     title: "Vast.ai marketplace search",
-    description: "Filter currently rentable offers before choosing one to rent.",
+    description: "Browse current rentable offers and choose the GPU from live results. These filters are optional; exact GPU/count filters remain available in the CLI for advanced searches.",
     fields,
     actions: [{ id: "search", label: "Search offers", kind: "primary" }],
   };
@@ -414,6 +389,7 @@ function vastRentalScreen(
         kind: "text",
         id: "image",
         label: "Container image",
+        description: `Default ${VAST_DEFAULT_IMAGE}. Keep it for a normal Ubuntu server, or edit it to another Docker/OCI image reference if you need a custom environment.`,
         required: true,
         value: state.image,
         ...fieldValidation("image", invalid),

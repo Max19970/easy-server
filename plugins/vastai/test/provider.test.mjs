@@ -533,23 +533,12 @@ test("marketplace interactive flow searches, selects, reviews and submits throug
   assert.deepEqual(
     session.initialScreen.fields.map(({ id, kind }) => ({ id, kind })),
     [
-      { id: "gpu", kind: "text" },
-      { id: "min-gpus", kind: "integer" },
       { id: "max-hourly", kind: "decimal" },
       { id: "min-reliability", kind: "decimal" },
       { id: "verified", kind: "boolean" },
-      { id: "limit", kind: "integer" },
     ],
   );
 
-  await session.dispatch(
-    { kind: "field-change", fieldId: "gpu", value: "RTX 4090" },
-    interactiveContext,
-  );
-  await session.dispatch(
-    { kind: "field-change", fieldId: "min-gpus", value: 2 },
-    interactiveContext,
-  );
   await session.dispatch(
     { kind: "field-change", fieldId: "max-hourly", value: 0.5 },
     interactiveContext,
@@ -560,10 +549,6 @@ test("marketplace interactive flow searches, selects, reviews and submits throug
   );
   await session.dispatch(
     { kind: "field-change", fieldId: "verified", value: true },
-    interactiveContext,
-  );
-  await session.dispatch(
-    { kind: "field-change", fieldId: "limit", value: 7 },
     interactiveContext,
   );
   const results = await session.dispatch(
@@ -578,13 +563,11 @@ test("marketplace interactive flow searches, selects, reviews and submits throug
   );
   assert.deepEqual(results.screen.rows.map(({ id }) => id), ["901"]);
   assert.deepEqual(JSON.parse(calls[0].init.body), {
-    gpu_name: { eq: "RTX 4090" },
-    num_gpus: { gte: 2 },
     dph_total: { lte: 0.5 },
     reliability: { gte: 0.99 },
     verified: { eq: true },
     rentable: { eq: true },
-    limit: 7,
+    limit: 10,
   });
 
   await session.dispatch(
@@ -606,11 +589,9 @@ test("marketplace interactive flow searches, selects, reviews and submits throug
       { id: "label", kind: "text" },
     ],
   );
-
-  await session.dispatch(
-    { kind: "field-change", fieldId: "image", value: "ubuntu:22.04" },
-    interactiveContext,
-  );
+  const imageField = rental.screen.fields.find((field) => field.id === "image");
+  assert.equal(imageField.value, "ubuntu:22.04");
+  assert.match(imageField.description, /default.*ubuntu:22\.04/i);
   await session.dispatch(
     { kind: "field-change", fieldId: "disk", value: 20 },
     interactiveContext,
