@@ -62,7 +62,7 @@ export function TuiOperationDrawer({
 
       {operation.instanceResults === undefined || operation.instanceResults.length === 0 ? null : (
         <Box flexDirection="column" marginTop={1}>
-          <Text bold>Instance results</Text>
+          <Text bold>Server results</Text>
           {operation.instanceResults.map((item) => (
             <Text key={item.instanceId} wrap="wrap">
               {item.instanceId} · {item.status}

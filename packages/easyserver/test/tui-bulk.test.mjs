@@ -129,13 +129,13 @@ test("TuiApp bulk destroy reviews exact targets and preserves mixed outcomes", a
   await tick();
   await tick();
   await openInstancesAndMarkBoth(view);
-  await chooseVisibleAction(view, "destroy 2 selected instances");
+  await chooseVisibleAction(view, "destroy 2 selected servers");
 
   assert.equal(runnerCalls, 1);
   assert.match(view.lastFrame(), /Confirmation required/);
-  assert.match(view.lastFrame(), /Target: 2 selected Compute Instances/);
-  assert.match(view.lastFrame(), /instance:a · provider=alpha · management=managed/);
-  assert.match(view.lastFrame(), /provider=beta · management=managed/);
+  assert.match(view.lastFrame(), /Target: 2 selected servers/);
+  assert.match(view.lastFrame(), /Affected EasyServer resources: Server #1, Server #2/);
+  assert.doesNotMatch(view.lastFrame(), /instance:a|instance:b|provider=alpha|provider=beta|remote-a|remote-b/);
   assert.match(view.lastFrame(), /Risk: destructive/);
 
   assert.match(view.lastFrame(), /> Cancel/);
@@ -149,8 +149,9 @@ test("TuiApp bulk destroy reviews exact targets and preserves mixed outcomes", a
 
   assert.equal(loaderCalls, 2);
   assert.match(view.lastFrame(), /requested=2 completed=1 failed=0 outcome-unknown=1/);
-  assert.match(view.lastFrame(), /instance:a · completed · observed=absent/);
-  assert.match(view.lastFrame(), /instance:b · outcome-unknown/);
+  assert.match(view.lastFrame(), /Server #1 · completed · observed=absent/);
+  assert.match(view.lastFrame(), /Server #2 · outcome-unknown/);
+  assert.doesNotMatch(view.lastFrame(), /instance:a|instance:b|provider=alpha|provider=beta|remote-a|remote-b/);
   assert.doesNotMatch(view.lastFrame(), /Retry/);
 
   view.stdin.write("1");
@@ -228,7 +229,7 @@ test("TuiApp bulk cancellation keeps cancelled and outcome-unknown targets disti
   await tick();
   await tick();
   await openInstancesAndMarkBoth(view);
-  await chooseVisibleAction(view, "destroy 2 selected instances");
+  await chooseVisibleAction(view, "destroy 2 selected servers");
   assert.match(view.lastFrame(), /Confirmation required/);
   assert.match(view.lastFrame(), /> Cancel/);
   view.stdin.write("\u001b[A");
@@ -246,7 +247,8 @@ test("TuiApp bulk cancellation keeps cancelled and outcome-unknown targets disti
   await tick();
 
   assert.equal(runnerCalls, 1);
-  assert.match(view.lastFrame(), /instance:a · outcome-unknown/);
-  assert.match(view.lastFrame(), /instance:b · failed · cancelled · cancelled before dispatch/);
+  assert.match(view.lastFrame(), /Server #1 · outcome-unknown/);
+  assert.match(view.lastFrame(), /Server #2 · failed · cancelled · cancelled before dispatch/);
+  assert.doesNotMatch(view.lastFrame(), /instance:a|instance:b|provider=alpha|provider=beta|remote-a|remote-b/);
   assert.doesNotMatch(view.lastFrame(), /Retry/);
 });
