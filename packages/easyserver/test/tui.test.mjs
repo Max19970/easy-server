@@ -273,6 +273,8 @@ test("screen-reader runtime stays linear and preserves task navigation and help 
   assert.match(helpUpdate, /Keyboard help/);
   assert.match(helpUpdate, /Arrow keys — move through visible choices, items and actions/);
   assert.match(helpUpdate, /Ctrl\+C — quit safely/);
+  assert.match(helpUpdate, /Local connections close safely with this TUI; background connections can remain available/);
+  assert.doesNotMatch(helpUpdate, /Endpoint|Session|Access Method|daemon/i);
 
   stdin.write("q");
   await app.waitUntilExit();
@@ -460,7 +462,7 @@ test("read-only surfaces make zero-provider and zero-instance states actionable"
 
   await openServersRoute(view);
   assert.match(view.lastFrame(), /Home › Servers/);
-  assert.match(view.lastFrame(), /No compute instances yet/);
+  assert.match(view.lastFrame(), /No servers yet/);
   assert.match(view.lastFrame(), /Configure a provider first/);
 
   await openProvidersRoute(view);
@@ -548,6 +550,228 @@ test("installed provider picker keeps focus visible inside a narrow bounded view
   assert.match(view.lastFrame(), /> Provider 30/);
   assert.match(view.lastFrame(), /↑ \d+ more/);
   assert.doesNotMatch(view.lastFrame(), /↓ \d+ more/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+});
+
+test("server list keeps the focused server visible inside a narrow bounded viewport", async () => {
+  const servers = Array.from({ length: 30 }, (_, index) => ({
+    id: `instance:viewport-${index + 1}`,
+    name: `Server ${String(index + 1).padStart(2, "0")}`,
+    providerId: "fixture",
+    providerExternalId: `remote-${index + 1}`,
+    management: "managed",
+    freshness: "fresh",
+    state: index % 2 === 0 ? "running" : "stopped",
+    availableActions: [],
+  }));
+  const view = render(
+    shell({
+      width: 60,
+      height: 16,
+      readSnapshot: readSnapshot({
+        instances: {
+          status: "ready",
+          complete: true,
+          providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+          items: servers,
+        },
+      }),
+      readStatus: "ready",
+    }),
+  );
+
+  await openServersRoute(view);
+  assert.match(view.lastFrame(), /> Server 01 · running/);
+  assert.match(view.lastFrame(), /↓ \d+ more servers/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+
+  for (let index = 0; index < 15; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> Server 16 · stopped/);
+  assert.match(view.lastFrame(), /↑ \d+ more servers/);
+  assert.match(view.lastFrame(), /↓ \d+ more servers/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+
+  for (let index = 15; index < 29; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> Server 30 · stopped/);
+  assert.match(view.lastFrame(), /↑ \d+ more servers/);
+  assert.doesNotMatch(view.lastFrame(), /↓ \d+ more servers/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+});
+
+test("degraded server notice stays secondary without overflowing the narrow server viewport", async () => {
+  const servers = Array.from({ length: 30 }, (_, index) => ({
+    id: `instance:degraded-${index + 1}`,
+    name: `Degraded ${String(index + 1).padStart(2, "0")}`,
+    providerId: "healthy",
+    providerExternalId: `remote-degraded-${index + 1}`,
+    management: "managed",
+    freshness: "fresh",
+    state: "running",
+    availableActions: [],
+  }));
+  const view = render(
+    shell({
+      width: 60,
+      height: 16,
+      readSnapshot: readSnapshot({
+        instances: {
+          status: "ready",
+          complete: false,
+          providerOutcomes: [
+            { providerId: "healthy", status: "fresh" },
+            {
+              providerId: "offline-provider",
+              status: "failed",
+              error: {
+                code: "provider-unavailable",
+                message: "Provider offline inventory refresh failed with deliberately long detail",
+              },
+            },
+          ],
+          items: servers,
+        },
+      }),
+      readStatus: "ready",
+    }),
+  );
+
+  await openServersRoute(view);
+  assert.match(view.lastFrame(), /Some providers are unavailable/);
+  assert.match(view.lastFrame(), /offline-provider · provider-unavailable/);
+  assert.match(view.lastFrame(), /> Degraded 01 · running/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+
+  for (let index = 0; index < 15; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> Degraded 16 · running/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+});
+
+test("new local connection server picker stays bounded with a large inventory", async () => {
+  const servers = Array.from({ length: 30 }, (_, index) => ({
+    id: `instance:picker-${index + 1}`,
+    name: `Picker ${String(index + 1).padStart(2, "0")}`,
+    providerId: "fixture",
+    providerExternalId: `remote-picker-${index + 1}`,
+    management: "managed",
+    freshness: "fresh",
+    state: "running",
+    availableActions: [],
+  }));
+  const view = render(
+    shell({
+      width: 60,
+      height: 16,
+      readSnapshot: readSnapshot({
+        instances: {
+          status: "ready",
+          complete: true,
+          providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+          items: servers,
+        },
+      }),
+      readStatus: "ready",
+      async onListForegroundAccessMethods() {
+        return [{ id: "ssh", kind: "ssh", mode: "tcp-forward" }];
+      },
+      async onOpenForegroundConnection() {
+        assert.fail("connection should not open while choosing a server");
+      },
+    }),
+  );
+
+  await openConnectionsRoute(view);
+  await chooseVisibleAction(view, "New local connection");
+  assert.match(view.lastFrame(), /Choose server/);
+  assert.match(view.lastFrame(), /> Picker 01 · running/);
+  assert.match(view.lastFrame(), /↓ \d+ more servers/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+
+  for (let index = 0; index < 15; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> Picker 16 · running/);
+  assert.match(view.lastFrame(), /↑ \d+ more servers/);
+  assert.match(view.lastFrame(), /↓ \d+ more servers/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+
+  for (let index = 15; index < 29; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> Picker 30 · running/);
+  assert.match(view.lastFrame(), /↑ \d+ more servers/);
+  assert.doesNotMatch(view.lastFrame(), /↓ \d+ more servers/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+});
+
+test("local connection list keeps focus visible inside a narrow bounded viewport", async () => {
+  const server = {
+    id: "instance:viewport-server",
+    name: "Viewport server",
+    providerId: "fixture",
+    providerExternalId: "remote-viewport",
+    management: "managed",
+    freshness: "fresh",
+    state: "running",
+    availableActions: [],
+  };
+  const connections = Array.from({ length: 30 }, (_, index) => ({
+    id: `foreground:viewport-${index + 1}`,
+    instanceId: server.id,
+    remoteHost: "127.0.0.1",
+    remotePort: 8000 + index,
+    endpoint: { host: "127.0.0.1", port: 40000 + index },
+    accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+    state: "live",
+  }));
+  const view = render(
+    shell({
+      width: 60,
+      height: 16,
+      readSnapshot: readSnapshot({
+        instances: {
+          status: "ready",
+          complete: true,
+          providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+          items: [server],
+        },
+      }),
+      readStatus: "ready",
+      foregroundConnections: connections,
+    }),
+  );
+
+  await openConnectionsRoute(view);
+  assert.match(view.lastFrame(), /> 127\.0\.0\.1:40000 → Viewport server:8000/);
+  assert.match(view.lastFrame(), /↓ \d+ more connections/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+
+  for (let index = 0; index < 15; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> 127\.0\.0\.1:40015 → Viewport server:8015/);
+  assert.match(view.lastFrame(), /↑ \d+ more connections/);
+  assert.match(view.lastFrame(), /↓ \d+ more connections/);
+  assert.ok(view.lastFrame().split("\n").length <= 16);
+
+  for (let index = 15; index < 29; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> 127\.0\.0\.1:40029 → Viewport server:8029/);
+  assert.match(view.lastFrame(), /↑ \d+ more connections/);
+  assert.doesNotMatch(view.lastFrame(), /↓ \d+ more connections/);
   assert.ok(view.lastFrame().split("\n").length <= 16);
 });
 
@@ -1360,13 +1584,13 @@ test("TuiApp runs a generic provider workflow through host confirmation and navi
   await tick();
   await tick();
   assert.match(view.lastFrame(), /Home › Servers/);
-  assert.match(view.lastFrame(), /> instance:nebula-42 · nebula · running/);
+  assert.match(view.lastFrame(), /> Server · running/);
   assert.doesNotMatch(view.lastFrame(), /EasyServer ID: instance:nebula-42/);
   assert.equal(closeCalls, 0);
 
   view.stdin.write("\u001b");
   await flushEscape();
-  await chooseVisibleAction(view, "Show instance details");
+  await chooseVisibleAction(view, "Show technical details");
   assert.match(view.lastFrame(), /EasyServer ID: instance:nebula-42/);
 });
 
@@ -1446,11 +1670,11 @@ test("degraded provider state remains visible while healthy instance inventory s
   await openServersRoute(view);
   assert.match(view.lastFrame(), /Some providers are unavailable/);
   assert.match(view.lastFrame(), /offline.*provider-unavailable/);
-  assert.match(view.lastFrame(), /> Healthy GPU · healthy · running/);
+  assert.match(view.lastFrame(), /> Healthy GPU · running/);
   assert.doesNotMatch(view.lastFrame(), /Normalized state: running/);
-  await chooseVisibleAction(view, "Show instance details");
+  await chooseVisibleAction(view, "Show technical details");
   assert.match(view.lastFrame(), /Normalized state: running/);
-  assert.match(view.lastFrame(), /Available actions: none/);
+  assert.match(view.lastFrame(), /Available lifecycle actions: none/);
 
   await openProvidersRoute(view);
   assert.match(view.lastFrame(), /Healthy Provider · ready/);
@@ -1496,13 +1720,13 @@ test("stale retained instance state is visibly distinct from a fresh provider ob
 
   await openServersRoute(view);
 
-  assert.match(view.lastFrame(), /> Retained GPU · offline · running · stale/);
+  assert.match(view.lastFrame(), /> Retained GPU · running · needs refresh/);
   assert.doesNotMatch(view.lastFrame(), /Last observed:/);
-  await chooseVisibleAction(view, "Show instance details");
+  await chooseVisibleAction(view, "Show technical details");
   assert.match(view.lastFrame(), /Freshness: stale/);
   assert.match(view.lastFrame(), /Last observed: 2026-08-12T10:00:00\.000Z/);
   assert.match(view.lastFrame(), /retained last-known state/);
-  assert.match(view.lastFrame(), /Available actions: none/);
+  assert.match(view.lastFrame(), /Available lifecycle actions: none/);
   assert.match(view.lastFrame(), /stale or unobserved state is\s+read-only/);
 });
 
@@ -1540,8 +1764,8 @@ test("empty instance guidance reflects configured but degraded providers", async
   const view = render(shell({ width: 100, readSnapshot: snapshot, readStatus: "ready" }));
 
   await openServersRoute(view);
-  assert.match(view.lastFrame(), /No instances reported by available providers/i);
-  assert.match(view.lastFrame(), /unavailable providers may have\s+additional instances/i);
+  assert.match(view.lastFrame(), /No servers were reported by available providers/i);
+  assert.match(view.lastFrame(), /unavailable providers may have\s+additional servers/i);
   assert.doesNotMatch(view.lastFrame(), /because provider inventory is incomplete/i);
   assert.doesNotMatch(view.lastFrame(), /Configure a provider first/);
 
@@ -1585,17 +1809,17 @@ test("instance actions come only from provider-declared availableActions", async
   const view = render(shell({ width: 100, readSnapshot: snapshot, readStatus: "ready" }));
 
   await openServersRoute(view);
-  assert.match(view.lastFrame(), /> instance:a · fixture · running/);
-  assert.doesNotMatch(view.lastFrame(), /Available actions:/);
-  await chooseVisibleAction(view, "Show instance details");
-  assert.match(view.lastFrame(), /Available actions: none/);
+  assert.match(view.lastFrame(), /> Server #1 · running/);
+  assert.doesNotMatch(view.lastFrame(), /Available lifecycle actions:/);
+  await chooseVisibleAction(view, "Show technical details");
+  assert.match(view.lastFrame(), /Available lifecycle actions: none/);
 
   view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /> instance:b · fixture · running/);
-  assert.doesNotMatch(view.lastFrame(), /Available actions:/);
-  await chooseVisibleAction(view, "Show instance details");
-  assert.match(view.lastFrame(), /Available actions: instance\.stop, instance\.destroy/);
+  assert.match(view.lastFrame(), /> Server #2 · running/);
+  assert.doesNotMatch(view.lastFrame(), /Available lifecycle actions:/);
+  await chooseVisibleAction(view, "Show technical details");
+  assert.match(view.lastFrame(), /Available lifecycle actions: Stop server, Destroy server/);
 });
 
 test("Instances multi-select preserves the exact target set and uses host bulk action semantics", async () => {
@@ -1649,10 +1873,11 @@ test("Instances multi-select preserves the exact target set and uses host bulk a
   view.stdin.write(" ");
   await tick();
 
-  assert.match(view.lastFrame(), /Bulk targets \(2\)/);
-  assert.match(view.lastFrame(), /instance:a · provider=alpha · freshness=fresh/);
-  assert.match(view.lastFrame(), /instance:b · provider=beta · freshness=fresh/);
-  await chooseVisibleAction(view, "stop 2 selected instances");
+  assert.match(view.lastFrame(), /Selected servers \(2\)/);
+  assert.match(view.lastFrame(), /Server #1 · running/);
+  assert.match(view.lastFrame(), /Server #2 · running/);
+  assert.doesNotMatch(view.lastFrame(), /instance:a|instance:b|provider=alpha|provider=beta|remote-a|remote-b/);
+  await chooseVisibleAction(view, "stop 2 selected servers");
   assert.deepEqual(mutations, [
     {
       instanceIds: ["instance:a", "instance:b"],
@@ -1661,12 +1886,83 @@ test("Instances multi-select preserves the exact target set and uses host bulk a
   ]);
 
   await chooseVisibleAction(view, "Clear bulk selection");
-  assert.doesNotMatch(view.lastFrame(), /Bulk targets \(2\)/);
+  assert.doesNotMatch(view.lastFrame(), /Selected servers \(2\)/);
+});
+
+test("bulk mutation failure drawer hides canonical and provider identity", async () => {
+  let received;
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () =>
+        readSnapshot({
+          instances: {
+            status: "ready",
+            complete: true,
+            providerOutcomes: [
+              { providerId: "alpha", status: "fresh" },
+              { providerId: "beta", status: "fresh" },
+            ],
+            items: [
+              {
+                id: "instance:a",
+                name: "Alpha server",
+                providerId: "alpha",
+                providerExternalId: "remote-a",
+                management: "managed",
+                freshness: "fresh",
+                state: "running",
+                availableActions: ["instance.stop"],
+              },
+              {
+                id: "instance:b",
+                name: "Beta server",
+                providerId: "beta",
+                providerExternalId: "remote-b",
+                management: "managed",
+                freshness: "fresh",
+                state: "running",
+                availableActions: ["instance.stop"],
+              },
+            ],
+          },
+        }),
+      async bulkInstanceMutationRunner(mutation) {
+        received = mutation;
+        throw normalizedError(
+          "provider-unavailable",
+          "alpha / remote-a / instance:a / beta / remote-b / instance:b",
+        );
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openServersRoute(view);
+  view.stdin.write(" ");
+  await tick();
+  view.stdin.write("\u001b[B");
+  await tick();
+  view.stdin.write(" ");
+  await tick();
+  await chooseVisibleAction(view, "stop 2 selected servers");
+  await tick();
+  await tick();
+
+  assert.deepEqual(received, {
+    instanceIds: ["instance:a", "instance:b"],
+    action: "instance.stop",
+  });
+  assert.match(view.lastFrame(), /Could not reach one or more selected servers/);
+  assert.doesNotMatch(view.lastFrame(), /instance:a|instance:b|remote-a|remote-b|alpha \/|beta \/|provider=alpha|provider=beta/);
 });
 
 test("instance selection is preserved by canonical ID across reorder and narrow layout", async () => {
   const instanceA = {
     id: "instance:a",
+    name: "Server A",
     providerId: "fixture",
     providerExternalId: "remote-a",
     management: "managed",
@@ -1677,6 +1973,7 @@ test("instance selection is preserved by canonical ID across reorder and narrow 
   };
   const instanceB = {
     id: "instance:b",
+    name: "Server B",
     providerId: "fixture",
     providerExternalId: "remote-b",
     management: "discovered",
@@ -1706,13 +2003,13 @@ test("instance selection is preserved by canonical ID across reorder and narrow 
   await openServersRoute(view);
   view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /> instance:b · fixture · stopped/);
+  assert.match(view.lastFrame(), /> Server B · stopped/);
 
   view.rerender(shell({ width: 60, readSnapshot: reordered, readStatus: "ready" }));
   await tick();
   assert.match(view.lastFrame(), /Home › Servers/);
-  assert.match(view.lastFrame(), /> instance:b · fixture · stopped/);
-  await chooseVisibleAction(view, "Show instance details");
+  assert.match(view.lastFrame(), /> Server B · stopped/);
+  await chooseVisibleAction(view, "Show technical details");
   assert.match(view.lastFrame(), /Provider: fixture/);
   assert.match(view.lastFrame(), /Management: discovered/);
   assert.match(view.lastFrame(), /Normalized state: stopped/);
@@ -1728,6 +2025,7 @@ test("discovered instances expose adoption and reversible provider actions but n
       items: [
         {
           id: "instance:discovered",
+          name: "Imported server",
           providerId: "fixture",
           providerExternalId: "remote-discovered",
           management: "discovered",
@@ -1752,16 +2050,16 @@ test("discovered instances expose adoption and reversible provider actions but n
 
   await openServersRoute(view);
 
-  assert.match(view.lastFrame(), /> instance:discovered · fixture · running/);
+  assert.match(view.lastFrame(), /> Imported server · running/);
   view.stdin.write("\r");
   await tick();
   assert.match(view.lastFrame(), /Adopt for EasyServer management/);
-  assert.match(view.lastFrame(), /stop instance/);
-  assert.doesNotMatch(view.lastFrame(), /destroy instance/);
+  assert.match(view.lastFrame(), /Stop server/);
+  assert.doesNotMatch(view.lastFrame(), /Destroy server/);
   view.stdin.write("\u001b");
   await flushEscape();
 
-  await chooseVisibleAction(view, "stop instance");
+  await chooseVisibleAction(view, "Stop server");
   await chooseVisibleAction(view, "Adopt for EasyServer management");
   assert.deepEqual(mutations, [
     {
@@ -1778,6 +2076,7 @@ test("disappearing selected instance never silently retargets lifecycle input", 
   const onInstanceMutation = (mutation) => mutations.push(mutation);
   const instanceA = {
     id: "instance:a",
+    name: "Server A",
     providerId: "fixture",
     providerExternalId: "remote-a",
     management: "managed",
@@ -1789,6 +2088,7 @@ test("disappearing selected instance never silently retargets lifecycle input", 
   const instanceB = {
     ...instanceA,
     id: "instance:b",
+    name: "Server B",
     providerExternalId: "remote-b",
   };
   const first = readSnapshot({
@@ -1819,7 +2119,7 @@ test("disappearing selected instance never silently retargets lifecycle input", 
   await openServersRoute(view);
   view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /> instance:b · fixture · stopped/);
+  assert.match(view.lastFrame(), /> Server B · stopped/);
 
   view.rerender(
     shell({
@@ -1830,9 +2130,9 @@ test("disappearing selected instance never silently retargets lifecycle input", 
     }),
   );
   await tick();
-  assert.match(view.lastFrame(), /Selected instance is no longer visible/);
-  assert.match(view.lastFrame(), /instance:b disappeared from the refreshed inventory/);
-  assert.match(view.lastFrame(), /No action target has\s+been changed/);
+  assert.match(view.lastFrame(), /Selected server is no longer visible/);
+  assert.match(view.lastFrame(), /previously selected server disappeared from the refreshed inventory/);
+  assert.match(view.lastFrame(), /No action target was\s+changed/);
 
   view.stdin.write("1");
   await tick();
@@ -1840,8 +2140,8 @@ test("disappearing selected instance never silently retargets lifecycle input", 
 
   view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /> instance:a · fixture · stopped/);
-  await chooseVisibleAction(view, "start instance");
+  assert.match(view.lastFrame(), /> Server A · stopped/);
+  await chooseVisibleAction(view, "Start server");
   assert.deepEqual(mutations, [
     { kind: "action", instanceId: "instance:a", action: "instance.start" },
   ]);
@@ -1924,17 +2224,18 @@ test("TuiApp destroy review shows provenance and connection consequences before 
   await tick();
   await tick();
   await openServersRoute(view);
-  await chooseVisibleAction(view, "destroy instance");
+  await chooseVisibleAction(view, "Destroy server");
 
   assert.equal(runnerCalls, 1);
   assert.match(view.lastFrame(), /Confirmation required/);
-  assert.match(
+  assert.match(view.lastFrame(), /Target: Server/);
+  assert.match(view.lastFrame(), /1 background connection/);
+  assert.match(view.lastFrame(), /1 saved background connection definition/);
+  assert.match(view.lastFrame(), /permanently destroys the selected server/);
+  assert.doesNotMatch(
     view.lastFrame(),
-    /Target: instance:managed · provider=fixture · management=managed/,
+    /instance:managed|provider=fixture|Session session:active|Endpoint intent comfy|Access Method|daemon/i,
   );
-  assert.match(view.lastFrame(), /Session session:active/);
-  assert.match(view.lastFrame(), /Endpoint intent comfy/);
-  assert.match(view.lastFrame(), /will close 1 active session and 1 Endpoint intent/);
 
   assert.match(view.lastFrame(), /> Cancel/);
   view.stdin.write("\u001b[A");
@@ -1943,16 +2244,16 @@ test("TuiApp destroy review shows provenance and connection consequences before 
   await tick();
   await tick();
   assert.match(view.lastFrame(), /observing/);
-  assert.match(view.lastFrame(), /Observing instance:managed until provider state converges/);
+  assert.match(view.lastFrame(), /Observing Server until its state converges/);
 
   finishObservation();
   await tick();
   await tick();
   await tick();
   assert.equal(loaderCalls, 2);
-  assert.match(view.lastFrame(), /Destroy instance completed/);
+  assert.match(view.lastFrame(), /Destroy server completed/);
   assert.match(view.lastFrame(), /observed state=absent/);
-  assert.match(view.lastFrame(), /No compute instances yet/);
+  assert.match(view.lastFrame(), /No servers yet/);
 });
 
 test("TuiApp outcome-unknown offers observation refresh without redispatching the instance mutation", async () => {
@@ -1999,12 +2300,12 @@ test("TuiApp outcome-unknown offers observation refresh without redispatching th
   await tick();
   await tick();
   await openServersRoute(view);
-  await chooseVisibleAction(view, "start instance");
+  await chooseVisibleAction(view, "Start server");
   await tick();
   await tick();
 
   assert.equal(runnerCalls, 1);
-  assert.match(view.lastFrame(), /Start instance: outcome unknown/);
+  assert.match(view.lastFrame(), /Start server: outcome unknown/);
   assert.match(view.lastFrame(), /Observe state/);
   assert.match(view.lastFrame(), /Refresh/);
   assert.doesNotMatch(view.lastFrame(), /Retry/);
@@ -2017,7 +2318,7 @@ test("TuiApp outcome-unknown offers observation refresh without redispatching th
   assert.doesNotMatch(view.lastFrame(), /outcome unknown/);
 });
 
-test("TuiApp guides foreground Endpoint creation with visible deterministic Access Method and loopback lifetime", async () => {
+test("a server-scoped Connect flow opens and closes a local connection without internal connection vocabulary", async () => {
   let connections = [];
   let openedRequest;
   let closedId;
@@ -2063,36 +2364,27 @@ test("TuiApp guides foreground Endpoint creation with visible deterministic Acce
 
   await tick();
   await tick();
-  await openConnectionsRoute(view);
-  assert.match(view.lastFrame(), /Opened Connections\./);
-  assert.match(view.lastFrame(), /TUI-owned foreground Endpoints/);
+  await openServersRoute(view);
+  await chooseVisibleAction(view, "Connect");
+  assert.match(view.lastFrame(), /Home › Connections/);
+  assert.match(view.lastFrame(), /Connect to server/);
+  assert.match(view.lastFrame(), /Service port on the server/);
+  assert.doesNotMatch(view.lastFrame(), /Access Method|Endpoint|daemon|Session/);
 
-  await chooseVisibleAction(view, "New foreground Endpoint");
-  assert.match(view.lastFrame(), /Choose instance/);
-  assert.match(view.lastFrame(), /> instance:connect/);
-
-  view.stdin.write("\r");
-  await tick();
-  assert.match(view.lastFrame(), /Remote host/);
-  assert.match(view.lastFrame(), /Host: 127\.0\.0\.1/);
-
-  view.stdin.write("\r");
-  await tick();
   await typeText(view, "8188");
   view.stdin.write("\r");
   await tick();
   await tick();
-  assert.match(view.lastFrame(), /Access Method/);
-  assert.match(view.lastFrame(), /> ssh-default .* default/);
-  assert.match(view.lastFrame(), /selected ID is\s+passed explicitly/);
+  assert.match(view.lastFrame(), /Local port on this computer/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:automatic/);
+  assert.doesNotMatch(view.lastFrame(), /ssh-default|Access Method/);
 
   view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /Local Endpoint: 127\.0\.0\.1:dynamic/);
-  view.stdin.write("\r");
-  await tick();
-  assert.match(view.lastFrame(), /Review foreground Endpoint/);
-  assert.match(view.lastFrame(), /Lifetime: closes when this TUI exits/);
+  assert.match(view.lastFrame(), /Review local connection/);
+  assert.match(view.lastFrame(), /Service port: 8188/);
+  assert.match(view.lastFrame(), /Lifetime: available while this TUI is open/);
+  assert.doesNotMatch(view.lastFrame(), /instance:connect|fixture|ssh-default|Access Method|Endpoint|daemon|Session/);
 
   view.stdin.write("\r");
   await tick();
@@ -2103,19 +2395,361 @@ test("TuiApp guides foreground Endpoint creation with visible deterministic Acce
     remotePort: 8188,
     accessMethodId: "ssh-default",
   });
-  assert.match(view.lastFrame(), /127\.0\.0\.1:40123 · live/);
-  assert.match(
-    view.lastFrame(),
-    /Foreground Endpoints belong to this TUI; persistent Endpoints belong to the[\s\S]*daemon/,
-  );
+  assert.match(view.lastFrame(), /127\.0\.0\.1:40123 → Server:8188/);
+  assert.doesNotMatch(view.lastFrame(), /Access Method|Endpoint|daemon|Session/);
 
-  await chooseVisibleAction(view, "Close selected foreground Endpoint");
+  await chooseVisibleAction(view, "Close local connection");
   await tick();
   assert.equal(closedId, "foreground:fixture");
   assert.match(view.lastFrame(), /None open/);
 });
 
-test("foreground Endpoint port conflicts preserve the guided form values for correction", async () => {
+test("delayed ordinary Connect working drawers keep canonical identity hidden", async () => {
+  let resolveMethods;
+  let resolveOpen;
+  const method = { id: "ssh-default", kind: "ssh", mode: "tcp-forward" };
+  const methodsGate = new Promise((resolve) => {
+    resolveMethods = resolve;
+  });
+  const openGate = new Promise((resolve) => {
+    resolveOpen = resolve;
+  });
+  const operations = {
+    list() {
+      return [];
+    },
+    async listAccessMethods() {
+      return methodsGate;
+    },
+    async open(request) {
+      await openGate;
+      return {
+        id: "foreground:delayed",
+        instanceId: request.instanceId,
+        remoteHost: request.remoteHost,
+        remotePort: request.remotePort,
+        endpoint: { host: "127.0.0.1", port: 40125 },
+        accessMethod: method,
+        state: "live",
+      };
+    },
+    async close() {},
+    async closeAll() {},
+  };
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () => foregroundConnectionSnapshot(),
+      foregroundConnectionOperations: operations,
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openServersRoute(view);
+  await chooseVisibleAction(view, "Connect");
+  await typeText(view, "8188");
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Check connection method/);
+  assert.match(view.lastFrame(), /Checking supported local access for Server/);
+  assert.doesNotMatch(view.lastFrame(), /instance:connect|fixture|ssh-default|Access Method|Endpoint|daemon|Session/);
+
+  resolveMethods([method]);
+  await tick();
+  await tick();
+  assert.match(view.lastFrame(), /Local port on this computer/);
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Review local connection/);
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Open local connection/);
+  assert.match(view.lastFrame(), /Server · service port 8188/);
+  assert.doesNotMatch(view.lastFrame(), /instance:connect|fixture|ssh-default|Access Method|Endpoint|daemon|Session/);
+
+  resolveOpen();
+  await tick();
+  await tick();
+});
+
+test("ordinary connection and lifecycle failure drawers hide canonical server identity", async () => {
+  const connectionOperations = {
+    list() {
+      return [];
+    },
+    async listAccessMethods() {
+      throw normalizedError(
+        "provider-unavailable",
+        "Provider is not available: fixture / remote-connect / instance:connect",
+      );
+    },
+    async open() {
+      assert.fail("open is not expected after connection-method discovery fails");
+    },
+    async close() {},
+    async closeAll() {},
+  };
+  const connectionView = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () => foregroundConnectionSnapshot(),
+      foregroundConnectionOperations: connectionOperations,
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openServersRoute(connectionView);
+  await chooseVisibleAction(connectionView, "Connect");
+  await typeText(connectionView, "8188");
+  connectionView.stdin.write("\r");
+  await tick();
+  await tick();
+  assert.match(connectionView.lastFrame(), /Could not reach Server/);
+  assert.doesNotMatch(connectionView.lastFrame(), /instance:connect|remote-connect|fixture|Compute Instance|Access Method|Endpoint|daemon|Session/);
+
+  const lifecycleView = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () =>
+        readSnapshot({
+          instances: {
+            status: "ready",
+            complete: true,
+            providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+            items: [
+              {
+                id: "instance:secret-123",
+                providerId: "fixture",
+                providerExternalId: "provider-secret-456",
+                management: "managed",
+                freshness: "fresh",
+                state: "stopped",
+                availableActions: ["instance.start"],
+              },
+            ],
+          },
+        }),
+      async instanceMutationRunner() {
+        throw normalizedError(
+          "not-found",
+          "Compute Instance not found: instance:secret-123",
+        );
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openServersRoute(lifecycleView);
+  await chooseVisibleAction(lifecycleView, "Start server");
+  await tick();
+  await tick();
+  assert.match(lifecycleView.lastFrame(), /Server is no longer available/);
+  assert.doesNotMatch(lifecycleView.lastFrame(), /instance:secret-123|provider-secret-456|Compute Instance/);
+});
+
+test("closing ordinary local and background connections keeps internal identity out of drawers", async () => {
+  const foregroundConnection = {
+    id: "foreground:internal-secret",
+    instanceId: "instance:close-secret",
+    remoteHost: "127.0.0.1",
+    remotePort: 8188,
+    endpoint: { host: "127.0.0.1", port: 40130 },
+    accessMethod: { id: "ssh-secret", kind: "ssh", mode: "tcp-forward" },
+    state: "live",
+  };
+  const foregroundView = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () =>
+        readSnapshot({
+          instances: {
+            status: "ready",
+            complete: true,
+            providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+            items: [
+              {
+                id: "instance:close-secret",
+                name: "Close target",
+                providerId: "fixture",
+                providerExternalId: "provider-secret",
+                management: "managed",
+                freshness: "fresh",
+                state: "running",
+                availableActions: [],
+              },
+            ],
+          },
+        }),
+      foregroundConnectionOperations: {
+        list() {
+          return [foregroundConnection];
+        },
+        async listAccessMethods() {
+          return [];
+        },
+        async open() {
+          assert.fail("open is not expected");
+        },
+        async close() {
+          throw normalizedError(
+            "provider-unavailable",
+            "fixture / provider-secret / instance:close-secret / ssh-secret",
+          );
+        },
+        async closeAll() {},
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openConnectionsRoute(foregroundView);
+  await chooseVisibleAction(foregroundView, "Close local connection");
+  await tick();
+  await tick();
+  assert.match(foregroundView.lastFrame(), /Could not reach Close target/);
+  assert.doesNotMatch(
+    foregroundView.lastFrame(),
+    /foreground:internal-secret|instance:close-secret|provider-secret|ssh-secret|fixture/,
+  );
+
+  let finishBackgroundClose;
+  const closeGate = new Promise((resolve) => {
+    finishBackgroundClose = resolve;
+  });
+  const backgroundSession = {
+    id: "session:internal-secret",
+    state: "live",
+    instanceId: "instance:background-secret",
+    remoteHost: "127.0.0.1",
+    remotePort: 9000,
+    accessMethod: { id: "ssh-background-secret", kind: "ssh", mode: "tcp-forward" },
+    endpoint: { host: "127.0.0.1", port: 49000 },
+  };
+  const backgroundView = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () =>
+        readSnapshot({
+          instances: {
+            status: "ready",
+            complete: true,
+            providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+            items: [
+              {
+                id: "instance:background-secret",
+                name: "Background target",
+                providerId: "fixture",
+                providerExternalId: "background-provider-secret",
+                management: "managed",
+                freshness: "fresh",
+                state: "running",
+                availableActions: [],
+              },
+            ],
+          },
+          daemon: {
+            status: "running",
+            sessions: {
+              status: "ready",
+              total: 1,
+              live: 1,
+              closing: 0,
+              failed: 0,
+              items: [backgroundSession],
+            },
+            endpointIntents: {
+              status: "ready",
+              total: 0,
+              live: 0,
+              starting: 0,
+              error: 0,
+              disabled: 0,
+              items: [],
+            },
+          },
+        }),
+      daemonOperations: {
+        async closeSession() {
+          await closeGate;
+        },
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openConnectionsRoute(backgroundView);
+  await chooseVisibleAction(backgroundView, "Close local connection");
+  await tick();
+  assert.match(backgroundView.lastFrame(), /Closing the background connection for Background target/);
+  assert.doesNotMatch(
+    backgroundView.lastFrame(),
+    /session:internal-secret|instance:background-secret|background-provider-secret|ssh-background-secret/,
+  );
+  finishBackgroundClose();
+  await tick();
+  await tick();
+});
+
+test("screen-reader server Connect stays linear without exposing internal connection identity", async () => {
+  const method = { id: "ssh-default", kind: "ssh", mode: "tcp-forward" };
+  const view = render(
+    shell({
+      width: 60,
+      height: 20,
+      screenReader: true,
+      readSnapshot: foregroundConnectionSnapshot(),
+      readStatus: "ready",
+      async onListForegroundAccessMethods(instanceId) {
+        assert.equal(instanceId, "instance:connect");
+        return [method];
+      },
+      async onOpenForegroundConnection(request) {
+        assert.equal(request.accessMethodId, "ssh-default");
+        return {
+          id: "foreground:screen-reader",
+          instanceId: request.instanceId,
+          remoteHost: request.remoteHost,
+          remotePort: request.remotePort,
+          endpoint: { host: "127.0.0.1", port: 40124 },
+          accessMethod: method,
+          state: "live",
+        };
+      },
+      async onCloseForegroundConnection() {
+        return true;
+      },
+    }),
+  );
+
+  await openServersRoute(view);
+  await chooseVisibleAction(view, "Connect");
+  assert.match(view.lastFrame(), /Service port on the server/);
+  assert.match(view.lastFrame(), /Commands: Up and Down move; Enter selects; Escape goes back/);
+  assert.doesNotMatch(view.lastFrame(), /instance:connect|fixture|ssh-default|Access Method|Endpoint|daemon|Session/);
+
+  await typeText(view, "8188");
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  assert.match(view.lastFrame(), /Local port on this computer/);
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Review local connection/);
+  assert.match(view.lastFrame(), /Server: Server/);
+  assert.doesNotMatch(view.lastFrame(), /instance:connect|fixture|ssh-default|Access Method|Endpoint|daemon|Session/);
+});
+
+test("local connection port conflicts preserve the guided values for correction", async () => {
   const method = { id: "ssh", kind: "ssh", mode: "tcp-forward" };
   const operations = {
     list() {
@@ -2145,40 +2779,39 @@ test("foreground Endpoint port conflicts preserve the guided form values for cor
   await tick();
   await tick();
   await openConnectionsRoute(view);
-  view.stdin.write("n");
-  await tick();
+  await chooseVisibleAction(view, "New local connection");
+  assert.match(view.lastFrame(), /Choose server/);
   view.stdin.write("\r");
   await tick();
-  view.stdin.write("\r");
-  await tick();
+  assert.match(view.lastFrame(), /Service port on the server/);
   await typeText(view, "8188");
   view.stdin.write("\r");
   await tick();
   await tick();
-  view.stdin.write("\r");
-  await tick();
+  assert.match(view.lastFrame(), /Local port on this computer/);
   await typeText(view, "48188");
   view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /Local binding: 127\.0\.0\.1:48188/);
+  assert.match(view.lastFrame(), /Local address: 127\.0\.0\.1:48188/);
 
   view.stdin.write("\r");
   await tick();
   await tick();
-  assert.match(view.lastFrame(), /Open foreground Endpoint: failed/);
-  assert.match(view.lastFrame(), /Local Endpoint port is already in use: 48188/);
-  assert.match(view.lastFrame(), /Review foreground Endpoint/);
-  assert.match(view.lastFrame(), /Remote target: 127\.0\.0\.1:8188/);
-  assert.match(view.lastFrame(), /Local binding: 127\.0\.0\.1:48188/);
+  assert.match(view.lastFrame(), /Open local connection: failed/);
+  assert.match(view.lastFrame(), /Local connection port is already in use: 48188/);
+  assert.doesNotMatch(view.lastFrame(), /Endpoint|Access Method|Connection Session/);
+  assert.match(view.lastFrame(), /Review local connection/);
+  assert.match(view.lastFrame(), /Service port: 8188/);
+  assert.match(view.lastFrame(), /Local address: 127\.0\.0\.1:48188/);
   assert.doesNotMatch(view.lastFrame(), /Retry/);
 
   view.stdin.write("x");
   await tick();
-  assert.doesNotMatch(view.lastFrame(), /Open foreground Endpoint: failed/);
-  assert.match(view.lastFrame(), /Local binding: 127\.0\.0\.1:48188/);
+  assert.doesNotMatch(view.lastFrame(), /Open local connection: failed/);
+  assert.match(view.lastFrame(), /Local address: 127\.0\.0\.1:48188/);
 });
 
-test("first-use SSH trust is reviewed and accepted inside the foreground connection flow", async () => {
+test("first-use SSH trust is reviewed and accepted inside the local connection flow", async () => {
   const trust = hostTrustRequiredError(
     "ssh.example.test",
     2222,
@@ -2230,20 +2863,17 @@ test("first-use SSH trust is reviewed and accepted inside the foreground connect
   await tick();
   await tick();
   await openConnectionsRoute(view);
-  view.stdin.write("n");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
+  await chooseVisibleAction(view, "New local connection");
   view.stdin.write("\r");
   await tick();
   await typeText(view, "22");
   view.stdin.write("\r");
   await tick();
   await tick();
+  assert.match(view.lastFrame(), /Local port on this computer/);
   view.stdin.write("\r");
   await tick();
-  view.stdin.write("\r");
-  await tick();
+  assert.match(view.lastFrame(), /Review local connection/);
   view.stdin.write("\r");
   await tick();
 
@@ -2260,10 +2890,10 @@ test("first-use SSH trust is reviewed and accepted inside the foreground connect
   await tick();
   await tick();
   assert.equal(accepted, true);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:40222 · live/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:40222 → Server:22/);
 });
 
-test("quitting with live TUI-owned Endpoints states the count and renders closing before exit", async () => {
+test("quitting with live local connections states the count and renders closing before exit", async () => {
   let connections = [
     {
       id: "foreground:a",
@@ -2322,29 +2952,29 @@ test("quitting with live TUI-owned Endpoints states the count and renders closin
   await tick();
   await tick();
   await openConnectionsRoute(view);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:41001 · live/);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:41002 · live/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:41001 → Server:8188/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:41002 → Server:7860/);
 
   view.stdin.write("q");
   await tick();
   assert.equal(closeAllCalls, 0);
-  assert.match(view.lastFrame(), /2 TUI-owned Endpoints are live/);
+  assert.match(view.lastFrame(), /2 local connections are still open in this TUI/);
   assert.match(view.lastFrame(), /Press q or Ctrl\+C again to close them and quit/);
 
   view.stdin.write("q");
   await tick();
   await tick();
   assert.equal(closeAllCalls, 1);
-  assert.match(view.lastFrame(), /Closing 2 TUI-owned Endpoints/);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:41001 · closing/);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:41002 · closing/);
+  assert.match(view.lastFrame(), /Closing 2 local connections/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:41001 → Server:8188 · closing/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:41002 → Server:7860 · closing/);
 
   finishCloseAll();
   await tick();
   await tick();
 });
 
-test("persistent Endpoint retry preserves one idempotency key across the guided TUI flow", async () => {
+test("advanced background connection retry preserves one idempotency key across the guided TUI flow", async () => {
   const method = { id: "ssh", kind: "ssh", mode: "tcp-forward" };
   const requests = [];
   let attempts = 0;
@@ -2406,7 +3036,7 @@ test("persistent Endpoint retry preserves one idempotency key across the guided 
   await openConnectionsRoute(view);
   view.stdin.write("p");
   await tick();
-  assert.match(view.lastFrame(), /New daemon-owned persistent Endpoint/);
+  assert.match(view.lastFrame(), /Advanced background connection/);
   view.stdin.write("\r");
   await tick();
   view.stdin.write("\r");
@@ -2419,16 +3049,16 @@ test("persistent Endpoint retry preserves one idempotency key across the guided 
   await tick();
   view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /Review persistent Endpoint/);
-  assert.match(view.lastFrame(), /survives TUI exit/);
+  assert.match(view.lastFrame(), /Review background connection/);
+  assert.match(view.lastFrame(), /kept available in the background after TUI exit/);
 
   view.stdin.write("\r");
   await tick();
   await tick();
   assert.equal(requests.length, 1);
   assert.match(requests[0].idempotencyKey, /^tui:/);
-  assert.match(view.lastFrame(), /Create persistent Endpoint: failed/);
-  assert.match(view.lastFrame(), /idempotency key are preserved for retry/);
+  assert.match(view.lastFrame(), /Create background local connection: failed/);
+  assert.match(view.lastFrame(), /values are preserved for a safe retry/);
 
   view.stdin.write("x");
   await tick();
@@ -2499,7 +3129,8 @@ test("daemon Stop reviews live persistent impact before shutdown dispatch", asyn
   await tick();
   await tick();
   await openConnectionsRoute(view);
-  await chooseVisibleAction(view, "Stop daemon");
+  await chooseVisibleAction(view, "Show technical details");
+  await chooseVisibleAction(view, "Advanced: stop background connection service");
   await tick();
   assert.equal(stopCalls, 0);
   assert.match(view.lastFrame(), /Stop EasyServer daemon/);
@@ -2556,13 +3187,15 @@ test("stopped daemon starts from Connections and refreshes to authenticated runn
   await tick();
   await tick();
   await openConnectionsRoute(view);
-  assert.match(view.lastFrame(), /Daemon: stopped/);
-  view.stdin.write("d");
+  assert.doesNotMatch(view.lastFrame(), /Background service:/);
+  await chooseVisibleAction(view, "Show technical details");
+  assert.match(view.lastFrame(), /Background service: stopped/);
+  await chooseVisibleAction(view, "Advanced: start background connection service");
   await tick();
   await tick();
   await tick();
   assert.equal(startCalls, 1);
-  assert.match(view.lastFrame(), /Daemon: running/);
+  assert.match(view.lastFrame(), /Background service: running/);
   assert.doesNotMatch(view.lastFrame(), /not-rendered/);
 });
 
@@ -2573,6 +3206,9 @@ test("unreachable daemon is distinct from stopped and blocks persistent mutation
       width: 110,
       readSnapshot: readSnapshot({ daemon: { status: "unreachable" } }),
       readStatus: "ready",
+      async onListForegroundAccessMethods() {
+        return [];
+      },
       async onCreatePersistentSession() {
         createCalls += 1;
         return true;
@@ -2590,18 +3226,23 @@ test("unreachable daemon is distinct from stopped and blocks persistent mutation
   );
 
   await openConnectionsRoute(view);
-  assert.match(view.lastFrame(), /Daemon: unreachable/);
-  assert.match(view.lastFrame(), /authenticated health failed/);
-  view.stdin.write("p");
+  assert.match(view.lastFrame(), /background connections need attention/);
+  assert.doesNotMatch(view.lastFrame(), /Background service:/);
+  await chooseVisibleAction(view, "Show technical details");
+  assert.match(view.lastFrame(), /Background service: unreachable/);
+  await chooseVisibleAction(view, "Advanced: new background connection");
   await tick();
   assert.equal(createCalls, 0);
-  assert.match(view.lastFrame(), /Start the EasyServer daemon before creating a persistent session/);
+  assert.match(view.lastFrame(), /Background connections are unavailable/);
 
   view.rerender(
     shell({
       width: 110,
       readSnapshot: readSnapshot({ daemon: { status: "stale" } }),
       readStatus: "ready",
+      async onListForegroundAccessMethods() {
+        return [];
+      },
       async onCreatePersistentSession() {
         createCalls += 1;
         return true;
@@ -2618,11 +3259,10 @@ test("unreachable daemon is distinct from stopped and blocks persistent mutation
     }),
   );
   await tick();
-  assert.match(view.lastFrame(), /Daemon: stale/);
-  assert.match(view.lastFrame(), /descriptor is invalid/);
+  assert.match(view.lastFrame(), /Background service: stale/);
 });
 
-test("cleanup-failed persistent Session remains visible by stable ID beside healthy sessions", async () => {
+test("cleanup-failed background connection remains visible beside healthy connections and exposes its stable ID in technical details", async () => {
   const closed = [];
   const snapshot = persistentConnectionSnapshot([
     {
@@ -2669,17 +3309,16 @@ test("cleanup-failed persistent Session remains visible by stable ID beside heal
   );
 
   await openConnectionsRoute(view);
-  assert.match(view.lastFrame(), /session:healthy · live/);
-  assert.match(view.lastFrame(), /session:cleanup-failed · failed/);
+  assert.match(view.lastFrame(), /> 127\.0\.0\.1:48188 → Server:8188 · background/);
+  assert.match(view.lastFrame(), /Local port unavailable → Server:7860 · background · failed/);
   view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /> session:cleanup-failed · failed/);
-  await chooseVisibleAction(view, "Show connection details");
+  assert.match(view.lastFrame(), /> Local port unavailable → Server:7860 · background · failed/);
+  await chooseVisibleAction(view, "Show technical details");
   assert.match(view.lastFrame(), /Session ID: session:cleanup-failed/);
   assert.match(view.lastFrame(), /Cleanup failure: plugin-failure: Connection Session cleanup failed/);
-  assert.match(view.lastFrame(), /session:healthy · live/);
 
-  await chooseVisibleAction(view, "Close selected persistent Session");
+  await chooseVisibleAction(view, "Close local connection");
   await tick();
   assert.deepEqual(closed, ["session:cleanup-failed"]);
 });

@@ -178,56 +178,53 @@ test("Connections keeps persisted Endpoint intents distinct from runtime Session
   );
 
   await openConnections(view);
-  assert.match(view.lastFrame(), /Persisted Endpoint intents \(desired state\)/);
-  assert.match(view.lastFrame(), /Daemon-owned Connection Sessions \(runtime state\)/);
-  assert.match(view.lastFrame(), /comfy · enabled · live endpoint=127\.0\.0\.1:55123/);
-  assert.doesNotMatch(view.lastFrame(), /Requested local port:/);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:53000 · live · instance:foreground/);
-  assert.match(view.lastFrame(), /session:runtime-only · live · 127\.0\.0\.1:49000/);
-  assert.match(view.lastFrame(), /old dead transport is never treated as live/);
+  assert.match(view.lastFrame(), /Local connections/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:53000 → server:3000/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:49000 → server:9000 · background/);
+  assert.doesNotMatch(view.lastFrame(), /Endpoint intent|Connection Session|Access Method|Daemon-owned/);
+
+  await chooseVisibleAction(view, "Show technical details");
+  assert.match(view.lastFrame(), /Technical details/);
+  assert.match(view.lastFrame(), /Saved background connection definitions/);
+  assert.match(view.lastFrame(), /Background service: running/);
 
   view.stdin.write("\u001b[B");
   await tick();
-  await chooseVisibleAction(view, "Show connection details");
+  view.stdin.write("\u001b[B");
+  await tick();
   assert.match(view.lastFrame(), /Name: comfy/);
   assert.match(view.lastFrame(), /Desired state: enabled/);
   assert.match(view.lastFrame(), /Requested local port: dynamic/);
 
   view.stdin.write("\u001b[B");
   await tick();
-  await chooseVisibleAction(view, "Show connection details");
   assert.match(view.lastFrame(), /Name: api/);
   assert.match(view.lastFrame(), /Realization state: starting/);
   assert.match(view.lastFrame(), /Requested local port: 48000/);
 
   view.stdin.write("\u001b[B");
   await tick();
-  await chooseVisibleAction(view, "Show connection details");
   assert.match(view.lastFrame(), /Name: port-conflict/);
   assert.match(view.lastFrame(), /fixed local port is unavailable/);
-  await chooseVisibleAction(view, "Retry selected saved Endpoint");
+  await chooseVisibleAction(view, "Retry selected saved connection");
   assert.deepEqual(retryCalls, ["port-conflict"]);
 
   view.stdin.write("\u001b[B");
   await tick();
-  await chooseVisibleAction(view, "Show connection details");
   assert.match(view.lastFrame(), /exact SSH host fingerprint/);
   view.stdin.write("\u001b[B");
   await tick();
-  await chooseVisibleAction(view, "Show connection details");
   assert.match(view.lastFrame(), /configure or rotate the required provider credential/);
   view.stdin.write("\u001b[B");
   await tick();
-  await chooseVisibleAction(view, "Show connection details");
   assert.match(view.lastFrame(), /restore provider or instance availability/);
   view.stdin.write("\u001b[B");
   await tick();
-  await chooseVisibleAction(view, "Show connection details");
   assert.match(view.lastFrame(), /Desired state: disabled/);
   assert.match(view.lastFrame(), /disabled\\u001b\[2J/);
-  await chooseVisibleAction(view, "Enable selected saved Endpoint");
+  await chooseVisibleAction(view, "Enable selected saved connection");
   assert.deepEqual(enabledCalls, [["disabled\u001b[2J", true]]);
-  await chooseVisibleAction(view, "Remove selected saved Endpoint");
+  await chooseVisibleAction(view, "Remove selected saved connection");
   assert.deepEqual(removeCalls, ["disabled\u001b[2J"]);
 });
 
@@ -260,7 +257,10 @@ test("TuiApp confirms live persisted intent removal and delegates cleanup to the
   await tick();
   await tick();
   await openConnections(view);
-  await chooseVisibleAction(view, "Remove selected saved Endpoint");
+  await chooseVisibleAction(view, "Show technical details");
+  view.stdin.write("\u001b[B");
+  await tick();
+  await chooseVisibleAction(view, "Remove selected saved connection");
 
   assert.equal(removed, false);
   assert.match(view.lastFrame(), /Confirmation required/);
@@ -313,7 +313,10 @@ test("TuiApp retries cleanup by the original intent identity after desired state
   await tick();
   await tick();
   await openConnections(view);
-  await chooseVisibleAction(view, "Remove selected saved Endpoint");
+  await chooseVisibleAction(view, "Show technical details");
+  view.stdin.write("\u001b[B");
+  await tick();
+  await chooseVisibleAction(view, "Remove selected saved connection");
   assert.match(view.lastFrame(), /> Cancel/);
   view.stdin.write("\u001b[A");
   await tick();
@@ -373,7 +376,10 @@ test("an unrelated failed refresh cannot reuse a stale Endpoint intent cleanup R
   await tick();
   await tick();
   await openConnections(view);
-  await chooseVisibleAction(view, "Remove selected saved Endpoint");
+  await chooseVisibleAction(view, "Show technical details");
+  view.stdin.write("\u001b[B");
+  await tick();
+  await chooseVisibleAction(view, "Remove selected saved connection");
   assert.match(view.lastFrame(), /> Cancel/);
   view.stdin.write("\u001b[A");
   await tick();

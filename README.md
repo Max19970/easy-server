@@ -75,7 +75,7 @@ For ordinary interactive use, run EasyServer without arguments:
 easyserver
 ```
 
-The TUI starts from four user tasks — **Rent a server**, **My servers**, **Connections**, and **Settings & Support** — over the same host-owned operations as command mode. Provider setup can select discoverable installed plugins by human name, and first-party rental flows stay guided inside the TUI. It supports compact terminals, `NO_COLOR` and a linear `INK_SCREEN_READER=true` mode. Foreground Endpoints close with the TUI; daemon-owned persistent Sessions and Endpoint intents survive TUI exit.
+The TUI starts from four user tasks — **Rent a server**, **My servers**, **Connections**, and **Settings & Support** — over the same host-owned operations as command mode. Provider setup can select discoverable installed plugins by human name, and first-party rental flows stay guided inside the TUI. From **My servers**, ordinary lifecycle and **Connect** actions use server/local-port language; exact daemon, Session, Endpoint-intent and Access-Method state is progressively disclosed under **Technical details / Advanced**. It supports compact terminals, `NO_COLOR` and a linear `INK_SCREEN_READER=true` mode. Local connections owned by the TUI close with it; background connections can survive TUI exit.
 
 Use `easyserver --help` and nested `--help` pages for automation and advanced command-mode workflows. Plain `easyserver` on a non-interactive stdin/stdout fails clearly instead of emitting terminal control output.
 

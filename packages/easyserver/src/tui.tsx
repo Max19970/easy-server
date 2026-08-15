@@ -49,6 +49,7 @@ import {
   createDefaultTuiBulkInstanceMutationRunner,
   createDefaultTuiInstanceMutationRunner,
   type TuiBulkInstanceMutation,
+  type TuiBulkInstanceMutationResult,
   type TuiBulkInstanceMutationRunner,
   type TuiInstanceMutation,
   type TuiInstanceMutationRunner,
@@ -298,6 +299,8 @@ type ForegroundConnectionStep =
 
 interface ForegroundConnectionFlow {
   readonly mode: "foreground" | "persistent";
+  readonly advanced: boolean;
+  readonly serverScoped: boolean;
   readonly step: ForegroundConnectionStep;
   readonly instanceId: string;
   readonly remoteHost: string;
@@ -567,14 +570,16 @@ export function TuiShell({
       kind: "foreground" as const,
       id: connection.id,
     })),
-    ...endpointIntents.map((intent) => ({
-      kind: "intent" as const,
-      id: intent.operationName,
-    })),
     ...persistentSessions.map((session) => ({
       kind: "persistent" as const,
       id: session.id,
     })),
+    ...(connectionDetailsOpen
+      ? endpointIntents.map((intent) => ({
+          kind: "intent" as const,
+          id: intent.operationName,
+        }))
+      : []),
   ];
   const effectiveConnectionCursor =
     connectionTargets.length === 0
@@ -699,15 +704,15 @@ export function TuiShell({
     if (!quitArmed) {
       setQuitArmed(true);
       setStatus(
-        `${count} TUI-owned ${count === 1 ? "Endpoint is" : "Endpoints are"} live. Press q or Ctrl+C again to close ${count === 1 ? "it" : "them"} and quit.`,
+        `${count} local ${count === 1 ? "connection is" : "connections are"} still open in this TUI. Press q or Ctrl+C again to close ${count === 1 ? "it" : "them"} and quit.`,
       );
       return;
     }
     if (onQuitWithForegroundConnections === undefined) {
-      setStatus("Cannot quit safely while TUI-owned Endpoints are still live.");
+      setStatus("Cannot quit safely while local connections owned by this TUI are still open.");
       return;
     }
-    setStatus(`Closing ${count} TUI-owned ${count === 1 ? "Endpoint" : "Endpoints"} before exit.`);
+    setStatus(`Closing ${count} local ${count === 1 ? "connection" : "connections"} before exit.`);
     void onQuitWithForegroundConnections().then((closed) => {
       if (closed) {
         exit();
@@ -717,16 +722,25 @@ export function TuiShell({
     });
   };
 
-  const beginConnectionFlow = (mode: "foreground" | "persistent"): void => {
+  const beginConnectionFlow = (
+    mode: "foreground" | "persistent",
+    options: {
+      readonly instanceId?: string;
+      readonly advanced?: boolean;
+    } = {},
+  ): void => {
     const firstInstance =
+      inventoryItems.find((instance) => instance.id === options.instanceId) ??
       inventoryItems.find((instance) => instance.id === effectiveSelectedInstanceId) ??
       inventoryItems[0];
+    const advanced = options.advanced === true;
+    const serverScoped = options.instanceId !== undefined;
     if (mode === "persistent" && readSnapshot?.daemon.status !== "running") {
-      setStatus("Start the EasyServer daemon before creating a persistent Endpoint.");
+      setStatus("Background connections are unavailable until the EasyServer background service is started from Technical details.");
       return;
     }
     if (firstInstance === undefined) {
-      setStatus(`No compute instance is available for a ${mode} connection.`);
+      setStatus("No server is available for a local connection.");
       return;
     }
     if (
@@ -735,12 +749,14 @@ export function TuiShell({
         ? onOpenForegroundConnection === undefined
         : onCreatePersistentSession === undefined)
     ) {
-      setStatus(`${mode === "foreground" ? "Foreground" : "Persistent"} connection creation is unavailable in this TUI session.`);
+      setStatus("Local connection creation is unavailable in this TUI session.");
       return;
     }
     setForegroundConnectionFlow({
       mode,
-      step: "instance",
+      advanced,
+      serverScoped,
+      step: serverScoped ? (advanced ? "remote-host" : "remote-port") : "instance",
       instanceId: firstInstance.id,
       remoteHost: "127.0.0.1",
       remotePort: "",
@@ -751,7 +767,11 @@ export function TuiShell({
         ? { idempotencyKey: newTuiPersistentSessionIdempotencyKey() }
         : {}),
     });
-    setStatus(`Choose the instance for this ${mode === "foreground" ? "TUI-owned" : "daemon-owned"} Endpoint.`);
+    setStatus(
+      serverScoped
+        ? `Connecting to ${firstInstance.name ?? "the selected server"}. Enter the remote service port.`
+        : "Choose the server to connect to.",
+    );
   };
 
   const moveConnectionSelection = (direction: -1 | 1): void => {
@@ -762,17 +782,16 @@ export function TuiShell({
       (effectiveConnectionCursor + direction + connectionTargets.length) %
       connectionTargets.length;
     setConnectionCursor(nextIndex);
-    setConnectionDetailsOpen(false);
     const target = connectionTargets[nextIndex];
     if (target?.kind === "foreground") {
       setSelectedForegroundConnectionId(target.id);
-      setStatus("Selected foreground Endpoint.");
+      setStatus("Selected local connection.");
     } else if (target?.kind === "persistent") {
       setSelectedPersistentSessionId(target.id);
-      setStatus("Selected persistent Session.");
+      setStatus("Selected background local connection.");
     } else if (target?.kind === "intent") {
       setSelectedEndpointIntentName(target.id);
-      setStatus("Selected persisted Endpoint intent.");
+      setStatus("Selected saved connection definition in Technical details.");
     }
   };
 
@@ -799,8 +818,15 @@ export function TuiShell({
       if (selectedInstance !== undefined) {
         actions.unshift({
           id: "instance-details",
-          label: instanceDetailsOpen ? "Hide instance details" : "Show instance details",
+          label: instanceDetailsOpen ? "Hide technical details" : "Show technical details",
         });
+        if (
+          selectedInstance.freshness === "fresh" &&
+          onOpenForegroundConnection !== undefined &&
+          onListForegroundAccessMethods !== undefined
+        ) {
+          actions.unshift({ id: "instance-connect", label: "Connect" });
+        }
         if (
           selectedInstance.freshness === "fresh" &&
           selectedInstance.management === "discovered" &&
@@ -812,7 +838,7 @@ export function TuiShell({
           for (const action of availableInstanceActions(selectedInstance)) {
             actions.push({
               id: `instance-action:${action}`,
-              label: `${action.slice("instance.".length)} instance`,
+              label: instanceActionLabel(action),
             });
           }
         }
@@ -831,7 +857,7 @@ export function TuiShell({
           for (const action of bulkAvailableInstanceActions(bulkSelectedInstances)) {
             actions.push({
               id: `bulk-action:${action}`,
-              label: `${action.slice("instance.".length)} ${bulkSelectedInstanceIds.length} selected instance${bulkSelectedInstanceIds.length === 1 ? "" : "s"}`,
+              label: `${action.slice("instance.".length)} ${bulkSelectedInstanceIds.length} selected server${bulkSelectedInstanceIds.length === 1 ? "" : "s"}`,
             });
           }
         }
@@ -878,48 +904,50 @@ export function TuiShell({
       return [{ id: "refresh", label: "Refresh acquisition options" }];
     }
     if (activeRoute.id === "sessions") {
-      const actions: TuiContextAction[] = [{ id: "refresh", label: "Refresh connections" }];
-      if (selectedConnectionTarget !== undefined) {
-        actions.unshift({
-          id: "connection-details",
-          label: connectionDetailsOpen ? "Hide connection details" : "Show connection details",
-        });
-      }
+      const actions: TuiContextAction[] = [
+        { id: "connection-details", label: connectionDetailsOpen ? "Hide technical details" : "Show technical details" },
+        { id: "refresh", label: "Refresh connections" },
+      ];
       if (onOpenForegroundConnection !== undefined && onListForegroundAccessMethods !== undefined) {
-        actions.unshift({ id: "connection-new-foreground", label: "New foreground Endpoint" });
-      }
-      if (
-        onCreatePersistentSession !== undefined &&
-        onListForegroundAccessMethods !== undefined
-      ) {
-        actions.push({ id: "connection-new-persistent", label: "New persistent Endpoint" });
-      }
-      if (onStartDaemon !== undefined && onStopDaemon !== undefined) {
-        actions.push({
-          id: "daemon-toggle",
-          label: readSnapshot?.daemon.status === "running" ? "Stop daemon" : "Start daemon",
-        });
+        actions.unshift({ id: "connection-new-foreground", label: "New local connection" });
       }
       if (
         selectedConnectionTarget?.kind === "foreground" &&
         onCloseForegroundConnection !== undefined
       ) {
-        actions.push({ id: "connection-close-foreground", label: "Close selected foreground Endpoint" });
+        actions.push({ id: "connection-close-foreground", label: "Close local connection" });
       } else if (
         selectedConnectionTarget?.kind === "persistent" &&
         onClosePersistentSession !== undefined
       ) {
-        actions.push({ id: "connection-close-persistent", label: "Close selected persistent Session" });
-      } else if (selectedTargetIntent !== undefined && onSetEndpointIntentEnabled !== undefined) {
-        actions.push({
-          id: "intent-toggle",
-          label: selectedTargetIntent.enabled ? "Disable selected saved Endpoint" : "Enable selected saved Endpoint",
-        });
-        if (selectedTargetIntent.state === "error" && onRetryEndpointIntent !== undefined) {
-          actions.push({ id: "intent-retry", label: "Retry selected saved Endpoint" });
+        actions.push({ id: "connection-close-persistent", label: "Close local connection" });
+      }
+      if (connectionDetailsOpen) {
+        if (
+          onCreatePersistentSession !== undefined &&
+          onListForegroundAccessMethods !== undefined
+        ) {
+          actions.push({ id: "connection-new-persistent", label: "Advanced: new background connection" });
         }
-        if (onRemoveEndpointIntent !== undefined) {
-          actions.push({ id: "intent-remove", label: "Remove selected saved Endpoint" });
+        if (onStartDaemon !== undefined && onStopDaemon !== undefined) {
+          actions.push({
+            id: "daemon-toggle",
+            label: readSnapshot?.daemon.status === "running"
+              ? "Advanced: stop background connection service"
+              : "Advanced: start background connection service",
+          });
+        }
+        if (selectedTargetIntent !== undefined && onSetEndpointIntentEnabled !== undefined) {
+          actions.push({
+            id: "intent-toggle",
+            label: selectedTargetIntent.enabled ? "Disable selected saved connection" : "Enable selected saved connection",
+          });
+          if (selectedTargetIntent.state === "error" && onRetryEndpointIntent !== undefined) {
+            actions.push({ id: "intent-retry", label: "Retry selected saved connection" });
+          }
+          if (onRemoveEndpointIntent !== undefined) {
+            actions.push({ id: "intent-remove", label: "Remove selected saved connection" });
+          }
         }
       }
       return actions;
@@ -960,6 +988,11 @@ export function TuiShell({
     }
     if (id === "instance-details") {
       setInstanceDetailsOpen((open) => !open);
+      return;
+    }
+    if (id === "instance-connect" && selectedInstance !== undefined) {
+      beginConnectionFlow("foreground", { instanceId: selectedInstance.id });
+      openRoute("sessions", `Connect to ${selectedInstance.name ?? "server"}.`);
       return;
     }
     if (id === "instance-adopt" && selectedInstance !== undefined) {
@@ -1044,7 +1077,7 @@ export function TuiShell({
       return;
     }
     if (id === "connection-new-persistent") {
-      beginConnectionFlow("persistent");
+      beginConnectionFlow("persistent", { advanced: true });
       return;
     }
     if (id === "daemon-toggle") {
@@ -1066,7 +1099,7 @@ export function TuiShell({
         setForegroundConnectionBusy(false);
         if (closed) {
           setSelectedForegroundConnectionId(undefined);
-          setStatus("Foreground Endpoint closed.");
+          setStatus("Local connection closed.");
         }
       });
       return;
@@ -1082,7 +1115,7 @@ export function TuiShell({
         setForegroundConnectionBusy(false);
         if (closed) {
           setSelectedPersistentSessionId(undefined);
-          setStatus("Persistent Session closed.");
+          setStatus("Background local connection closed.");
         }
       });
       return;
@@ -1388,16 +1421,10 @@ export function TuiShell({
         return;
       }
       if (key.escape) {
-        const previousStep = previousForegroundConnectionStep(
-          foregroundConnectionFlow.step,
-        );
+        const previousStep = previousForegroundConnectionStep(foregroundConnectionFlow);
         if (previousStep === undefined) {
           setForegroundConnectionFlow(undefined);
-          setStatus(
-            foregroundConnectionFlow.mode === "persistent"
-              ? "Persistent session setup cancelled."
-              : "Foreground connection setup cancelled.",
-          );
+          setStatus("Local connection setup cancelled.");
         } else {
           setForegroundConnectionFlow({
             ...foregroundConnectionFlow,
@@ -1437,9 +1464,13 @@ export function TuiShell({
         if (key.return && foregroundConnectionFlow.instanceId.length > 0) {
           setForegroundConnectionFlow({
             ...foregroundConnectionFlow,
-            step: "remote-host",
+            step: foregroundConnectionFlow.advanced ? "remote-host" : "remote-port",
           });
-          setStatus("Enter the remote host. 127.0.0.1 is the ordinary default.");
+          setStatus(
+            foregroundConnectionFlow.advanced
+              ? "Advanced: enter the remote host. 127.0.0.1 is the ordinary default."
+              : "Enter the TCP port used by the service on this server.",
+          );
         }
         return;
       }
@@ -1462,7 +1493,7 @@ export function TuiShell({
             remoteHost: foregroundConnectionFlow.remoteHost.trim(),
             step: "remote-port",
           });
-          setStatus("Enter the remote TCP port.");
+          setStatus("Enter the TCP port used by the service on this server.");
           return;
         }
         if (!key.ctrl && !key.tab && input.length > 0) {
@@ -1491,31 +1522,37 @@ export function TuiShell({
             return;
           }
           if (onListForegroundAccessMethods === undefined) {
-            setStatus("Access Method discovery is unavailable in this TUI session.");
+            setStatus("A supported connection method could not be discovered in this TUI session.");
             return;
           }
           setForegroundConnectionBusy(true);
-          setStatus("Discovering Access Methods for the selected instance.");
+          setStatus("Checking how EasyServer can reach this server…");
           void onListForegroundAccessMethods(foregroundConnectionFlow.instanceId).then(
             (methods) => {
               setForegroundConnectionBusy(false);
               if (methods === undefined) {
                 return;
               }
+              const defaultMethod = methods[0];
               setForegroundConnectionFlow((current) =>
                 current === undefined
                   ? current
                   : {
                       ...current,
-                      step: "access-method",
+                      step:
+                        defaultMethod === undefined
+                          ? current.advanced ? "access-method" : "remote-port"
+                          : current.advanced ? "access-method" : "local-port",
                       accessMethods: methods,
-                      accessMethodId: methods[0]?.id,
+                      accessMethodId: defaultMethod?.id,
                     },
               );
               setStatus(
-                methods.length === 0
-                  ? "No TCP-forward Access Methods are currently available."
-                  : `Selected deterministic default Access Method ${methods[0]?.id}.`,
+                defaultMethod === undefined
+                  ? "EasyServer could not find a supported way to reach this server. Refresh the server/provider state and try again."
+                  : foregroundConnectionFlow.advanced
+                    ? "Advanced: choose the connection method."
+                    : "Connection method selected automatically. Choose the local port, or leave it blank for an automatic port.",
               );
             },
           );
@@ -1566,7 +1603,7 @@ export function TuiShell({
             ...foregroundConnectionFlow,
             step: "local-port",
           });
-          setStatus("Enter a stable local port, or leave it blank for a dynamic port.");
+          setStatus("Choose the local port on this computer, or leave it blank for an automatic port.");
         }
         return;
       }
@@ -1593,8 +1630,8 @@ export function TuiShell({
           });
           setStatus(
             foregroundConnectionFlow.mode === "persistent"
-              ? "Review the persistent Endpoint and press Enter to create it."
-              : "Review the foreground Endpoint and press Enter to open it.",
+              ? "Review the background local connection and press Enter to create it."
+              : "Review the local connection and press Enter to open it.",
           );
           return;
         }
@@ -1629,12 +1666,12 @@ export function TuiShell({
             setForegroundConnectionBusy(false);
             if (!created) {
               setStatus(
-                "Persistent Endpoint was not created. Values and idempotency key are preserved for retry.",
+                "Background local connection was not created. Your values are preserved for a safe retry.",
               );
               return;
             }
             setForegroundConnectionFlow(undefined);
-            setStatus("Created daemon-owned persistent Endpoint.");
+            setStatus("Created background local connection.");
           });
           return;
         }
@@ -1647,14 +1684,14 @@ export function TuiShell({
           setForegroundConnectionBusy(false);
           if (connection === undefined) {
             setStatus(
-              "Foreground Endpoint was not opened. Your entered values are preserved for editing.",
+              "Local connection was not opened. Your entered values are preserved for editing.",
             );
             return;
           }
           setForegroundConnectionFlow(undefined);
           setSelectedForegroundConnectionId(connection.id);
           setStatus(
-            `Opened TUI-owned Endpoint ${connection.endpoint.host}:${connection.endpoint.port}.`,
+            `Local connection ready at ${connection.endpoint.host}:${connection.endpoint.port}.`,
           );
         });
       }
@@ -1766,7 +1803,7 @@ export function TuiShell({
         const next = inventoryItems[nextIndex];
         if (next !== undefined) {
           setSelectedInstanceId(next.id);
-          setStatus(`Selected ${next.name ?? next.id}.`);
+          setStatus(`Selected ${serverListLabel(next, nextIndex, inventoryItems)}.`);
         }
         return;
       }
@@ -1873,65 +1910,12 @@ export function TuiShell({
     }
 
     if (activeRoute.id === "sessions" && input === "n") {
-      const firstInstance =
-        inventoryItems.find((instance) => instance.id === effectiveSelectedInstanceId) ??
-        inventoryItems[0];
-      if (firstInstance === undefined) {
-        setStatus("No compute instance is available for a foreground connection.");
-        return;
-      }
-      if (
-        onListForegroundAccessMethods === undefined ||
-        onOpenForegroundConnection === undefined
-      ) {
-        setStatus("Foreground connection creation is unavailable in this TUI session.");
-        return;
-      }
-      setForegroundConnectionFlow({
-        mode: "foreground",
-        step: "instance",
-        instanceId: firstInstance.id,
-        remoteHost: "127.0.0.1",
-        remotePort: "",
-        accessMethods: [],
-        accessMethodId: undefined,
-        localPort: "",
-      });
-      setStatus("Choose the instance for this TUI-owned foreground Endpoint.");
+      beginConnectionFlow("foreground");
       return;
     }
 
     if (activeRoute.id === "sessions" && input === "p") {
-      const firstInstance =
-        inventoryItems.find((instance) => instance.id === effectiveSelectedInstanceId) ??
-        inventoryItems[0];
-      if (readSnapshot?.daemon.status !== "running") {
-        setStatus("Start the EasyServer daemon before creating a persistent session.");
-        return;
-      }
-      if (firstInstance === undefined) {
-        setStatus("No compute instance is available for a persistent connection.");
-        return;
-      }
-      if (
-        onListForegroundAccessMethods === undefined ||
-        onCreatePersistentSession === undefined
-      ) {
-        setStatus("Persistent session creation is unavailable in this TUI session.");
-        return;
-      }
-      setForegroundConnectionFlow({
-        mode: "persistent",
-        step: "instance",
-        instanceId: firstInstance.id,
-        remoteHost: "127.0.0.1",
-        remotePort: "",
-        accessMethods: [],
-        accessMethodId: undefined,
-        localPort: "",
-        idempotencyKey: newTuiPersistentSessionIdempotencyKey(),
-      });
-      setStatus("Choose the instance for this daemon-owned persistent Endpoint.");
+      beginConnectionFlow("persistent", { advanced: true });
       return;
     }
 
@@ -2211,8 +2195,10 @@ export function TuiShell({
       if (selected === undefined) {
         return;
       }
+      const selectedIndex = inventoryItems.findIndex((instance) => instance.id === selected.id);
+      const selectedLabel = serverListLabel(selected, selectedIndex, inventoryItems);
       if (selected.freshness !== "fresh") {
-        setStatus(`Cannot mark ${selected.id}; refresh stale or unobserved state first.`);
+        setStatus(`Cannot select ${selectedLabel}; refresh stale or unobserved state first.`);
         return;
       }
       setBulkSelectedInstanceIds((current) =>
@@ -2222,8 +2208,8 @@ export function TuiShell({
       );
       setStatus(
         bulkSelectedInstanceIds.includes(selected.id)
-          ? `Removed ${selected.id} from bulk targets.`
-          : `Added ${selected.id} to bulk targets.`,
+          ? `Removed ${selectedLabel} from selected servers.`
+          : `Added ${selectedLabel} to selected servers.`,
       );
       return;
     }
@@ -2676,6 +2662,7 @@ function RouteSurface({
     return (
       <InstancesSurface
         snapshot={snapshot}
+        height={height}
         narrow={narrow}
         selectedInstanceId={selectedInstanceId}
         showDetails={showInstanceDetails}
@@ -2689,6 +2676,7 @@ function RouteSurface({
     return (
       <ConnectionsSurface
         snapshot={snapshot}
+        height={height}
         flow={foregroundConnectionFlow}
         busy={foregroundConnectionBusy}
         connections={foregroundConnections}
@@ -2933,6 +2921,7 @@ function wrapDiagnosticsText(text: string, width: number): readonly string[] {
 
 interface InstancesSurfaceProps {
   readonly snapshot: TuiReadSnapshot;
+  readonly height: number;
   readonly narrow: boolean;
   readonly selectedInstanceId?: string;
   readonly showDetails: boolean;
@@ -2943,6 +2932,7 @@ interface InstancesSurfaceProps {
 
 function InstancesSurface({
   snapshot,
+  height,
   narrow,
   selectedInstanceId,
   showDetails,
@@ -2984,40 +2974,52 @@ function InstancesSurface({
   const missingMarkedIds = bulkSelectedInstanceIds.filter(
     (instanceId) => !items.some((instance) => instance.id === instanceId),
   );
+  const selectedIndex = Math.max(0, items.findIndex((instance) => instance.id === selected?.id));
+  const partialNoticeRows = snapshot.instances.complete ? 0 : 2;
+  const serverWindow = tuiFocusWindowWithinRows(
+    selectedIndex,
+    items.length,
+    Math.max(1, height - 3 - partialNoticeRows),
+  );
 
   return (
     <Box flexDirection="column">
       {snapshot.instances.complete ? null : (
         <PartialInventoryNotice failedProviders={failedProviderOutcomes} />
       )}
-      <Text>Choose an instance, then press Enter for its actions.</Text>
-      <Box marginTop={1} flexDirection="column">
-        {items.map((instance) => (
-          <Text key={instance.id} bold={instance.id === selected?.id}>
-            {instance.id === selected?.id ? "> " : "  "}
-            {canBulkMutate ? (marked.has(instance.id) ? "[x] " : "[ ] ") : ""}
-            {instance.name ?? instance.id} · {instance.providerId} · {instance.state ?? "unobserved"}
-            {instance.freshness === "fresh" ? "" : ` · ${instance.freshness}`}
-          </Text>
-        ))}
-      </Box>
+      <Text>Choose a server, then press Enter for Start, Stop, Connect and other actions.</Text>
+      {showDetails ? null : (
+        <Box flexDirection="column">
+          {serverWindow.showBefore ? <Text>↑ {serverWindow.hiddenBefore} more servers</Text> : null}
+          {items.slice(serverWindow.start, serverWindow.end).map((instance, visibleIndex) => (
+            <Text key={instance.id} bold={instance.id === selected?.id} wrap="truncate">
+              {instance.id === selected?.id ? "> " : "  "}
+              {canBulkMutate ? (marked.has(instance.id) ? "[x] " : "[ ] ") : ""}
+              {serverListLabel(instance, serverWindow.start + visibleIndex, items)} · {instance.state ?? "status unavailable"}
+              {instance.freshness === "fresh" ? "" : " · needs refresh"}
+            </Text>
+          ))}
+          {serverWindow.showAfter ? <Text>↓ {serverWindow.hiddenAfter} more servers</Text> : null}
+        </Box>
+      )}
       {bulkSelectedInstanceIds.length === 0 ? null : (
         <BulkInstanceSelection
           instanceIds={bulkSelectedInstanceIds}
-          instances={markedInstances}
+          instances={items}
           missingInstanceIds={missingMarkedIds}
         />
       )}
       {selectionMissing ? (
         <Box marginTop={1} flexDirection="column">
-          <Text bold>Selected instance is no longer visible.</Text>
+          <Text bold>Selected server is no longer visible.</Text>
           <Text>
-            {selectedInstanceId} disappeared from the refreshed inventory. No action target has been changed; use ↑/↓ to choose a current instance.
+            The previously selected server disappeared from the refreshed inventory. No action target was changed; use ↑/↓ to choose a current server.
           </Text>
         </Box>
       ) : selected === undefined || !showDetails ? null : (
         <Box marginTop={1} flexDirection="column">
-          <Text bold>Instance detail</Text>
+          <Text bold>Technical server details</Text>
+          <Text>Server: {selected.name ?? selected.id}</Text>
           <Text>EasyServer ID: {selected.id}</Text>
           <Text>Provider: {selected.providerId}</Text>
           <Text>Provider ID: {selected.providerExternalId}</Text>
@@ -3035,7 +3037,7 @@ function InstancesSurface({
             <Text>Observation: identity is known, but no current provider state is available.</Text>
           ) : null}
           <Text>Management: {selected.management}</Text>
-          <Text>Available actions: {formatActions(availableInstanceActions(selected))}</Text>
+          <Text>Available lifecycle actions: {formatActions(availableInstanceActions(selected).map(instanceActionLabel))}</Text>
           {bulkSelectedInstanceIds.length > 0 && canBulkMutate ? (
             <BulkInstanceActionGuidance
               instances={markedInstances}
@@ -3052,6 +3054,7 @@ function InstancesSurface({
 
 function ConnectionsSurface({
   snapshot,
+  height,
   flow,
   busy,
   connections,
@@ -3066,6 +3069,7 @@ function ConnectionsSurface({
   canManageDaemon,
 }: {
   readonly snapshot: TuiReadSnapshot;
+  readonly height: number;
   readonly flow?: ForegroundConnectionFlow;
   readonly busy: boolean;
   readonly connections: readonly TuiForegroundConnection[];
@@ -3082,8 +3086,15 @@ function ConnectionsSurface({
   if (flow !== undefined) {
     const instances =
       snapshot.instances.status === "ready" ? snapshot.instances.items : [];
-    const selectedInstance = instances.find(
-      (instance) => instance.id === flow.instanceId,
+    const selectedInstanceIndex = Math.max(
+      0,
+      instances.findIndex((instance) => instance.id === flow.instanceId),
+    );
+    const selectedInstance = instances[selectedInstanceIndex];
+    const instanceWindow = tuiFocusWindowWithinRows(
+      selectedInstanceIndex,
+      instances.length,
+      Math.max(1, height - (busy ? 5 : 4)),
     );
     const selectedMethod = flow.accessMethods.find(
       (method) => method.id === flow.accessMethodId,
@@ -3091,51 +3102,60 @@ function ConnectionsSurface({
     return (
       <Box flexDirection="column">
         <Text bold>
-          {flow.mode === "persistent" ? "New daemon-owned persistent Endpoint" : "New TUI-owned foreground Endpoint"}
+          {flow.mode === "persistent" ? "Advanced background connection" : "Connect to server"}
         </Text>
-        <Text>
-          {flow.mode === "persistent"
-            ? "This Endpoint survives TUI exit and is owned by the EasyServer daemon. Esc returns to the previous step."
-            : "This Endpoint exists only while this TUI process is running. Esc returns to the previous step."}
-        </Text>
+        {flow.step === "instance" ? null : (
+          <Text>
+            {flow.mode === "persistent"
+              ? "Keeps a local port available after this TUI closes. Esc returns to the previous step."
+              : "Expose a TCP service from a server on this computer. Esc returns to the previous step."}
+          </Text>
+        )}
         {busy ? <Text>Working… input is temporarily paused.</Text> : null}
-        <Box marginTop={1} flexDirection="column">
+        <Box marginTop={flow.step === "instance" ? 0 : 1} flexDirection="column">
           {flow.step === "instance" ? (
             <>
-              <Text bold>Choose instance</Text>
-              <Text>↑/↓ choose · Enter continue · Esc cancel</Text>
+              <Text bold>Choose server</Text>
               {instances.length === 0 ? (
-                <Text>No compute instances are currently available.</Text>
+                <Text>No servers are currently available.</Text>
               ) : (
-                instances.map((instance) => (
-                  <Text key={instance.id} bold={instance.id === flow.instanceId}>
-                    {instance.id === flow.instanceId ? "> " : "  "}
-                    {instance.name ?? instance.id} · {instance.providerId} · {instance.state ?? "unobserved"}
-                  </Text>
-                ))
+                <>
+                  {instanceWindow.showBefore ? (
+                    <Text>↑ {instanceWindow.hiddenBefore} more servers</Text>
+                  ) : null}
+                  {instances.slice(instanceWindow.start, instanceWindow.end).map((instance, visibleIndex) => (
+                    <Text key={instance.id} bold={instance.id === flow.instanceId} wrap="truncate">
+                      {instance.id === flow.instanceId ? "> " : "  "}
+                      {serverListLabel(instance, instanceWindow.start + visibleIndex, instances)} · {instance.state ?? "status unavailable"}
+                    </Text>
+                  ))}
+                  {instanceWindow.showAfter ? (
+                    <Text>↓ {instanceWindow.hiddenAfter} more servers</Text>
+                  ) : null}
+                </>
               )}
             </>
           ) : flow.step === "remote-host" ? (
             <>
-              <Text bold>Remote host</Text>
+              <Text bold>Advanced remote host</Text>
               <Text>Host: {escapeTerminalText(flow.remoteHost)}</Text>
               <Text>Default: 127.0.0.1 · Enter continue · Backspace edit · Esc back</Text>
             </>
           ) : flow.step === "remote-port" ? (
             <>
-              <Text bold>Remote TCP port</Text>
+              <Text bold>Service port on the server</Text>
               <Text>Port: {flow.remotePort}</Text>
-              <Text>Enter discovers Access Methods · Backspace edit · Esc back</Text>
+              <Text>Enter continue · Backspace edit · Esc back</Text>
             </>
           ) : flow.step === "access-method" ? (
             <>
-              <Text bold>Access Method</Text>
+              <Text bold>Advanced connection method</Text>
               <Text>
-                The first supported method is the deterministic default; the selected ID is passed explicitly when opening.
+                EasyServer normally chooses this automatically. Advanced mode lets you select the exact provider-declared method.
               </Text>
               {flow.accessMethods.length === 0 ? (
                 <Text>
-                  No TCP-forward Access Methods are currently available. Esc back and choose another instance or refresh provider state.
+                  No supported connection methods are currently available. Esc back and choose another server or refresh provider state.
                 </Text>
               ) : (
                 flow.accessMethods.map((method, index) => (
@@ -3150,31 +3170,31 @@ function ConnectionsSurface({
             </>
           ) : flow.step === "local-port" ? (
             <>
-              <Text bold>Local loopback port</Text>
+              <Text bold>Local port on this computer</Text>
               <Text>
-                Local Endpoint: 127.0.0.1:{flow.localPort.length === 0 ? "dynamic" : flow.localPort}
+                Local address: 127.0.0.1:{flow.localPort.length === 0 ? "automatic" : flow.localPort}
               </Text>
-              <Text>Leave blank for a dynamic port, or enter 1-65535 for a stable requested port.</Text>
+              <Text>Leave blank for an automatic port, or enter 1-65535 for a stable local address.</Text>
               <Text>Enter continue · Backspace edit · Esc back</Text>
             </>
           ) : (
             <>
               <Text bold>
-                Review {flow.mode === "persistent" ? "persistent" : "foreground"} Endpoint
+                Review {flow.mode === "persistent" ? "background connection" : "local connection"}
               </Text>
-              <Text>Instance: {selectedInstance?.name ?? flow.instanceId}</Text>
+              <Text>Server: {serverDisplayName(snapshot, flow.instanceId)}</Text>
+              <Text>Service port: {flow.remotePort}</Text>
               <Text>
-                Remote target: {escapeTerminalText(flow.remoteHost)}:{flow.remotePort}
-              </Text>
-              <Text>
-                Access Method: {selectedMethod === undefined ? "unavailable" : escapeTerminalText(selectedMethod.id)}
+                Local address: 127.0.0.1:{flow.localPort.length === 0 ? "automatic" : flow.localPort}
               </Text>
               <Text>
-                Local binding: 127.0.0.1:{flow.localPort.length === 0 ? "dynamic" : flow.localPort}
+                Lifetime: {flow.mode === "persistent" ? "kept available in the background after TUI exit" : "available while this TUI is open"}.
               </Text>
-              <Text>
-                Lifetime: {flow.mode === "persistent" ? "daemon-owned; survives TUI exit" : "closes when this TUI exits"}.
-              </Text>
+              {flow.advanced ? (
+                <Text>
+                  Technical route: {escapeTerminalText(flow.remoteHost)} · method={selectedMethod === undefined ? "unavailable" : escapeTerminalText(selectedMethod.id)}
+                </Text>
+              ) : null}
               <Text>Enter {flow.mode === "persistent" ? "create" : "open"} · Esc back</Text>
             </>
           )}
@@ -3210,113 +3230,269 @@ function ConnectionsSurface({
       : selectedConnectionTarget.kind === "intent"
         ? endpointIntents.find((intent) => intent.operationName === selectedConnectionTarget.id)
         : undefined;
+  const localConnectionRows = [
+    ...connections.map((connection) => ({
+      kind: "foreground" as const,
+      id: connection.id,
+      instanceId: connection.instanceId,
+      remotePort: connection.remotePort,
+      endpoint: connection.endpoint,
+      state: connection.state,
+    })),
+    ...persistentSessions.map((session) => ({
+      kind: "persistent" as const,
+      id: session.id,
+      instanceId: session.instanceId,
+      remotePort: session.remotePort,
+      endpoint: session.endpoint,
+      state: session.state,
+    })),
+  ];
+  const selectedLocalIndex = Math.max(
+    0,
+    selectedConnectionTarget === undefined
+      ? -1
+      : localConnectionRows.findIndex(
+          (row) => row.kind === selectedConnectionTarget.kind && row.id === selectedConnectionTarget.id,
+        ),
+  );
+  const connectionWindow = tuiFocusWindowWithinRows(
+    selectedLocalIndex,
+    localConnectionRows.length,
+    Math.max(1, height - 4),
+  );
   return (
     <Box flexDirection="column">
       <Text>
-        Foreground Endpoints belong to this TUI; persistent Endpoints belong to the daemon and survive TUI exit.
+        Local connections make a service on a server available at 127.0.0.1 on this computer.
       </Text>
-      <Text>
-        Use ↑/↓ to move across existing connections and saved Endpoints. Press Enter for create, close, daemon and recovery actions.
-      </Text>
-      <Box marginTop={1} flexDirection="column">
-        <Text bold>TUI-owned foreground Endpoints</Text>
-        {connections.length === 0 ? (
+      <Box flexDirection="column">
+        <Text bold>Local connections</Text>
+        {localConnectionRows.length === 0 ? (
           <Text>
-            None open. {snapshot.instances.status === "ready" && snapshot.instances.items.length === 0 ? "Create or discover an instance first." : "Press Enter for Actions to create one."}
+            None open. {snapshot.instances.status === "ready" && snapshot.instances.items.length === 0
+              ? "Rent or discover a server first."
+              : "Choose a server and use Connect, or open Actions here to create one."}
           </Text>
         ) : (
           <>
-            {connections.map((connection) => (
-              <Text key={connection.id} bold={connection.id === selected?.id}>
-                {connection.id === selected?.id ? "> " : "  "}
-                {connection.endpoint.host}:{connection.endpoint.port} · {connection.state} · {connection.instanceId}
-              </Text>
-            ))}
-            {selected === undefined || !showDetails ? null : (
-              <Box marginTop={1} flexDirection="column">
-                <Text bold>Foreground Endpoint details</Text>
-                <Text>Instance: {selected.instanceId}</Text>
-                <Text>Remote target: {escapeTerminalText(selected.remoteHost)}:{selected.remotePort}</Text>
-                <Text>Access Method: {escapeTerminalText(selected.accessMethod.id)} · {escapeTerminalText(selected.accessMethod.kind)}</Text>
-              </Box>
-            )}
+            {connectionWindow.showBefore ? <Text>↑ {connectionWindow.hiddenBefore} more connections</Text> : null}
+            {localConnectionRows.slice(connectionWindow.start, connectionWindow.end).map((connection) => {
+              const selectedRow =
+                selectedConnectionTarget?.kind === connection.kind &&
+                selectedConnectionTarget.id === connection.id;
+              return (
+                <Text key={`${connection.kind}:${connection.id}`} bold={selectedRow} wrap="truncate">
+                  {selectedRow ? "> " : "  "}
+                  {connection.endpoint === undefined
+                    ? "Local port unavailable"
+                    : `${connection.endpoint.host}:${connection.endpoint.port}`}
+                  {` → ${serverDisplayName(snapshot, connection.instanceId)}:${connection.remotePort}`}
+                  {connection.kind === "persistent" ? " · background" : ""}
+                  {connection.state === "live" ? "" : ` · ${connection.state}`}
+                </Text>
+              );
+            })}
+            {connectionWindow.showAfter ? <Text>↓ {connectionWindow.hiddenAfter} more connections</Text> : null}
           </>
         )}
       </Box>
-      <Box marginTop={1} flexDirection="column">
-        <Text bold>Persisted Endpoint intents (desired state)</Text>
-        <Text>
-          These definitions survive daemon restart. Live transport is shown separately and is recreated; an old dead transport is never treated as live.
-        </Text>
-        {snapshot.daemon.status !== "running" ? (
-          <Text>Daemon must be running to inspect current intent realization state.</Text>
-        ) : snapshot.daemon.endpointIntents.status === "unavailable" ? (
-          <Text>Persisted intents exist independently, but current daemon intent status is temporarily unavailable.</Text>
-        ) : endpointIntents.length === 0 ? (
-          <Text>No persisted Endpoint intents configured.</Text>
-        ) : (
-          <>
-            {endpointIntents.map((intent) => (
-              <EndpointIntentLine
-                key={intent.operationName}
-                intent={intent}
-                selected={intent.operationName === selectedIntent?.operationName}
-              />
-            ))}
-            {selectedIntent === undefined || !showDetails ? null : (
-              <EndpointIntentDetail intent={selectedIntent} />
+      {snapshot.daemon.status === "unreachable" || snapshot.daemon.status === "stale" ? (
+        <Text>Some background connections need attention; ordinary local connections remain usable.</Text>
+      ) : snapshot.daemon.status === "running" && snapshot.daemon.sessions.status === "unavailable" ? (
+        <Text>Some background connection status is temporarily unavailable.</Text>
+      ) : null}
+      {showDetails ? (
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>Technical details</Text>
+          <Text>Background service: {snapshot.daemon.status}</Text>
+          {selected === undefined ? null : (
+            <Box flexDirection="column">
+              <Text>Connection ID: {selected.id}</Text>
+              <Text>Server ID: {selected.instanceId}</Text>
+              <Text>Remote target: {escapeTerminalText(selected.remoteHost)}:{selected.remotePort}</Text>
+              <Text>Access Method: {escapeTerminalText(selected.accessMethod.id)} · {escapeTerminalText(selected.accessMethod.kind)}</Text>
+            </Box>
+          )}
+          {selectedPersistent === undefined ? null : (
+            <PersistentSessionDetail session={selectedPersistent} />
+          )}
+          <Box marginTop={1} flexDirection="column">
+            <Text bold>Saved background connection definitions</Text>
+            {snapshot.daemon.status !== "running" ? (
+              <Text>Background service must be running to inspect current realization state.</Text>
+            ) : snapshot.daemon.endpointIntents.status === "unavailable" ? (
+              <Text>Saved definitions exist independently, but current realization state is unavailable.</Text>
+            ) : endpointIntents.length === 0 ? (
+              <Text>No saved background connection definitions.</Text>
+            ) : (
+              <>
+                {endpointIntents.map((intent) => (
+                  <EndpointIntentLine
+                    key={intent.operationName}
+                    intent={intent}
+                    selected={intent.operationName === selectedIntent?.operationName}
+                  />
+                ))}
+                {selectedIntent === undefined ? null : (
+                  <EndpointIntentDetail intent={selectedIntent} />
+                )}
+              </>
             )}
-          </>
-        )}
-      </Box>
-      <Box marginTop={1} flexDirection="column">
-        <Text bold>Daemon-owned Connection Sessions (runtime state)</Text>
-        <Text>Daemon: {snapshot.daemon.status}</Text>
-        {snapshot.daemon.status === "stale" ? (
-          <Text>Daemon state is stale because its descriptor is invalid. Start will reconcile the managed daemon state.</Text>
-        ) : snapshot.daemon.status === "unreachable" ? (
-          <Text>Daemon descriptor exists, but authenticated health failed. No session mutation is attempted.</Text>
-        ) : snapshot.daemon.status === "stopped" ? (
-          <Text>Daemon is stopped. Press Enter for actions to start it.</Text>
-        ) : "sessions" in snapshot.daemon && snapshot.daemon.sessions.status === "unavailable" ? (
-          <Text>Daemon is healthy, but Connection Session details are temporarily unavailable.</Text>
-        ) : persistentSessions.length === 0 ? (
-          <Text>No persistent sessions. Press Enter for actions to create one.</Text>
-        ) : (
-          <>
-            {persistentSessions.map((session) => (
-              <PersistentSessionLine
-                key={session.id}
-                session={session}
-                selected={session.id === selectedPersistent?.id}
-              />
-            ))}
-            {selectedPersistent === undefined || !showDetails ? null : (
-              <PersistentSessionDetail session={selectedPersistent} />
-            )}
-          </>
-        )}
-      </Box>
+          </Box>
+        </Box>
+      ) : null}
     </Box>
   );
 }
 
-function PersistentSessionLine({
-  session,
-  selected,
-}: {
-  readonly session: TuiPersistentSessionReadItem;
-  readonly selected: boolean;
-}): React.ReactElement {
-  const endpoint = session.endpoint === undefined
-    ? "no local endpoint"
-    : `${session.endpoint.host}:${session.endpoint.port}`;
-  return (
-    <Text bold={selected}>
-      {selected ? "> " : "  "}{session.id} · {session.state} · {endpoint}
-      {session.state === "failed" ? ` · ${session.failure?.code ?? "failure"}` : ""}
-    </Text>
+function serverListLabel(
+  server: TuiInstanceReadItem,
+  index: number,
+  servers: readonly TuiInstanceReadItem[],
+): string {
+  if (server.name !== undefined) {
+    return server.name;
+  }
+  const unnamed = servers.filter((candidate) => candidate.name === undefined);
+  if (unnamed.length <= 1) {
+    return "Server";
+  }
+  const ordinal = servers
+    .slice(0, index + 1)
+    .filter((candidate) => candidate.name === undefined).length;
+  return `Server #${ordinal}`;
+}
+
+function serverDisplayName(snapshot: TuiReadSnapshot, instanceId: string): string {
+  if (snapshot.instances.status !== "ready") {
+    return "server";
+  }
+  const index = snapshot.instances.items.findIndex((instance) => instance.id === instanceId);
+  const server = index < 0 ? undefined : snapshot.instances.items[index];
+  return server === undefined ? "server" : serverListLabel(server, index, snapshot.instances.items);
+}
+
+function bulkServerDisplayName(
+  snapshot: TuiReadSnapshot | undefined,
+  instanceId: string,
+  targetIndex: number,
+): string {
+  if (snapshot?.instances.status !== "ready") {
+    return `Selected server #${targetIndex + 1}`;
+  }
+  const index = snapshot.instances.items.findIndex((instance) => instance.id === instanceId);
+  const server = index < 0 ? undefined : snapshot.instances.items[index];
+  return server === undefined
+    ? `Selected server #${targetIndex + 1}`
+    : serverListLabel(server, index, snapshot.instances.items);
+}
+
+function humanizeBulkInstanceMessage(
+  message: string,
+  snapshot: TuiReadSnapshot | undefined,
+  instanceId: string,
+  serverLabel: string,
+): string {
+  let human = message
+    .replaceAll(instanceId, serverLabel)
+    .replaceAll("Compute Instance", "Server")
+    .replaceAll("compute instance", "server");
+  if (snapshot?.instances.status === "ready") {
+    const server = snapshot.instances.items.find((instance) => instance.id === instanceId);
+    if (server !== undefined) {
+      human = human
+        .replaceAll(server.providerId, "provider")
+        .replaceAll(server.providerExternalId, "remote server");
+    }
+  }
+  return human;
+}
+
+function humanizeBulkMutationError(
+  error: unknown,
+  snapshot: TuiReadSnapshot | undefined,
+  instanceIds: readonly string[],
+): unknown {
+  if (!isNormalizedError(error)) {
+    return normalizedError(
+      "plugin-failure",
+      "EasyServer could not complete the operation for the selected servers. Open Diagnostics for details.",
+    );
+  }
+  if (error.code === "provider-unavailable") {
+    return normalizedError(
+      error.code,
+      "Could not reach one or more selected servers. Refresh Servers; use Providers or Diagnostics if the problem continues.",
+    );
+  }
+  if (error.code === "authentication") {
+    return normalizedError(
+      error.code,
+      "Credentials need attention before the selected servers can be managed. Open Providers to review them.",
+    );
+  }
+  if (error.code === "plugin-failure" || error.code === "unknown-provider-error") {
+    return normalizedError(
+      error.code,
+      "EasyServer could not complete the operation for the selected servers. Open Diagnostics for details.",
+    );
+  }
+  const message = instanceIds.reduce(
+    (current, instanceId, targetIndex) =>
+      humanizeBulkInstanceMessage(
+        current,
+        snapshot,
+        instanceId,
+        bulkServerDisplayName(snapshot, instanceId, targetIndex),
+      ),
+    error.message,
   );
+  return message === error.message ? error : normalizedError(error.code, message);
+}
+
+function humanizeBulkInstanceResult(
+  snapshot: TuiReadSnapshot | undefined,
+  result: TuiBulkInstanceMutationResult,
+): TuiBulkInstanceMutationResult {
+  return {
+    ...result,
+    results: result.results.map((item, targetIndex) => {
+      const serverLabel = bulkServerDisplayName(snapshot, item.instanceId, targetIndex);
+      if (item.status === "completed") {
+        return {
+          ...item,
+          instanceId: serverLabel,
+          ...(item.observationError === undefined
+            ? {}
+            : {
+                observationError: {
+                  ...item.observationError,
+                  message: humanizeBulkInstanceMessage(
+                    item.observationError.message,
+                    snapshot,
+                    item.instanceId,
+                    serverLabel,
+                  ),
+                },
+              }),
+        };
+      }
+      return {
+        ...item,
+        instanceId: serverLabel,
+        error: {
+          ...item.error,
+          message: humanizeBulkInstanceMessage(
+            item.error.message,
+            snapshot,
+            item.instanceId,
+            serverLabel,
+          ),
+        },
+      };
+    }),
+  };
 }
 
 function PersistentSessionDetail({
@@ -3685,58 +3861,126 @@ function PartialInventoryNotice({
     { readonly status: "ready" }
   >["providerOutcomes"][number][];
 }): React.ReactElement {
+  const firstFailure = failedProviders.find((provider) => provider.status === "failed");
+  const hiddenFailures = Math.max(0, failedProviders.length - (firstFailure === undefined ? 0 : 1));
   return (
-    <Box flexDirection="column" marginBottom={1}>
-      <Text>Some providers are unavailable.</Text>
-      <Text>Available provider results remain usable.</Text>
-      {failedProviders.map((provider) =>
-        provider.status === "failed" ? (
-          <Text key={provider.providerId}>
-            {provider.providerId} · {provider.error.code} · {provider.error.message}
-          </Text>
-        ) : null,
-      )}
-      <Text>Open Providers or Diagnostics if you need to fix an unavailable provider, then refresh.</Text>
+    <Box flexDirection="column">
+      <Text wrap="truncate">
+        Some providers are unavailable. Available provider results remain usable.
+      </Text>
+      <Text wrap="truncate">
+        {firstFailure === undefined
+          ? ""
+          : `${firstFailure.providerId} · ${firstFailure.error.code}${hiddenFailures === 0 ? "" : ` · +${hiddenFailures} more`} · `}
+        Open Providers or Diagnostics, then refresh.
+      </Text>
     </Box>
   );
 }
 
 function instanceEmptyGuidance(snapshot: TuiReadSnapshot): string {
   if (snapshot.providers.status === "failed") {
-    return "No compute instances are visible. Provider configuration could not be inspected; resolve provider setup and refresh from Actions.";
+    return "No servers are visible. Provider configuration could not be inspected; resolve provider setup and refresh from Actions.";
   }
   if (snapshot.providers.items.length === 0) {
-    return "No compute instances yet. Configure a provider first, then acquisition can create one.";
+    return "No servers yet. Configure a provider first, then rent a server.";
   }
   if (
     snapshot.instances.status === "ready" &&
     !snapshot.instances.complete &&
     snapshot.instances.providerOutcomes.some((provider) => provider.status === "failed")
   ) {
-    return "No instances reported by available providers. Unavailable providers may have additional instances that are not visible right now.";
+    return "No servers were reported by available providers. Unavailable providers may have additional servers that are not visible right now.";
   }
-  return "No compute instances yet. Providers are configured; use New instance when acquisition is enabled.";
+  return "No servers yet. Providers are configured; use Rent a server.";
 }
 
 function previousForegroundConnectionStep(
-  step: ForegroundConnectionStep,
+  flow: ForegroundConnectionFlow,
 ): ForegroundConnectionStep | undefined {
-  if (step === "instance") {
+  if (flow.step === "instance") {
     return undefined;
   }
-  if (step === "remote-host") {
-    return "instance";
+  if (flow.step === "remote-host") {
+    return flow.serverScoped ? undefined : "instance";
   }
-  if (step === "remote-port") {
-    return "remote-host";
+  if (flow.step === "remote-port") {
+    if (flow.advanced) {
+      return "remote-host";
+    }
+    return flow.serverScoped ? undefined : "instance";
   }
-  if (step === "access-method") {
+  if (flow.step === "access-method") {
     return "remote-port";
   }
-  if (step === "local-port") {
-    return "access-method";
+  if (flow.step === "local-port") {
+    return flow.advanced ? "access-method" : "remote-port";
   }
   return "local-port";
+}
+
+function humanizeTuiServerError(
+  error: unknown,
+  {
+    instanceId,
+    serverLabel,
+    accessMethodId,
+    connectionVocabulary = false,
+  }: {
+    readonly instanceId: string;
+    readonly serverLabel: string;
+    readonly accessMethodId?: string;
+    readonly connectionVocabulary?: boolean;
+  },
+): unknown {
+  if (!isNormalizedError(error) || error.code === "host-trust-required") {
+    return error;
+  }
+  if (error.code === "provider-unavailable") {
+    return normalizedError(
+      error.code,
+      `Could not reach ${serverLabel}. Refresh Servers; use Providers or Diagnostics if the problem continues.`,
+    );
+  }
+  if (error.code === "authentication") {
+    return normalizedError(
+      error.code,
+      `Credentials need attention before ${serverLabel} can be used. Open Providers to review them.`,
+    );
+  }
+  if (error.code === "plugin-failure" || error.code === "unknown-provider-error") {
+    return normalizedError(
+      error.code,
+      `EasyServer could not complete this operation for ${serverLabel}. Open Diagnostics for details.`,
+    );
+  }
+  if (connectionVocabulary && error.code === "unsupported-operation") {
+    return normalizedError(
+      error.code,
+      `No supported connection method is currently available for ${serverLabel}.`,
+    );
+  }
+  if (error.code === "not-found" && error.message.includes(instanceId)) {
+    return normalizedError(
+      error.code,
+      `${serverLabel} is no longer available. Refresh Servers and try again.`,
+    );
+  }
+  let message = error.message
+    .replaceAll(instanceId, serverLabel)
+    .replaceAll("Compute Instance", "Server")
+    .replaceAll("compute instance", "server");
+  if (accessMethodId !== undefined) {
+    message = message.replaceAll(accessMethodId, "the selected connection method");
+  }
+  if (connectionVocabulary) {
+    message = message
+      .replaceAll("Local Endpoint", "Local connection")
+      .replaceAll("Connection Session", "background connection")
+      .replaceAll("Access Method", "connection method")
+      .replaceAll("Endpoint", "connection");
+  }
+  return message === error.message ? error : normalizedError(error.code, message);
 }
 
 function parseConnectionPort(value: string): number | undefined {
@@ -3824,63 +4068,68 @@ function instanceMutationForInput(
 
 function instanceMutationStatus(mutation: TuiInstanceMutation): string {
   return mutation.kind === "adopt"
-    ? `Adoption requested for ${mutation.instanceId}.`
-    : `Requested ${mutation.action} for ${mutation.instanceId}.`;
+    ? "Server adoption requested."
+    : `${instanceActionLabel(mutation.action)} requested.`;
 }
 
 function bulkInstanceMutationStatus(mutation: TuiBulkInstanceMutation): string {
-  return `Requested ${mutation.action} for ${mutation.instanceIds.length} marked ${mutation.instanceIds.length === 1 ? "instance" : "instances"}.`;
+  return `${instanceActionLabel(mutation.action)} requested for ${mutation.instanceIds.length} selected ${mutation.instanceIds.length === 1 ? "server" : "servers"}.`;
 }
 
 function instanceMutationTitle(mutation: TuiInstanceMutation): string {
-  if (mutation.kind === "adopt") {
-    return "Adopt instance";
-  }
-  const action = mutation.action.slice("instance.".length);
-  return `${action[0]?.toUpperCase() ?? ""}${action.slice(1)} instance`;
-}
-
-function instanceConfirmationTarget(
-  details: InstanceDestroyConfirmationDetails,
-): string {
-  return `${escapeTerminalText(details.instanceId)} · provider=${escapeTerminalText(details.providerId)} · management=${details.management}`;
+  return mutation.kind === "adopt" ? "Adopt server" : instanceActionLabel(mutation.action);
 }
 
 function bulkInstanceMutationTitle(mutation: TuiBulkInstanceMutation): string {
-  const action = mutation.action.slice("instance.".length);
-  return `${action[0]?.toUpperCase() ?? ""}${action.slice(1)} selected instances`;
+  const verb = mutation.action.slice("instance.".length);
+  return `${verb[0]?.toUpperCase() ?? ""}${verb.slice(1)} selected servers`;
 }
 
 function bulkInstanceConfirmationResources(
+  snapshot: TuiReadSnapshot | undefined,
   details: BulkInstanceDestroyConfirmationDetails,
 ): readonly string[] {
-  return details.targets.map((target) => {
-    const provider =
-      target.providerId === undefined
-        ? "provider=unknown"
-        : `provider=${escapeTerminalText(target.providerId)}`;
-    const management =
-      target.management === undefined
-        ? "management=unknown"
-        : `management=${target.management}`;
-    return `${escapeTerminalText(target.instanceId)} · ${provider} · ${management}`;
+  return details.targets.map((target, index) => {
+    if (snapshot?.instances.status !== "ready") {
+      return `Selected server #${index + 1}`;
+    }
+    const serverIndex = snapshot.instances.items.findIndex(
+      (server) => server.id === target.instanceId,
+    );
+    const server = serverIndex < 0 ? undefined : snapshot.instances.items[serverIndex];
+    return server === undefined
+      ? `Selected server #${index + 1}`
+      : serverListLabel(server, serverIndex, snapshot.instances.items);
   });
 }
 
 function destroyAffectedResources(
   details: InstanceDestroyConfirmationDetails,
 ): readonly string[] {
-  return [
-    ...details.impact.sessionIds.map(
-      (sessionId) => `Session ${escapeTerminalText(sessionId)}`,
-    ),
-    ...details.impact.endpointIntentNames.map(
-      (name) => `Endpoint intent ${escapeTerminalText(name)}`,
-    ),
-    ...(details.impact.pendingCleanupCount === 0
-      ? []
-      : [`${details.impact.pendingCleanupCount} pending connection cleanup(s)`]),
-  ];
+  const resources: string[] = [];
+  if (details.impact.sessionIds.length > 0) {
+    resources.push(
+      `${details.impact.sessionIds.length} background ${details.impact.sessionIds.length === 1 ? "connection" : "connections"}`,
+    );
+  }
+  if (details.impact.endpointIntentNames.length > 0) {
+    resources.push(
+      `${details.impact.endpointIntentNames.length} saved background connection ${details.impact.endpointIntentNames.length === 1 ? "definition" : "definitions"}`,
+    );
+  }
+  if (details.impact.pendingCleanupCount > 0) {
+    resources.push(
+      `${details.impact.pendingCleanupCount} pending connection ${details.impact.pendingCleanupCount === 1 ? "cleanup" : "cleanups"}`,
+    );
+  }
+  return resources;
+}
+
+function destroyServerConsequence(details: InstanceDestroyConfirmationDetails): string {
+  const affected = destroyAffectedResources(details);
+  return affected.length === 0
+    ? "This permanently destroys the selected server."
+    : `This permanently destroys the selected server and closes or removes ${affected.join(", ")}.`;
 }
 
 function BulkInstanceSelection({
@@ -3895,15 +4144,17 @@ function BulkInstanceSelection({
   return (
     <Box marginTop={1} flexDirection="column">
       <Text bold>
-        Bulk targets ({instanceIds.length})
+        Selected servers ({instanceIds.length})
       </Text>
-      {instanceIds.map((instanceId) => {
-        const instance = instances.find((item) => item.id === instanceId);
+      {instanceIds.map((instanceId, targetIndex) => {
+        const instanceIndex = instances.findIndex((item) => item.id === instanceId);
+        const instance = instanceIndex < 0 ? undefined : instances[instanceIndex];
         return instance === undefined ? (
-          <Text key={instanceId}>{instanceId} · no longer visible</Text>
+          <Text key={instanceId}>Selected server #{targetIndex + 1} · no longer visible</Text>
         ) : (
           <Text key={instanceId}>
-            {instance.id} · provider={instance.providerId} · freshness={instance.freshness} · management={instance.management}
+            {serverListLabel(instance, instanceIndex, instances)} · {instance.state ?? "status unavailable"}
+            {instance.freshness === "fresh" ? "" : " · needs refresh"}
           </Text>
         );
       })}
@@ -3969,6 +4220,11 @@ function InstanceActionGuidance({
       )}
     </Box>
   );
+}
+
+function instanceActionLabel(action: AvailableAction): string {
+  const verb = action.slice("instance.".length);
+  return `${verb[0]?.toUpperCase() ?? ""}${verb.slice(1)} server`;
 }
 
 function formatActions(actions: readonly string[]): string {
@@ -4088,7 +4344,7 @@ function HelpPanel({ colorEnabled }: { readonly colorEnabled: boolean }): React.
       <Text>? — toggle this help</Text>
       <Box marginTop={1} flexDirection="column">
         <Text>Actions are shown in context after Enter; you do not need to memorize letter or number shortcuts.</Text>
-        <Text>Live foreground Endpoints still require safe cleanup before exit; persistent Sessions survive TUI exit.</Text>
+        <Text>Local connections close safely with this TUI; background connections can remain available after it exits.</Text>
       </Box>
     </Box>
   );
@@ -4276,10 +4532,12 @@ export function TuiApp({
       if (foregroundConnectionOperations === undefined) {
         return undefined;
       }
+      const serverLabel =
+        snapshot === undefined ? "server" : serverDisplayName(snapshot, instanceId);
       setOperation(
         presentWorkingOperation({
-          title: "Discover Access Methods",
-          detail: `Reading supported TCP-forward access for ${instanceId}.`,
+          title: "Check connection method",
+          detail: `Checking supported local access for ${serverLabel}.`,
           activity: "loading",
         }),
       );
@@ -4293,16 +4551,20 @@ export function TuiApp({
       } catch (error) {
         setOperation(
           presentOperationError({
-            title: "Discover Access Methods",
+            title: "Check connection method",
             operation: "read",
-            error,
+            error: humanizeTuiServerError(error, {
+              instanceId,
+              serverLabel,
+              connectionVocabulary: true,
+            }),
             allowRetry: false,
           }),
         );
         return undefined;
       }
     },
-    [foregroundConnectionOperations],
+    [foregroundConnectionOperations, snapshot],
   );
 
   const openForegroundConnection = useCallback(
@@ -4312,10 +4574,12 @@ export function TuiApp({
       if (foregroundConnectionOperations === undefined) {
         return undefined;
       }
+      const serverLabel =
+        snapshot === undefined ? "server" : serverDisplayName(snapshot, request.instanceId);
       setOperation(
         presentWorkingOperation({
-          title: "Open foreground Endpoint",
-          detail: `${request.instanceId} → ${request.remoteHost ?? "127.0.0.1"}:${request.remotePort}`,
+          title: "Open local connection",
+          detail: `${serverLabel} · service port ${request.remotePort}`,
           activity: "waiting-provider",
         }),
       );
@@ -4344,16 +4608,21 @@ export function TuiApp({
         setForegroundConnections([...foregroundConnectionOperations.list()]);
         setOperation(
           presentOperationError({
-            title: "Open foreground Endpoint",
+            title: "Open local connection",
             operation: "read",
-            error,
+            error: humanizeTuiServerError(error, {
+              instanceId: request.instanceId,
+              serverLabel,
+              accessMethodId: request.accessMethodId,
+              connectionVocabulary: true,
+            }),
             allowRetry: false,
           }),
         );
         return undefined;
       }
     },
-    [foregroundConnectionOperations],
+    [foregroundConnectionOperations, snapshot],
   );
 
   const closeForegroundConnection = useCallback(
@@ -4361,10 +4630,15 @@ export function TuiApp({
       if (foregroundConnectionOperations === undefined) {
         return false;
       }
+      const connection = foregroundConnectionOperations.list().find((item) => item.id === id);
+      const serverLabel =
+        connection === undefined || snapshot === undefined
+          ? "server"
+          : serverDisplayName(snapshot, connection.instanceId);
       setOperation(
         presentWorkingOperation({
-          title: "Close foreground Endpoint",
-          detail: "Closing the TUI-owned local Endpoint and its access transport.",
+          title: "Close local connection",
+          detail: "Closing the local connection and its access transport.",
           activity: "verifying-state",
         }),
       );
@@ -4374,23 +4648,34 @@ export function TuiApp({
         await closing;
         setForegroundConnections([...foregroundConnectionOperations.list()]);
         setOperation(
-          presentCompletedOperation({ title: "Foreground Endpoint closed" }),
+          presentCompletedOperation({ title: "Local connection closed" }),
         );
         return true;
       } catch (error) {
         setForegroundConnections([...foregroundConnectionOperations.list()]);
         setOperation(
           presentOperationError({
-            title: "Close foreground Endpoint",
+            title: "Close local connection",
             operation: "read",
-            error,
+            error:
+              connection === undefined
+                ? normalizedError(
+                    "plugin-failure",
+                    "The local connection could not be closed. Open Diagnostics for details.",
+                  )
+                : humanizeTuiServerError(error, {
+                    instanceId: connection.instanceId,
+                    serverLabel,
+                    accessMethodId: connection.accessMethod.id,
+                    connectionVocabulary: true,
+                  }),
             allowRetry: false,
           }),
         );
         return false;
       }
     },
-    [foregroundConnectionOperations],
+    [foregroundConnectionOperations, snapshot],
   );
 
   const closeForegroundConnectionsForExit = useCallback(async (): Promise<boolean> => {
@@ -4400,8 +4685,8 @@ export function TuiApp({
     const count = foregroundConnectionOperations.list().length;
     setOperation(
       presentWorkingOperation({
-        title: `Closing ${count} TUI-owned ${count === 1 ? "Endpoint" : "Endpoints"}`,
-        detail: "Foreground Endpoints close before the TUI exits.",
+        title: `Closing ${count} local ${count === 1 ? "connection" : "connections"}`,
+        detail: "Connections owned by this TUI close before it exits.",
         activity: "verifying-state",
       }),
     );
@@ -4415,9 +4700,12 @@ export function TuiApp({
       setForegroundConnections([...foregroundConnectionOperations.list()]);
       setOperation(
         presentOperationError({
-          title: "Close foreground Endpoints before exit",
+          title: "Close local connections before exit",
           operation: "read",
-          error,
+          error: normalizedError(
+            isNormalizedError(error) ? error.code : "plugin-failure",
+            "One or more local connections could not be closed. Open Diagnostics for details.",
+          ),
           allowRetry: false,
         }),
       );
@@ -4508,7 +4796,7 @@ export function TuiApp({
       }
       setOperation(
         presentWorkingOperation({
-          title: "Create persistent Endpoint",
+          title: "Create background local connection",
           detail: `${request.instanceId} → ${request.remoteHost ?? "127.0.0.1"}:${request.remotePort}`,
           activity: "waiting-provider",
         }),
@@ -4534,7 +4822,7 @@ export function TuiApp({
         await refresh();
         setOperation(
           presentOperationError({
-            title: "Create persistent Endpoint",
+            title: "Create background local connection",
             operation: "read",
             error,
             allowRetry: false,
@@ -4551,10 +4839,18 @@ export function TuiApp({
       if (daemonOperations === undefined) {
         return false;
       }
+      const session =
+        snapshot?.daemon.status === "running" && snapshot.daemon.sessions.status === "ready"
+          ? snapshot.daemon.sessions.items?.find((item) => item.id === id)
+          : undefined;
+      const serverLabel =
+        session === undefined || snapshot === undefined
+          ? "server"
+          : serverDisplayName(snapshot, session.instanceId);
       setOperation(
         presentWorkingOperation({
-          title: "Close persistent Session",
-          detail: id,
+          title: "Close background local connection",
+          detail: `Closing the background connection for ${serverLabel}.`,
           activity: "verifying-state",
         }),
       );
@@ -4567,16 +4863,27 @@ export function TuiApp({
         await refresh();
         setOperation(
           presentOperationError({
-            title: "Close persistent Session",
+            title: "Close background local connection",
             operation: "read",
-            error,
+            error:
+              session === undefined
+                ? normalizedError(
+                    "plugin-failure",
+                    "The background connection could not be closed. Open Diagnostics for details.",
+                  )
+                : humanizeTuiServerError(error, {
+                    instanceId: session.instanceId,
+                    serverLabel,
+                    accessMethodId: session.accessMethod.id,
+                    connectionVocabulary: true,
+                  }),
             allowRetry: false,
           }),
         );
         return false;
       }
     },
-    [daemonOperations, refresh],
+    [daemonOperations, refresh, snapshot],
   );
 
   const setEndpointIntentEnabled = useCallback(
@@ -4743,12 +5050,14 @@ export function TuiApp({
       }
 
       const title = instanceMutationTitle(mutation);
+      const serverLabel =
+        snapshot === undefined ? "server" : serverDisplayName(snapshot, mutation.instanceId);
       let warning: string | undefined;
       let observing = false;
       setOperation(
         presentWorkingOperation({
           title,
-          detail: mutation.instanceId,
+          detail: serverLabel,
           activity: "requested",
         }),
       );
@@ -4762,8 +5071,8 @@ export function TuiApp({
                 title,
                 detail:
                   progress === "observing"
-                    ? `Observing ${mutation.instanceId} until provider state converges.`
-                    : `Dispatching the requested operation for ${mutation.instanceId}.`,
+                    ? `Observing ${serverLabel} until its state converges.`
+                    : `Dispatching the requested operation for ${serverLabel}.`,
                 activity: progress,
               }),
             );
@@ -4778,10 +5087,17 @@ export function TuiApp({
             return new Promise<boolean>((resolve) => {
               setPendingInstanceConfirmation({ resolve, workingTitle: title });
               setOperation(
-                presentMutationConfirmation(prompt, {
-                  target: instanceConfirmationTarget(details),
-                  affectedResources: destroyAffectedResources(details),
-                }),
+                presentMutationConfirmation(
+                  {
+                    summary: `Destroy ${serverLabel}?`,
+                    risks: [...prompt.risks],
+                    consequence: destroyServerConsequence(details),
+                  },
+                  {
+                    target: serverLabel,
+                    affectedResources: destroyAffectedResources(details),
+                  },
+                ),
               );
             });
           },
@@ -4793,21 +5109,24 @@ export function TuiApp({
         setOperation(
           presentCompletedOperation({
             title: `${title} completed`,
-            detail: `${mutation.instanceId} observed state=${result.observedState}.${warning === undefined ? "" : ` Warning: ${warning}`}`,
+            detail: `${serverLabel} observed state=${result.observedState}.${warning === undefined ? "" : ` Warning: ${warning}`}`,
           }),
         );
       } catch (error) {
         setPendingInstanceConfirmation(undefined);
         setOperation(
           presentOperationError({
-            title: observing ? "Observe instance state" : title,
+            title: observing ? "Observe server state" : title,
             operation: observing ? "read" : "mutation",
-            error,
+            error: humanizeTuiServerError(error, {
+              instanceId: mutation.instanceId,
+              serverLabel,
+            }),
           }),
         );
       }
     },
-    [instanceMutationRunner, refresh],
+    [instanceMutationRunner, refresh, snapshot],
   );
 
   const mutateBulkInstances = useCallback(
@@ -4820,8 +5139,8 @@ export function TuiApp({
       const controller = new AbortController();
       bulkMutationControllerRef.current = controller;
       const title = bulkInstanceMutationTitle(mutation);
-      const requestedResults = mutation.instanceIds.map((instanceId) => ({
-        instanceId,
+      const requestedResults = mutation.instanceIds.map((instanceId, targetIndex) => ({
+        instanceId: bulkServerDisplayName(snapshot, instanceId, targetIndex),
         status: "requested" as const,
       }));
       const warnings: string[] = [];
@@ -4868,10 +5187,17 @@ export function TuiApp({
                   bulkTargetIds: details.targets.map((target) => target.instanceId),
                 });
                 setOperation(
-                  presentMutationConfirmation(prompt, {
-                    target: `${details.targets.length} selected Compute ${details.targets.length === 1 ? "Instance" : "Instances"}`,
-                    affectedResources: bulkInstanceConfirmationResources(details),
-                  }),
+                  presentMutationConfirmation(
+                    {
+                      ...prompt,
+                      summary: `${title}?`,
+                      consequence: "This permanently destroys the selected servers and any EasyServer-managed connections that must be cleaned up first.",
+                    },
+                    {
+                      target: `${details.targets.length} selected ${details.targets.length === 1 ? "server" : "servers"}`,
+                      affectedResources: bulkInstanceConfirmationResources(snapshot, details),
+                    },
+                  ),
                 );
               });
             },
@@ -4884,7 +5210,24 @@ export function TuiApp({
         if (!controller.signal.aborted) {
           await refresh({ quiet: true });
         }
-        setOperation(presentBulkInstanceResult(title, result, warnings));
+        setOperation(
+          presentBulkInstanceResult(
+            title,
+            humanizeBulkInstanceResult(snapshot, result),
+            warnings.map((warning) =>
+              mutation.instanceIds.reduce(
+                (message, instanceId, targetIndex) =>
+                  humanizeBulkInstanceMessage(
+                    message,
+                    snapshot,
+                    instanceId,
+                    bulkServerDisplayName(snapshot, instanceId, targetIndex),
+                  ),
+                warning,
+              ),
+            ),
+          ),
+        );
       } catch (error) {
         if (bulkMutationControllerRef.current === controller) {
           bulkMutationControllerRef.current = undefined;
@@ -4894,12 +5237,12 @@ export function TuiApp({
           presentOperationError({
             title,
             operation: "mutation",
-            error,
+            error: humanizeBulkMutationError(error, snapshot, mutation.instanceIds),
           }),
         );
       }
     },
-    [bulkInstanceMutationRunner, refresh],
+    [bulkInstanceMutationRunner, refresh, snapshot],
   );
 
   const mutateProvider = useCallback(

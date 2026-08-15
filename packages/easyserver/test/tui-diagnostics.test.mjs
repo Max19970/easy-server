@@ -425,7 +425,7 @@ test("connection-flow failures can open Diagnostics without discarding the guide
   await tick();
   await tick();
 
-  assert.match(view.lastFrame(), /Discover Access Methods: failed/);
+  assert.match(view.lastFrame(), /Check connection method: failed/);
   assert.match(view.lastFrame(), /after closing this result, open Diagnostics/);
   assert.match(view.lastFrame(), /Port: 22/);
 
@@ -440,7 +440,7 @@ test("connection-flow failures can open Diagnostics without discarding the guide
   await tick();
   await tick();
   await chooseVisibleAction(view, "Open Connections");
-  assert.match(view.lastFrame(), /Remote TCP port/);
+  assert.match(view.lastFrame(), /Service port on the server/);
   assert.match(view.lastFrame(), /Port: 22/);
 });
 

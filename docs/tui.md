@@ -35,7 +35,15 @@ The ordinary TUI uses one navigation vocabulary instead of route-specific comman
 
 Primary actions are always visible in context after `Enter`; ordinary use does not require memorizing letter, number, bracket or case-sensitive shortcuts. Provider-owned forms use the same arrows/Enter/Esc model, and operation/confirmation drawers expose their available actions as a selectable list. Outcome-unknown operations remain observation/reconciliation problems rather than blind retry opportunities.
 
-The TUI v2 transition deliberately uses progressive disclosure. Home already hides control-plane health and provider internals behind the task hierarchy. Provider, server and connection detail screens continue moving technical IDs, provider metadata, remote targets and other deeper state behind **Details** / **Advanced** as their dedicated TUI v2 slices are completed; those details remain available rather than being removed.
+The TUI v2 transition deliberately uses progressive disclosure. Home hides control-plane health and provider internals behind the task hierarchy. Provider, server and connection screens keep technical IDs, provider metadata, exact remote targets, Access Method IDs, daemon state, Session IDs and saved Endpoint-intent state behind **Technical details** / **Advanced**; those details remain available rather than being removed.
+
+## Servers and local connections
+
+**Servers** is the ordinary lifecycle surface. Rows prioritize a human server name and current state; technical provider/canonical IDs stay in **Technical details**. Provider-declared lifecycle operations appear as visible actions such as **Start server** or **Stop server**. Large server lists are windowed to the available terminal rows while preserving selection by the canonical identity internally.
+
+For ordinary access, select a fresh server and choose **Connect**. The guided flow asks for the TCP service port on that server and an optional local port. EasyServer keeps `127.0.0.1` as the ordinary remote-host default and deterministically selects the first supported provider-declared connection method without requiring the user to understand an Access Method ID. The review shows the server, service port, resulting local loopback address and lifetime before opening the connection. Manual remote-host and exact connection-method selection remain available only in the Advanced flow.
+
+**Connections** presents active access as local addresses such as `127.0.0.1:40123 → My server:8188`. Connections owned by the current TUI and background connections share this user-facing list; the latter are marked simply as **background**. Exact foreground/persistent ownership, daemon status, Session IDs, saved Endpoint definitions and Access Method details remain inspectable under **Technical details**. A failed background subsystem is shown as a secondary warning and does not hide healthy ordinary local connections.
 
 ## Diagnostics and support reports
 
@@ -45,7 +53,7 @@ Screen-reader mode renders the complete sanitized report linearly instead of cli
 
 ## Narrow terminals and accessibility
 
-EasyServer adapts the focused task page to the available terminal width and preserves the current page, canonical selections and focus state across resize. Long provider-backed lists and action menus keep the focused logical item inside the available terminal rows instead of rendering an unbounded list below the screen.
+EasyServer adapts the focused task page to the available terminal width and preserves the current page, canonical selections and focus state across resize. Long provider-backed lists, server inventories, local-connection lists and action menus keep the focused logical item inside the available terminal rows instead of rendering an unbounded list below the screen.
 
 For a linear screen-reader-oriented terminal presentation, set:
 
@@ -106,12 +114,9 @@ Billable/destructive risk comes from the Provider Plugin command contract but co
 
 ## Connection lifetime and exit
 
-EasyServer has two different ownership models:
+In ordinary TUI language, a **local connection** belongs to the current TUI and closes when this TUI exits; if any are still open, EasyServer requires a second quit confirmation and closes them before leaving. A **background connection** can remain available after TUI exit.
 
-- **Foreground Endpoint** — owned by the current TUI process. It closes when this TUI exits. If foreground Endpoints are still live, the TUI requires a second quit confirmation and closes them before leaving.
-- **Daemon-owned persistent Session / Endpoint intent** — owned by the EasyServer daemon and survives TUI exit. Closing the TUI does not silently stop these connections.
-
-The Connections surface keeps desired persisted Endpoint intents separate from live runtime Sessions so disabled/error/recovery state is not confused with an active transport.
+Internally these map to the existing foreground Endpoint and daemon-owned persistent Session / Endpoint-intent ownership models. That distinction, including desired-state recovery versus live runtime transport, remains visible under **Technical details** for troubleshooting and advanced management; hiding the ontology from the ordinary path does not merge or weaken the underlying lifetimes.
 
 ## Degraded and recovery states
 
