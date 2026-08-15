@@ -237,11 +237,12 @@ test("screen-reader runtime stays linear and preserves route, focus, content and
   assert.equal(stderr.text(), "");
 });
 
-test("operation interaction drawer owns input without disturbing route selection", async () => {
+test("risky confirmation owns the viewport and defaults focus to cancellation", async () => {
   const actions = [];
   const view = render(
     shell({
       width: 100,
+      height: 24,
       operation: presentMutationConfirmation(
         {
           summary: "Rent one GPU",
@@ -263,12 +264,42 @@ test("operation interaction drawer owns input without disturbing route selection
   assert.match(view.lastFrame(), /Target: Vast\.ai marketplace/);
   assert.match(view.lastFrame(), /Consequence: may create or increase provider charges/);
   assert.match(view.lastFrame(), /Affected EasyServer resources: Provider inventory/);
+  assert.match(view.lastFrame(), /> Cancel/);
+  assert.doesNotMatch(view.lastFrame(), /Overview \[active\]/);
 
-  view.stdin.write("\t");
+  view.stdin.write("	");
   await tick();
-  assert.match(view.lastFrame(), /> Overview \[active\]/);
-  assert.doesNotMatch(view.lastFrame(), /> Instances/);
+  assert.match(view.lastFrame(), /> Cancel/);
+  assert.doesNotMatch(view.lastFrame(), /Overview \[active\]/);
 
+  view.stdin.write("\r");
+  await tick();
+  assert.deepEqual(actions, ["decline"]);
+});
+
+test("risky confirmation requires an explicit focus move before approval", async () => {
+  const actions = [];
+  const view = render(
+    shell({
+      width: 100,
+      height: 24,
+      operation: presentMutationConfirmation(
+        {
+          summary: "Rent one GPU",
+          risks: ["billable"],
+          consequence: "may create or increase provider charges",
+        },
+        { target: "Vast.ai marketplace", affectedResources: [] },
+      ),
+      onOperationAction(action) {
+        actions.push(action);
+      },
+    }),
+  );
+
+  view.stdin.write("\u001b[A");
+  await tick();
+  assert.match(view.lastFrame(), /> Confirm/);
   view.stdin.write("\r");
   await tick();
   assert.deepEqual(actions, ["confirm"]);

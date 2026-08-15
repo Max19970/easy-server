@@ -97,7 +97,7 @@ A clean EasyServer installation contains zero Provider Plugins. The TUI keeps th
 
 Credential values remain behind the EasyServer Secret Store boundary. The TUI shows declared credential names/readiness and uses masked input when setting a value; normal views, Diagnostics and operation errors must never echo the secret.
 
-Billable/destructive risk comes from the Provider Plugin command contract but confirmation is host-owned. The TUI shows the target and consequence before dispatch. SSH first-use trust likewise shows the exact discovered fingerprint and requires explicit confirmation; changed trusted keys fail closed.
+Billable/destructive risk comes from the Provider Plugin command contract but confirmation is host-owned. The TUI gives confirmation the foreground viewport, shows the target and consequence before dispatch, and initially focuses the safe Cancel/Decline choice so a stray first Enter cannot approve the mutation. SSH first-use trust likewise shows the exact discovered fingerprint and requires an explicit move to the trust action; changed trusted keys fail closed.
 
 ## Connection lifetime and exit
 

@@ -83,6 +83,7 @@ import {
   type ProviderInteractiveEvent,
   type ProviderInteractiveScreen,
 } from "@easyai101/easyserver-plugin-sdk";
+import { moveTuiFocus } from "./tui-focus.js";
 import { escapeTerminalText } from "./terminal-text.js";
 import { EASYSERVER_VERSION } from "./version.js";
 
@@ -233,6 +234,7 @@ interface ForegroundConnectionFlow {
 
 export interface TuiShellProps {
   readonly width?: number;
+  readonly height?: number;
   readonly colorEnabled?: boolean;
   readonly screenReader?: boolean;
   readonly operation?: TuiOperationPresentation;
@@ -274,6 +276,7 @@ export interface TuiShellProps {
 
 export function TuiShell({
   width,
+  height,
   colorEnabled = true,
   screenReader = false,
   operation,
@@ -313,13 +316,16 @@ export function TuiShell({
   const { exit } = useApp();
   const windowSize = useWindowSize();
   const columns = width ?? windowSize.columns ?? 80;
+  const rows = height ?? windowSize.rows ?? 24;
   const narrow = columns < 72;
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const [contentFocused, setContentFocused] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [actionCursor, setActionCursor] = useState(0);
-  const [operationActionCursor, setOperationActionCursor] = useState(0);
+  const [operationActionCursor, setOperationActionCursor] = useState(() =>
+    defaultOperationActionIndex(operation),
+  );
   const [instanceDetailsOpen, setInstanceDetailsOpen] = useState(false);
   const [providerDetailsOpen, setProviderDetailsOpen] = useState(false);
   const [connectionDetailsOpen, setConnectionDetailsOpen] = useState(false);
@@ -508,7 +514,7 @@ export function TuiShell({
   }, [effectiveSelectedProviderSource]);
 
   useEffect(() => {
-    setOperationActionCursor(0);
+    setOperationActionCursor(defaultOperationActionIndex(operation));
   }, [operation?.phase, operation?.title]);
 
   useEffect(() => {
@@ -972,15 +978,14 @@ export function TuiShell({
     if (operation !== undefined) {
       if (operation.actions.length > 0) {
         if (key.downArrow) {
-          setOperationActionCursor(
-            (current) => (current + 1) % operation.actions.length,
+          setOperationActionCursor((current) =>
+            moveTuiFocus(current, operation.actions.length, 1),
           );
           return;
         }
         if (key.upArrow) {
-          setOperationActionCursor(
-            (current) =>
-              (current - 1 + operation.actions.length) % operation.actions.length,
+          setOperationActionCursor((current) =>
+            moveTuiFocus(current, operation.actions.length, -1),
           );
           return;
         }
@@ -2152,7 +2157,7 @@ export function TuiShell({
   const muted = colorEnabled ? "gray" : undefined;
 
   return (
-    <Box flexDirection="column" width="100%" paddingX={1}>
+    <Box flexDirection="column" width="100%" height={screenReader ? undefined : rows} paddingX={1}>
       <Box justifyContent="space-between">
         <Text bold color={accent} aria-label={`EasyServer ${EASYSERVER_VERSION}`}>
           EasyServer
@@ -2163,8 +2168,23 @@ export function TuiShell({
         Control center · {narrow ? "compact layout" : "wide layout"}
       </Text>
 
+      {operationInteractionOpen && operation !== undefined ? (
+        <Box flexGrow={1} minHeight={0} overflowY="hidden" justifyContent="center">
+          <TuiOperationDrawer
+            operation={operation}
+            colorEnabled={colorEnabled}
+            selectedActionIndex={Math.min(
+              operationActionCursor,
+              Math.max(0, operation.actions.length - 1),
+            )}
+          />
+        </Box>
+      ) : (
       <Box
         flexDirection={narrow ? "column" : "row"}
+        flexGrow={1}
+        minHeight={0}
+        overflowY="hidden"
         marginTop={1}
         gap={narrow ? 1 : 3}
       >
@@ -2273,8 +2293,9 @@ export function TuiShell({
           )}
         </Box>
       </Box>
+      )}
 
-      {operation === undefined ? null : (
+      {operation === undefined || operationInteractionOpen ? null : (
         <Box marginTop={1}>
           <TuiOperationDrawer
             operation={operation}
@@ -3665,6 +3686,18 @@ function canStartInstanceMutation(
     operation.phase === "failed" ||
     operation.phase === "cancelled"
   );
+}
+
+function defaultOperationActionIndex(
+  operation: TuiOperationPresentation | undefined,
+): number {
+  if (operation?.interaction === undefined || operation.actions.length === 0) {
+    return 0;
+  }
+  const safeIndex = operation.actions.findIndex(
+    (action) => action.kind === "decline" || action.kind === "cancel",
+  );
+  return safeIndex >= 0 ? safeIndex : 0;
 }
 
 function operationActionForInput(
