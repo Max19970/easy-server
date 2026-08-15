@@ -32,6 +32,7 @@ runSmoke(cli, ["-ExitMode", "quit", "-Columns", "60", "-Rows", "30"]);
 runSmoke(cli, ["-ExitMode", "ctrl-c"]);
 runSmoke(cli, ["-ExitMode", "quit", "-NoColor"]);
 runSmoke(cli, ["-ExitMode", "quit", "-ScreenReader"]);
+runSmoke(cli, ["-ExitMode", "quit", "-Relaunch"]);
 runSmoke(errorFixture, ["-ExitMode", "error"]);
 
 process.stdout.write(

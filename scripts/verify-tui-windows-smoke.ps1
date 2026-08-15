@@ -15,6 +15,7 @@ param(
   [switch]$ResizeToNarrow,
   [switch]$NoColor,
   [switch]$ScreenReader,
+  [switch]$Relaunch,
   [string]$ExpectedText = "EasyServer"
 )
 
@@ -59,7 +60,9 @@ $title = "EasyServerTuiSmoke-$PID-$([Guid]::NewGuid().ToString('N'))"
 $log = Join-Path $env:TEMP "$title.log"
 $state = Join-Path $env:TEMP "$title-state.json"
 $daemon = Join-Path $env:TEMP "$title-daemon.json"
-Remove-Item -LiteralPath $log, $state, $daemon -Force -ErrorAction SilentlyContinue
+$runner = Join-Path $env:TEMP "$title-runner.mjs"
+$relaunchMarker = "__EASYSERVER_SECOND_LAUNCH__"
+Remove-Item -LiteralPath $log, $state, $daemon, $runner -Force -ErrorAction SilentlyContinue
 
 $previousState = $env:EASYSERVER_STATE_FILE
 $previousDaemon = $env:EASYSERVER_DAEMON_FILE
@@ -150,16 +153,68 @@ function Wait-ForLogText([string]$Path, [string]$Needle, [DateTime]$Deadline) {
   return $false
 }
 
+function Wait-ForLogTextAfter([string]$Path, [string]$Marker, [string]$Needle, [DateTime]$Deadline) {
+  do {
+    if (Test-Path -LiteralPath $Path) {
+      try {
+        $text = Read-SharedText $Path
+        $markerIndex = $text.LastIndexOf($Marker)
+        if ($markerIndex -ge 0 -and $text.IndexOf($Needle, $markerIndex + $Marker.Length) -ge 0) {
+          return $true
+        }
+      }
+      catch [IO.IOException] {
+        # mintty may still be writing; retry until deadline.
+      }
+    }
+    Start-Sleep -Milliseconds 100
+  } while ((Get-Date) -lt $Deadline)
+  return $false
+}
+
+function Send-SmokeCharacter([int]$Character, [string]$Description) {
+  if (-not [EasyServerTuiSmokeNative]::PostMessage(
+    $windowProcess.MainWindowHandle,
+    0x0102,
+    [IntPtr]$Character,
+    [IntPtr]::Zero
+  )) {
+    throw "Could not send $Description input to the TUI terminal."
+  }
+}
+
 $windowProcess = $null
 try {
+  $launchProgram = $Program
+  $launchArgs = @($ProgramArgs)
+  if ($Relaunch) {
+    if ($ExitMode -ne "quit" -or $ScreenReader) {
+      throw "Relaunch smoke supports only normal interactive quit mode."
+    }
+    $programJson = ConvertTo-Json -Compress -InputObject $Program
+    $argsJson = ConvertTo-Json -Compress -InputObject @($ProgramArgs)
+    $markerJson = ConvertTo-Json -Compress -InputObject $relaunchMarker
+    @"
+import { spawnSync } from "node:child_process";
+const program = $programJson;
+const args = $argsJson;
+const first = spawnSync(program, args, { stdio: "inherit" });
+if (first.status !== 0) process.exit(first.status ?? 1);
+process.stdout.write($markerJson + "\\n");
+const second = spawnSync(program, args, { stdio: "inherit" });
+process.exit(second.status ?? 1);
+"@ | Set-Content -LiteralPath $runner -Encoding UTF8
+    $launchArgs = @($runner)
+  }
+
   $minttyArgs = @(
     "-h", "never",
     "-t", $title,
     "-s", "$Columns,$Rows",
     "-l", (Quote-MinttyArgument $log),
     "--",
-    (Quote-MinttyArgument $Program)
-  ) + ($ProgramArgs | ForEach-Object { Quote-MinttyArgument $_ })
+    (Quote-MinttyArgument $launchProgram)
+  ) + ($launchArgs | ForEach-Object { Quote-MinttyArgument $_ })
 
   Start-Process -FilePath $mintty -ArgumentList $minttyArgs | Out-Null
   $windowProcess = Find-SmokeWindow ((Get-Date).AddSeconds(20))
@@ -204,14 +259,21 @@ try {
 
   if ($ExitMode -ne "error") {
     $character = if ($ExitMode -eq "ctrl-c") { 3 } else { [int][char]"q" }
-    if (-not [EasyServerTuiSmokeNative]::PostMessage(
-      $windowProcess.MainWindowHandle,
-      0x0102,
-      [IntPtr]$character,
-      [IntPtr]::Zero
-    )) {
-      throw "Could not send $ExitMode input to the TUI terminal."
+    Send-SmokeCharacter $character $ExitMode
+  }
+
+  if ($Relaunch) {
+    if (-not (Wait-ForLogText $log $relaunchMarker ((Get-Date).AddSeconds(10)))) {
+      throw "First TUI launch did not exit back to the same terminal."
     }
+    if (-not (Wait-ForLogTextAfter $log $relaunchMarker $ExpectedText ((Get-Date).AddSeconds(15)))) {
+      throw "Second TUI launch did not render in the same terminal."
+    }
+    Send-SmokeCharacter ([int][char]"?") "second-launch printable shortcut"
+    if (-not (Wait-ForLogTextAfter $log $relaunchMarker "Keyboard help" ((Get-Date).AddSeconds(10)))) {
+      throw "Second TUI launch did not accept printable shortcut input."
+    }
+    Send-SmokeCharacter ([int][char]"q") "second-launch quit"
   }
 
   if (-not (Wait-ForExit $windowProcess.Id ((Get-Date).AddSeconds(10)))) {
@@ -237,6 +299,13 @@ try {
     if ($leave -le $enter) {
       throw "TUI did not restore the primary screen after $ExitMode."
     }
+    if ($Relaunch) {
+      $enterCount = ([regex]::Matches($text, [regex]::Escape([char]27 + "[?1049h"))).Count
+      $leaveCount = ([regex]::Matches($text, [regex]::Escape([char]27 + "[?1049l"))).Count
+      if ($enterCount -lt 2 -or $leaveCount -lt 2) {
+        throw "Sequential TUI launches did not both enter and restore the alternate screen."
+      }
+    }
   }
   if (-not $text.Contains($ExpectedText)) {
     throw "TUI smoke did not render expected text: $ExpectedText"
@@ -261,7 +330,7 @@ finally {
     ForEach-Object {
       Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
     }
-  Remove-Item -LiteralPath $log, $state, $daemon -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $log, $state, $daemon, $runner -Force -ErrorAction SilentlyContinue
   $env:EASYSERVER_STATE_FILE = $previousState
   $env:EASYSERVER_DAEMON_FILE = $previousDaemon
   $env:NO_COLOR = $previousNoColor
