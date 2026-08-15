@@ -66,6 +66,22 @@ function readSnapshot() {
   };
 }
 
+function diagnosticsView(report) {
+  return {
+    status: "ready",
+    text: serializeTuiDiagnostics(report),
+    summary: {
+      version: report.easyserver.version,
+      stateStatus: report.state.status,
+      configuredPlugins: report.state.configuredPlugins,
+      failedPlugins: report.plugins.filter((plugin) => plugin.state === "failed").length,
+      daemonStatus: report.daemon.status,
+      ssh: report.access.ssh,
+      sshKeyscan: report.access.sshKeyscan,
+    },
+  };
+}
+
 function safeReport() {
   return createDiagnosticsReport({
     easyserverVersion: "0.2.0-test",
@@ -105,6 +121,24 @@ function safeReport() {
   });
 }
 
+function longSafeReport() {
+  const base = safeReport();
+  return {
+    ...base,
+    state: {
+      ...base.state,
+      configuredPlugins: 70,
+    },
+    plugins: Array.from({ length: 70 }, (_, index) => ({
+      identity: `fixture-plugin-${String(index + 1).padStart(2, "0")}`,
+      state: index % 11 === 0 ? "failed" : "loaded",
+      version: `1.${index}.0`,
+      providerId: `provider-${index + 1}`,
+      ...(index % 11 === 0 ? { failure: "load-failed" } : {}),
+    })),
+  };
+}
+
 async function openDiagnostics(view) {
   view.stdin.write("g");
   await tick();
@@ -141,15 +175,22 @@ test("TUI reviews the shared sanitized Diagnostics payload before copying the ex
   assert.equal(copied, undefined);
 
   await openDiagnostics(view);
-  const frame = view.lastFrame();
+  const summaryFrame = view.lastFrame();
   assert.equal(diagnosticLoads, 1);
-  assert.match(frame, /User-safe Diagnostics payload/);
-  assert.match(frame, /shared sanitized diagnostics model/);
-  assert.match(frame, /Use Actions to copy exactly the JSON shown below/);
-  assert.match(frame, /Raw logs are not the same as this sanitized payload/);
-  assert.match(frame, /Providers and Connections are available from Settings & Support or the Home task list/);
-  assert.match(frame, /"version": "0\.2\.0-test"/);
+  assert.match(summaryFrame, /Support summary/);
+  assert.match(summaryFrame, /EasyServer: v0\.2\.0-test/);
+  assert.match(summaryFrame, /Local state: ready/);
+  assert.match(summaryFrame, /Providers: 1 configured · 1 need attention/);
+  assert.match(summaryFrame, /Connection service: unreachable/);
+  assert.match(summaryFrame, /View report before sharing/);
+  assert.doesNotMatch(summaryFrame, /"schemaVersion"/);
   assert.equal(copied, undefined);
+
+  await chooseVisibleAction(view, "View report");
+  let reportFrame = view.lastFrame();
+  assert.match(reportFrame, /Privacy-safe diagnostics report/);
+  assert.match(reportFrame, /Lines 1–\d+ of \d+/);
+  assert.match(reportFrame, /"version": "0\.2\.0-test"/);
 
   for (const sensitive of [
     "fixture-super-secret",
@@ -159,12 +200,97 @@ test("TUI reviews the shared sanitized Diagnostics payload before copying the ex
     "BEGIN OPENSSH PRIVATE KEY",
     "C:\\Users\\private",
   ]) {
-    assert.equal(frame.includes(sensitive), false, `TUI leaked ${sensitive}`);
+    assert.equal(reportFrame.includes(sensitive), false, `TUI leaked ${sensitive}`);
   }
 
-  await chooseVisibleAction(view, "Copy reviewed diagnostics");
+  for (let index = 0; index < 100; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  reportFrame = view.lastFrame();
+  assert.match(reportFrame, /Lines \d+–\d+ of \d+/);
+  assert.match(reportFrame, /Enter Copy report/);
+  view.stdin.write("\r");
   await tick();
   assert.equal(copied, expected);
+});
+
+test("visual Diagnostics report remains bounded and reaches the last line at release terminal sizes", async () => {
+  const report = longSafeReport();
+  const diagnostics = diagnosticsView(report);
+  let copied;
+  const view = render(
+    React.createElement(TuiShell, {
+      colorEnabled: false,
+      width: 60,
+      height: 20,
+      readSnapshot: readSnapshot(),
+      readStatus: "ready",
+      diagnostics,
+      async onCopyDiagnostics() {
+        copied = diagnostics.text;
+        return true;
+      },
+    }),
+  );
+
+  await openDiagnostics(view);
+  await chooseVisibleAction(view, "View report");
+  assert.ok(view.lastFrame().split("\n").length <= 20);
+  assert.match(view.lastFrame(), /Lines 1–\d+ of \d+/);
+
+  for (let index = 0; index < 500; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  let position = view.lastFrame().match(/Lines (\d+)–(\d+) of (\d+)/);
+  assert.ok(position);
+  assert.equal(position[2], position[3], "60×20 viewer must reach the last visual line");
+  assert.ok(view.lastFrame().split("\n").length <= 20);
+
+  view.rerender(
+    React.createElement(TuiShell, {
+      colorEnabled: false,
+      width: 80,
+      height: 24,
+      readSnapshot: readSnapshot(),
+      readStatus: "ready",
+      diagnostics,
+      async onCopyDiagnostics() {
+        copied = diagnostics.text;
+        return true;
+      },
+    }),
+  );
+  await tick();
+  position = view.lastFrame().match(/Lines (\d+)–(\d+) of (\d+)/);
+  assert.ok(position);
+  assert.equal(position[2], position[3], "80×24 viewer must preserve reachable end position");
+  assert.ok(view.lastFrame().split("\n").length <= 24);
+
+  view.rerender(
+    React.createElement(TuiShell, {
+      colorEnabled: false,
+      width: 120,
+      height: 40,
+      readSnapshot: readSnapshot(),
+      readStatus: "ready",
+      diagnostics,
+      async onCopyDiagnostics() {
+        copied = diagnostics.text;
+        return true;
+      },
+    }),
+  );
+  await tick();
+  position = view.lastFrame().match(/Lines (\d+)–(\d+) of (\d+)/);
+  assert.ok(position);
+  assert.equal(position[2], position[3], "120×40 viewer must preserve reachable end position");
+  assert.ok(view.lastFrame().split("\n").length <= 40);
+
+  view.stdin.write("\r");
+  await tick();
+  assert.equal(copied, diagnostics.text, "copy must preserve the exact reviewed payload at any scroll position");
 });
 
 test("screen-reader mode exposes the same Diagnostics payload and remediation navigation", async () => {
@@ -188,9 +314,15 @@ test("screen-reader mode exposes the same Diagnostics payload and remediation na
   await tick();
   await tick();
   await openDiagnostics(view);
+  assert.match(view.lastFrame(), /Support summary/);
+  await chooseVisibleAction(view, "View report");
+  assert.match(view.lastFrame(), /Full privacy-safe diagnostics report/);
   assert.match(view.lastFrame(), /"version": "0\.2\.0-test"/);
+  assert.match(view.lastFrame(), /"ssh": "unavailable"/);
   assert.match(view.lastFrame(), /Commands: Up and Down move; Enter selects; Escape goes back/);
 
+  view.stdin.write("\u001b");
+  await new Promise((resolve) => setTimeout(resolve, 30));
   await chooseVisibleAction(view, "Open Providers");
   assert.match(view.lastFrame(), /Home › Settings & Support › Providers/);
 
@@ -301,7 +433,7 @@ test("connection-flow failures can open Diagnostics without discarding the guide
   await tick();
   await tick();
   await tick();
-  assert.match(view.lastFrame(), /User-safe Diagnostics payload/);
+  assert.match(view.lastFrame(), /Support summary/);
   assert.match(view.lastFrame(), /Opened privacy-safe Diagnostics from the connection failure/);
 
   view.stdin.write("\r");

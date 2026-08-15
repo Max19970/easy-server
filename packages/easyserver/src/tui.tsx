@@ -90,7 +90,18 @@ import {
   tuiFocusWindowWithinRows,
 } from "./tui-focus.js";
 import { escapeTerminalText } from "./terminal-text.js";
+import type { DiagnosticsReport } from "./diagnostics.js";
 import { EASYSERVER_VERSION } from "./version.js";
+
+interface TuiDiagnosticsSummary {
+  readonly version: string;
+  readonly stateStatus: DiagnosticsReport["state"]["status"];
+  readonly configuredPlugins: number;
+  readonly failedPlugins: number;
+  readonly daemonStatus: DiagnosticsReport["daemon"]["status"];
+  readonly ssh: DiagnosticsReport["access"]["ssh"];
+  readonly sshKeyscan: DiagnosticsReport["access"]["sshKeyscan"];
+}
 
 type TuiDiagnosticsView =
   | { readonly status: "idle" }
@@ -99,6 +110,7 @@ type TuiDiagnosticsView =
   | {
       readonly status: "ready";
       readonly text: string;
+      readonly summary: TuiDiagnosticsSummary;
     };
 
 type TuiRouteId =
@@ -383,6 +395,16 @@ export function TuiShell({
   const rows = height ?? windowSize.rows ?? 24;
   const narrow = columns < 72;
   const routeContentRows = Math.max(4, rows - 9);
+  const routeContentColumns = Math.max(20, columns - 4);
+  const diagnosticsReportRows = Math.max(1, routeContentRows - 3);
+  const diagnosticsVisualLines =
+    diagnostics.status === "ready"
+      ? wrapDiagnosticsText(diagnostics.text, routeContentColumns)
+      : [];
+  const diagnosticsMaxScroll = Math.max(
+    0,
+    diagnosticsVisualLines.length - diagnosticsReportRows,
+  );
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [settingsCursor, setSettingsCursor] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -417,6 +439,8 @@ export function TuiShell({
   const [connectionDetailsOpen, setConnectionDetailsOpen] = useState(false);
   const [connectionCursor, setConnectionCursor] = useState(0);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [diagnosticsReportOpen, setDiagnosticsReportOpen] = useState(false);
+  const [diagnosticsScroll, setDiagnosticsScroll] = useState(0);
   const [status, setStatus] = useState("Ready.");
   const [providerSourceInput, setProviderSourceInput] = useState<string | undefined>();
   const [providerCandidatePickerOpen, setProviderCandidatePickerOpen] = useState(false);
@@ -614,6 +638,17 @@ export function TuiShell({
     setActionMenuOpen(false);
     setActionCursor(0);
   }, [effectiveSelectedProviderSource]);
+
+  useEffect(() => {
+    if (diagnostics.status !== "ready" || activeRoute.id !== "diagnostics") {
+      setDiagnosticsReportOpen(false);
+      setDiagnosticsScroll(0);
+    }
+  }, [diagnostics.status, activeRoute.id]);
+
+  useEffect(() => {
+    setDiagnosticsScroll((current) => Math.min(current, diagnosticsMaxScroll));
+  }, [diagnosticsMaxScroll]);
 
   useEffect(() => {
     if (navigateToInstanceId === undefined) {
@@ -890,8 +925,11 @@ export function TuiShell({
       return actions;
     }
     const actions: TuiContextAction[] = [{ id: "refresh", label: "Refresh diagnostics" }];
-    if (diagnostics.status === "ready" && onCopyDiagnostics !== undefined) {
-      actions.push({ id: "diagnostics-copy", label: "Copy reviewed diagnostics" });
+    if (diagnostics.status === "ready") {
+      actions.unshift({ id: "diagnostics-view", label: "View report" });
+      if (onCopyDiagnostics !== undefined) {
+        actions.push({ id: "diagnostics-copy", label: "Copy report" });
+      }
     }
     actions.push(
       { id: "providers", label: "Open Providers" },
@@ -1068,9 +1106,15 @@ export function TuiShell({
       onRemoveEndpointIntent?.(selectedTargetIntent);
       return;
     }
+    if (id === "diagnostics-view" && diagnostics.status === "ready") {
+      setDiagnosticsScroll(0);
+      setDiagnosticsReportOpen(true);
+      setStatus("Opened the privacy-safe diagnostics report.");
+      return;
+    }
     if (id === "diagnostics-copy" && diagnostics.status === "ready") {
       void onCopyDiagnostics?.().then((copied) =>
-        setStatus(copied ? "Copied reviewed diagnostics." : "Diagnostics could not be copied."),
+        setStatus(copied ? "Copied reviewed diagnostics report." : "Diagnostics report could not be copied."),
       );
     }
   };
@@ -1617,6 +1661,55 @@ export function TuiShell({
       return;
     }
 
+    if (
+      activeRoute.id === "diagnostics" &&
+      diagnosticsReportOpen &&
+      diagnostics.status === "ready"
+    ) {
+      if (input === "q") {
+        requestExit();
+        return;
+      }
+      if (input === "?") {
+        setHelpOpen((open) => !open);
+        return;
+      }
+      if (helpOpen) {
+        if (key.escape) {
+          setHelpOpen(false);
+        }
+        return;
+      }
+      if (key.escape) {
+        setDiagnosticsReportOpen(false);
+        setDiagnosticsScroll(0);
+        setStatus("Returned to Diagnostics summary.");
+        return;
+      }
+      if (!screenReader && key.downArrow) {
+        setDiagnosticsScroll((current) => Math.min(diagnosticsMaxScroll, current + 1));
+        return;
+      }
+      if (!screenReader && key.upArrow) {
+        setDiagnosticsScroll((current) => Math.max(0, current - 1));
+        return;
+      }
+      if (key.return) {
+        if (onCopyDiagnostics === undefined) {
+          setStatus("Clipboard integration is unavailable in this TUI session.");
+          return;
+        }
+        void onCopyDiagnostics().then((copied) =>
+          setStatus(
+            copied
+              ? "Copied the exact reviewed diagnostics report."
+              : "Diagnostics report could not be copied.",
+          ),
+        );
+      }
+      return;
+    }
+
     if (actionMenuOpen) {
       if (key.escape) {
         setActionMenuOpen(false);
@@ -1777,27 +1870,6 @@ export function TuiShell({
     if (input === "g") {
       openRoute("diagnostics", "Opened privacy-safe Diagnostics.");
       return;
-    }
-
-    if (activeRoute.id === "diagnostics") {
-      if (input === "P") {
-        openRoute("providers", "Opened Providers for remediation.");
-        return;
-      }
-      if (input === "C") {
-        openRoute("sessions", "Opened Connections for remediation.");
-        return;
-      }
-      if (input === "c" && diagnostics.status === "ready" && onCopyDiagnostics !== undefined) {
-        void onCopyDiagnostics().then((copied) => {
-          setStatus(
-            copied
-              ? "Copied the reviewed privacy-safe Diagnostics payload."
-              : "Diagnostics could not be copied; the reviewed payload is unchanged.",
-          );
-        });
-        return;
-      }
     }
 
     if (activeRoute.id === "sessions" && input === "n") {
@@ -2276,9 +2348,13 @@ export function TuiShell({
               snapshot={readSnapshot}
               readStatus={readStatus}
               diagnostics={diagnostics}
+              diagnosticsReportOpen={diagnosticsReportOpen}
+              diagnosticsScroll={diagnosticsScroll}
               canCopyDiagnostics={onCopyDiagnostics !== undefined}
+              screenReader={screenReader}
               narrow={narrow}
               height={routeContentRows}
+              width={routeContentColumns}
               colorEnabled={colorEnabled}
               settingsCursor={settingsCursor}
               selectedInstanceId={selectedInstanceId}
@@ -2333,7 +2409,8 @@ export function TuiShell({
               providerInteractiveScreen === undefined &&
               providerCandidatePickerView === undefined &&
               providerSourceInput === undefined &&
-              providerCredentialFlowView === undefined ? (
+              providerCredentialFlowView === undefined &&
+              !diagnosticsReportOpen ? (
               <Box marginTop={1}>
                 <Text color={muted}>Enter actions · Esc back</Text>
               </Box>
@@ -2449,9 +2526,13 @@ interface RouteSurfaceProps {
   readonly snapshot?: TuiReadSnapshot;
   readonly readStatus: TuiReadStatus;
   readonly diagnostics: TuiDiagnosticsView;
+  readonly diagnosticsReportOpen: boolean;
+  readonly diagnosticsScroll: number;
   readonly canCopyDiagnostics: boolean;
+  readonly screenReader: boolean;
   readonly narrow: boolean;
   readonly height: number;
+  readonly width: number;
   readonly colorEnabled: boolean;
   readonly settingsCursor: number;
   readonly selectedInstanceId?: string;
@@ -2489,9 +2570,13 @@ function RouteSurface({
   snapshot,
   readStatus,
   diagnostics,
+  diagnosticsReportOpen,
+  diagnosticsScroll,
   canCopyDiagnostics,
+  screenReader,
   narrow,
   height,
+  width,
   colorEnabled,
   settingsCursor,
   selectedInstanceId,
@@ -2539,7 +2624,13 @@ function RouteSurface({
     return (
       <DiagnosticsSurface
         diagnostics={diagnostics}
+        reportOpen={diagnosticsReportOpen}
+        scroll={diagnosticsScroll}
         canCopy={canCopyDiagnostics}
+        screenReader={screenReader}
+        height={height}
+        width={width}
+        colorEnabled={colorEnabled}
       />
     );
   }
@@ -2700,11 +2791,24 @@ function OverviewSurface({ snapshot }: { readonly snapshot: TuiReadSnapshot }): 
 
 function DiagnosticsSurface({
   diagnostics,
+  reportOpen,
+  scroll,
   canCopy,
+  screenReader,
+  height,
+  width,
+  colorEnabled,
 }: {
   readonly diagnostics: TuiDiagnosticsView;
+  readonly reportOpen: boolean;
+  readonly scroll: number;
   readonly canCopy: boolean;
+  readonly screenReader: boolean;
+  readonly height: number;
+  readonly width: number;
+  readonly colorEnabled: boolean;
 }): React.ReactElement {
+  const muted = colorEnabled ? "gray" : undefined;
   if (diagnostics.status === "idle") {
     return (
       <Box flexDirection="column">
@@ -2725,27 +2829,106 @@ function DiagnosticsSurface({
     );
   }
 
+  if (reportOpen) {
+    if (screenReader) {
+      return (
+        <Box flexDirection="column">
+          <Text bold>Full privacy-safe diagnostics report</Text>
+          <Text>{diagnostics.text}</Text>
+          <Text>
+            {canCopy ? "Enter — copy this exact report · Esc — back to summary" : "Esc — back to summary"}
+          </Text>
+        </Box>
+      );
+    }
+
+    const lines = wrapDiagnosticsText(diagnostics.text, width);
+    const visibleRows = Math.max(1, height - 3);
+    const maxStart = Math.max(0, lines.length - visibleRows);
+    const start = Math.min(Math.max(0, scroll), maxStart);
+    const end = Math.min(lines.length, start + visibleRows);
+    return (
+      <Box flexDirection="column" height={height} overflowY="hidden">
+        <Text bold wrap="truncate">Privacy-safe diagnostics report</Text>
+        <Text color={muted} wrap="truncate">
+          Lines {lines.length === 0 ? 0 : start + 1}–{end} of {lines.length}
+        </Text>
+        {lines.slice(start, end).map((line, index) => (
+          <Text key={`${start + index}:${line}`} wrap="truncate">{line.length === 0 ? " " : line}</Text>
+        ))}
+        <Text color={muted} wrap="truncate">
+          {canCopy ? "↑/↓ scroll · Enter Copy report · Esc Back" : "↑/↓ scroll · Esc Back"}
+        </Text>
+      </Box>
+    );
+  }
+
+  const summary = diagnostics.summary;
   return (
     <Box flexDirection="column">
-      <Text bold>User-safe Diagnostics payload</Text>
+      <Text bold>Support summary</Text>
+      <Text>EasyServer: v{summary.version}</Text>
+      <Text>Local state: {diagnosticsStateLabel(summary.stateStatus)}</Text>
       <Text>
-        This payload comes from EasyServer&apos;s shared sanitized diagnostics model. It excludes raw secrets, Secret References, daemon tokens, private keys and resource identifiers by contract.
+        Providers: {summary.configuredPlugins} configured{summary.failedPlugins > 0 ? ` · ${summary.failedPlugins} need attention` : " · no reported failures"}
       </Text>
-      <Text>
-        {canCopy
-          ? "Use Actions to copy exactly the JSON shown below; nothing else is added."
-          : "Clipboard integration is unavailable in this TUI session; the exact safe payload is still shown below."}
-      </Text>
+      <Text>Connection service: {diagnosticsDaemonLabel(summary.daemonStatus)}</Text>
+      <Text>SSH tools: client {summary.ssh} · key scan {summary.sshKeyscan}</Text>
       <Box marginTop={1} flexDirection="column">
-        <Text>{diagnostics.text}</Text>
-      </Box>
-      <Box marginTop={1} flexDirection="column">
-        <Text bold>Support guidance</Text>
-        <Text>Raw logs are not the same as this sanitized payload. Review raw logs separately and never share credentials, tokens or private keys.</Text>
-        <Text>Providers and Connections are available from Settings & Support or the Home task list.</Text>
+        <Text>
+          The detailed report is privacy-safe by contract: raw secrets, Secret References, daemon tokens, private keys and resource identifiers are excluded.
+        </Text>
+        <Text>
+          {canCopy
+            ? "Use Actions to View report before sharing it, or Copy report to copy that exact same sanitized payload."
+            : "Use Actions to View report before sharing it. Clipboard integration is unavailable in this TUI session."}
+        </Text>
+        <Text>Raw logs are separate and may contain sensitive data.</Text>
       </Box>
     </Box>
   );
+}
+
+function diagnosticsStateLabel(status: DiagnosticsReport["state"]["status"]): string {
+  return status === "ok" ? "ready" : status === "empty" ? "empty" : "needs attention";
+}
+
+function diagnosticsDaemonLabel(status: DiagnosticsReport["daemon"]["status"]): string {
+  return status === "running"
+    ? "running"
+    : status === "stopped"
+      ? "stopped"
+      : status === "unreachable"
+        ? "unreachable"
+        : "invalid state";
+}
+
+function diagnosticsSummary(report: DiagnosticsReport): TuiDiagnosticsSummary {
+  return {
+    version: report.easyserver.version,
+    stateStatus: report.state.status,
+    configuredPlugins: report.state.configuredPlugins,
+    failedPlugins: report.plugins.filter((plugin) => plugin.state === "failed").length,
+    daemonStatus: report.daemon.status,
+    ssh: report.access.ssh,
+    sshKeyscan: report.access.sshKeyscan,
+  };
+}
+
+function wrapDiagnosticsText(text: string, width: number): readonly string[] {
+  const safeWidth = Math.max(1, Math.floor(width));
+  const lines: string[] = [];
+  for (const logicalLine of text.split("\n")) {
+    const characters = Array.from(logicalLine);
+    if (characters.length === 0) {
+      lines.push("");
+      continue;
+    }
+    for (let offset = 0; offset < characters.length; offset += safeWidth) {
+      lines.push(characters.slice(offset, offset + safeWidth).join(""));
+    }
+  }
+  return lines;
 }
 
 interface InstancesSurfaceProps {
@@ -3991,6 +4174,7 @@ export function TuiApp({
       setDiagnostics({
         status: "ready",
         text: serializeTuiDiagnostics(report),
+        summary: diagnosticsSummary(report),
       });
       return true;
     } catch {

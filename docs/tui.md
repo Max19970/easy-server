@@ -37,6 +37,12 @@ Primary actions are always visible in context after `Enter`; ordinary use does n
 
 The TUI v2 transition deliberately uses progressive disclosure. Home already hides control-plane health and provider internals behind the task hierarchy. Provider, server and connection detail screens continue moving technical IDs, provider metadata, remote targets and other deeper state behind **Details** / **Advanced** as their dedicated TUI v2 slices are completed; those details remain available rather than being removed.
 
+## Diagnostics and support reports
+
+**Settings & Support → Diagnostics** opens with a short health/support summary instead of dumping the entire report into the working page. **View report** opens the exact sanitized report in a dedicated bounded viewer. In ordinary visual mode, long lines are wrapped to the current terminal width and ↑/↓ scroll through those physical rows while a fixed position indicator and **Enter Copy report · Esc Back** footer remain reachable. Copy always uses the same underlying sanitized payload that is being reviewed; scrolling or wrapping never changes the copied bytes.
+
+Screen-reader mode renders the complete sanitized report linearly instead of clipping it to the visual viewport. Raw logs are deliberately not substituted for this report because they are outside the privacy-safe Diagnostics contract and may contain sensitive data.
+
 ## Narrow terminals and accessibility
 
 EasyServer adapts the focused task page to the available terminal width and preserves the current page, canonical selections and focus state across resize. Long provider-backed lists and action menus keep the focused logical item inside the available terminal rows instead of rendering an unbounded list below the screen.
