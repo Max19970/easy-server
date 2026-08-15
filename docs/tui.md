@@ -25,17 +25,18 @@ Provider-specific forms remain Provider Plugin owned. Core renders the generic i
 
 ## Keyboard navigation
 
-The footer and `?` help surface show the currently available controls. The common navigation keys are:
+The ordinary TUI uses one navigation vocabulary instead of route-specific command alphabets:
 
-- `Tab` / `Shift+Tab` or arrow keys — move focus;
-- `Enter` — open the focused destination or activate the current step;
-- `Esc` — close the current help/form layer or return toward Overview;
+- arrow keys — move through sections, items, choices and visible actions;
+- `Enter` — open the focused section, select/edit the focused item, or open/run its visible **Actions** menu;
+- `Esc` — go back one level, cancel the current form/input, or decline a confirmation;
+- `Tab` / `Shift+Tab` — return to and move through the main section navigation;
 - `?` — open or close keyboard help;
-- `r` — refresh the current read surface when refresh is available;
-- `g` — open privacy-safe Diagnostics from ordinary and failure surfaces;
-- `q` or `Ctrl+C` — request TUI exit.
+- `Ctrl+C` — request TUI exit.
 
-Forms and confirmation drawers temporarily own the keys required by their current interaction. A mutation is never made retryable merely because a keyboard shortcut exists: outcome-unknown operations remain observation/reconciliation problems rather than blind retry opportunities.
+Primary actions are always visible in context after `Enter`; ordinary use does not require memorizing letter, number, bracket or case-sensitive shortcuts. Provider-owned forms use the same arrows/Enter/Esc model, and operation/confirmation drawers expose their available actions as a selectable list. Outcome-unknown operations remain observation/reconciliation problems rather than blind retry opportunities.
+
+The main surfaces deliberately use progressive disclosure. Instance, Provider and Connection lists show the information needed to identify the current object first; technical IDs, provider metadata, remote targets and other deeper detail are available through **Show details** rather than occupying the default view.
 
 ## Narrow terminals and accessibility
 
@@ -122,6 +123,6 @@ If both primary and recovery Local State are invalid, EasyServer fails closed in
 
 ## Qualified release environment
 
-The `0.2.0` TUI release surface is qualified on **Windows 11 x64** with **Node.js 24.18.1**. Release checks exercise the real terminal path for normal quit, Ctrl+C, resize, compact layout, `NO_COLOR`, screen-reader mode and thrown-error restoration, plus TUI launch from both the packed npm installation and the portable ZIP.
+The `0.2.0` TUI release surface is qualified on **Windows 11 x64** with **Node.js 24.18.1**. Release checks exercise the real terminal path for normal quit, Ctrl+C, resize, compact layout, `NO_COLOR`, screen-reader mode, thrown-error restoration, and two sequential EasyServer launches in the same terminal (including printable input on the second launch), plus TUI launch from both the packed npm installation and the portable ZIP.
 
 Linux and macOS are not qualified support targets yet. Do not infer a support promise from the fact that the code or Ink may run there; platform expansion is tracked separately and requires its own release-level qualification.

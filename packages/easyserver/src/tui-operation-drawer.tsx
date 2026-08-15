@@ -2,18 +2,19 @@ import React from "react";
 import { Box, Text } from "ink";
 import {
   assertTuiOperationPresentation,
-  type TuiOperationActionKind,
   type TuiOperationPresentation,
 } from "./tui-operation-model.js";
 
 export interface TuiOperationDrawerProps {
   readonly operation: TuiOperationPresentation;
   readonly colorEnabled?: boolean;
+  readonly selectedActionIndex?: number;
 }
 
 export function TuiOperationDrawer({
   operation,
   colorEnabled = true,
+  selectedActionIndex = 0,
 }: TuiOperationDrawerProps): React.ReactElement {
   assertTuiOperationPresentation(operation);
 
@@ -94,13 +95,19 @@ export function TuiOperationDrawer({
       operation.phase === "outcome-unknown" ||
       operation.phase === "reconciliation-failed" ? (
         <Box marginTop={1}>
-          <Text>Support: press g to inspect privacy-safe Diagnostics before sharing raw logs.</Text>
+          <Text>Support: after closing this result, open Diagnostics before sharing raw logs.</Text>
         </Box>
       ) : null}
 
       {operation.actions.length === 0 ? null : (
-        <Box marginTop={1}>
-          <Text>Actions: {operation.actions.map(actionLabel).join(" · ")}</Text>
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>Actions</Text>
+          {operation.actions.map((action, index) => (
+            <Text key={action.kind} bold={index === selectedActionIndex}>
+              {index === selectedActionIndex ? "> " : "  "}{action.label}
+            </Text>
+          ))}
+          <Text>↑/↓ choose · Enter run{operation.actions.some((action) => action.kind === "decline") ? " · Esc decline" : ""}</Text>
         </Box>
       )}
     </Box>
@@ -140,20 +147,4 @@ function phaseLabel(operation: TuiOperationPresentation): string {
     return "reconciliation failed";
   }
   return phase;
-}
-
-function actionLabel(action: { readonly kind: TuiOperationActionKind; readonly label: string }): string {
-  const key =
-    action.kind === "confirm" || action.kind === "trust"
-      ? "Enter"
-      : action.kind === "decline"
-        ? "Esc"
-        : action.kind === "cancel"
-          ? "c"
-          : action.kind === "dismiss"
-            ? "x"
-            : action.kind === "observe"
-              ? "o"
-              : "R";
-  return `${key} ${action.label}`;
 }

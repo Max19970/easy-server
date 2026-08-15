@@ -13,6 +13,23 @@ import { presentOperationError } from "../dist/tui-operation-model.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
+async function chooseVisibleAction(view, label, { open = true } = {}) {
+  if (open) {
+    view.stdin.write("\r");
+    await tick();
+  }
+  for (let index = 0; index < 20; index += 1) {
+    if (view.lastFrame()?.includes(`> ${label}`)) {
+      view.stdin.write("\r");
+      await tick();
+      return;
+    }
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.fail(`Visible action not found: ${label}\n${view.lastFrame()}`);
+}
+
 test.afterEach(() => cleanup());
 
 function readSnapshot() {
@@ -108,10 +125,9 @@ test("TUI reviews the shared sanitized Diagnostics payload before copying the ex
   assert.equal(diagnosticLoads, 1);
   assert.match(frame, /User-safe Diagnostics payload/);
   assert.match(frame, /shared sanitized diagnostics model/);
-  assert.match(frame, /Press c to copy exactly the JSON shown below/);
+  assert.match(frame, /Use Actions to copy exactly the JSON shown below/);
   assert.match(frame, /Raw logs are not the same as this sanitized payload/);
-  assert.match(frame, /Press P to open Providers/);
-  assert.match(frame, /Press C to open Connections/);
+  assert.match(frame, /Providers and Connections are available from Actions/);
   assert.match(frame, /"version": "0\.2\.0-test"/);
   assert.equal(copied, undefined);
 
@@ -126,8 +142,7 @@ test("TUI reviews the shared sanitized Diagnostics payload before copying the ex
     assert.equal(frame.includes(sensitive), false, `TUI leaked ${sensitive}`);
   }
 
-  view.stdin.write("c");
-  await tick();
+  await chooseVisibleAction(view, "Copy reviewed diagnostics");
   await tick();
   assert.equal(copied, expected);
 });
@@ -154,16 +169,14 @@ test("screen-reader mode exposes the same Diagnostics payload and remediation na
   await tick();
   await openDiagnostics(view);
   assert.match(view.lastFrame(), /"version": "0\.2\.0-test"/);
-  assert.match(view.lastFrame(), /g opens privacy-safe Diagnostics/);
+  assert.match(view.lastFrame(), /Commands: arrows move; Enter opens, selects or shows actions/);
 
-  view.stdin.write("P");
-  await tick();
+  await chooseVisibleAction(view, "Open Providers");
   assert.match(view.lastFrame(), /Providers \[active\]/);
 
   await openDiagnostics(view);
-  view.stdin.write("C");
-  await tick();
-  assert.match(view.lastFrame(), /Status: Opened Connections for remediation/);
+  await chooseVisibleAction(view, "Open Connections");
+  assert.match(view.lastFrame(), /Status: Opened Connections/);
 });
 
 test("Diagnostics collection failures stay generic and never echo the raw error", async () => {
@@ -266,7 +279,7 @@ test("connection-flow failures can open Diagnostics without discarding the guide
   await tick();
 
   assert.match(view.lastFrame(), /Discover Access Methods: failed/);
-  assert.match(view.lastFrame(), /press g to inspect privacy-safe Diagnostics/);
+  assert.match(view.lastFrame(), /after closing this result, open Diagnostics/);
   assert.match(view.lastFrame(), /Port: 22/);
 
   view.stdin.write("g");
@@ -276,8 +289,10 @@ test("connection-flow failures can open Diagnostics without discarding the guide
   assert.match(view.lastFrame(), /User-safe Diagnostics payload/);
   assert.match(view.lastFrame(), /Opened privacy-safe Diagnostics from the connection failure/);
 
-  view.stdin.write("C");
+  view.stdin.write("\r");
   await tick();
+  await tick();
+  await chooseVisibleAction(view, "Open Connections");
   assert.match(view.lastFrame(), /Remote TCP port/);
   assert.match(view.lastFrame(), /Port: 22/);
 });
@@ -321,7 +336,7 @@ test("provider readiness and operation failures expose a direct privacy-safe Dia
   await tick();
   providerView.stdin.write("\r");
   await tick();
-  assert.match(providerView.lastFrame(), /press g to inspect privacy-safe Diagnostics/);
+  assert.match(providerView.lastFrame(), /fixture-provider · credentials-missing/);
 
   cleanup();
   let diagnosticRoute;
@@ -340,7 +355,7 @@ test("provider readiness and operation failures expose a direct privacy-safe Dia
       },
     }),
   );
-  assert.match(failureView.lastFrame(), /press g to inspect privacy-safe Diagnostics before sharing raw logs/);
+  assert.match(failureView.lastFrame(), /after closing this result, open Diagnostics before sharing raw logs/);
   failureView.stdin.write("g");
   await tick();
   assert.equal(diagnosticRoute, "diagnostics");

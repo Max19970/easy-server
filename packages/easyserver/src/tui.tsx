@@ -110,6 +110,16 @@ interface TuiRoute {
   readonly body: string;
 }
 
+interface TuiContextAction {
+  readonly id: string;
+  readonly label: string;
+}
+
+type TuiConnectionTarget =
+  | { readonly kind: "foreground"; readonly id: string }
+  | { readonly kind: "intent"; readonly id: string }
+  | { readonly kind: "persistent"; readonly id: string };
+
 const routes: readonly TuiRoute[] = [
   {
     id: "overview",
@@ -305,6 +315,14 @@ export function TuiShell({
   const narrow = columns < 72;
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [contentFocused, setContentFocused] = useState(false);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [actionCursor, setActionCursor] = useState(0);
+  const [operationActionCursor, setOperationActionCursor] = useState(0);
+  const [instanceDetailsOpen, setInstanceDetailsOpen] = useState(false);
+  const [providerDetailsOpen, setProviderDetailsOpen] = useState(false);
+  const [connectionDetailsOpen, setConnectionDetailsOpen] = useState(false);
+  const [connectionCursor, setConnectionCursor] = useState(0);
   const [helpOpen, setHelpOpen] = useState(false);
   const [status, setStatus] = useState("Ready.");
   const [providerSourceInput, setProviderSourceInput] = useState<string | undefined>();
@@ -411,6 +429,25 @@ export function TuiShell({
     endpointIntents.some((intent) => intent.operationName === selectedEndpointIntentName)
       ? selectedEndpointIntentName
       : endpointIntents[0]?.operationName;
+  const connectionTargets: readonly TuiConnectionTarget[] = [
+    ...foregroundConnections.map((connection) => ({
+      kind: "foreground" as const,
+      id: connection.id,
+    })),
+    ...endpointIntents.map((intent) => ({
+      kind: "intent" as const,
+      id: intent.operationName,
+    })),
+    ...persistentSessions.map((session) => ({
+      kind: "persistent" as const,
+      id: session.id,
+    })),
+  ];
+  const effectiveConnectionCursor =
+    connectionTargets.length === 0
+      ? 0
+      : Math.min(connectionCursor, connectionTargets.length - 1);
+  const selectedConnectionTarget = connectionTargets[effectiveConnectionCursor];
 
   useEffect(() => {
     setSelectedProviderSource((current) =>
@@ -450,6 +487,30 @@ export function TuiShell({
   }, [readSnapshot]);
 
   useEffect(() => {
+    setConnectionCursor((current) =>
+      connectionTargets.length === 0
+        ? 0
+        : Math.min(current, connectionTargets.length - 1),
+    );
+  }, [connectionTargets.length]);
+
+  useEffect(() => {
+    setInstanceDetailsOpen(false);
+    setActionMenuOpen(false);
+    setActionCursor(0);
+  }, [effectiveSelectedInstanceId]);
+
+  useEffect(() => {
+    setProviderDetailsOpen(false);
+    setActionMenuOpen(false);
+    setActionCursor(0);
+  }, [effectiveSelectedProviderSource]);
+
+  useEffect(() => {
+    setOperationActionCursor(0);
+  }, [operation?.phase, operation?.title]);
+
+  useEffect(() => {
     if (navigateToInstanceId === undefined) {
       return;
     }
@@ -473,9 +534,9 @@ export function TuiShell({
       routes.map((route, index) => ({
         ...route,
         active: index === activeIndex,
-        focused: index === focusedIndex,
+        focused: !contentFocused && index === focusedIndex,
       })),
-    [activeIndex, focusedIndex],
+    [activeIndex, contentFocused, focusedIndex],
   );
 
   const openRoute = (routeId: TuiRouteId, message?: string): void => {
@@ -485,6 +546,9 @@ export function TuiShell({
     }
     setActiveIndex(index);
     setFocusedIndex(index);
+    setContentFocused(true);
+    setActionMenuOpen(false);
+    setActionCursor(0);
     setStatus(message ?? `Opened ${routes[index]?.label ?? "Overview"}.`);
     if (routeId === "diagnostics") {
       onRefresh?.("diagnostics");
@@ -518,6 +582,385 @@ export function TuiShell({
     });
   };
 
+  const beginConnectionFlow = (mode: "foreground" | "persistent"): void => {
+    const firstInstance =
+      inventoryItems.find((instance) => instance.id === effectiveSelectedInstanceId) ??
+      inventoryItems[0];
+    if (mode === "persistent" && readSnapshot?.daemon.status !== "running") {
+      setStatus("Start the EasyServer daemon before creating a persistent Endpoint.");
+      return;
+    }
+    if (firstInstance === undefined) {
+      setStatus(`No compute instance is available for a ${mode} connection.`);
+      return;
+    }
+    if (
+      onListForegroundAccessMethods === undefined ||
+      (mode === "foreground"
+        ? onOpenForegroundConnection === undefined
+        : onCreatePersistentSession === undefined)
+    ) {
+      setStatus(`${mode === "foreground" ? "Foreground" : "Persistent"} connection creation is unavailable in this TUI session.`);
+      return;
+    }
+    setForegroundConnectionFlow({
+      mode,
+      step: "instance",
+      instanceId: firstInstance.id,
+      remoteHost: "127.0.0.1",
+      remotePort: "",
+      accessMethods: [],
+      accessMethodId: undefined,
+      localPort: "",
+      ...(mode === "persistent"
+        ? { idempotencyKey: newTuiPersistentSessionIdempotencyKey() }
+        : {}),
+    });
+    setStatus(`Choose the instance for this ${mode === "foreground" ? "TUI-owned" : "daemon-owned"} Endpoint.`);
+  };
+
+  const moveConnectionSelection = (direction: -1 | 1): void => {
+    if (connectionTargets.length === 0) {
+      return;
+    }
+    const nextIndex =
+      (effectiveConnectionCursor + direction + connectionTargets.length) %
+      connectionTargets.length;
+    setConnectionCursor(nextIndex);
+    setConnectionDetailsOpen(false);
+    const target = connectionTargets[nextIndex];
+    if (target?.kind === "foreground") {
+      setSelectedForegroundConnectionId(target.id);
+      setStatus("Selected foreground Endpoint.");
+    } else if (target?.kind === "persistent") {
+      setSelectedPersistentSessionId(target.id);
+      setStatus("Selected persistent Session.");
+    } else if (target?.kind === "intent") {
+      setSelectedEndpointIntentName(target.id);
+      setStatus("Selected persisted Endpoint intent.");
+    }
+  };
+
+  const selectedInstance = inventoryItems.find(
+    (instance) => instance.id === effectiveSelectedInstanceId,
+  );
+  const selectedProvider = providerItems.find(
+    (provider) => provider.source === effectiveSelectedProviderSource,
+  );
+  const selectedTargetIntent =
+    selectedConnectionTarget?.kind === "intent"
+      ? endpointIntents.find((intent) => intent.operationName === selectedConnectionTarget.id)
+      : undefined;
+
+  const contextActions: readonly TuiContextAction[] = (() => {
+    if (activeRoute.id === "overview") {
+      return [
+        { id: "refresh", label: "Refresh status" },
+        { id: "new-instance", label: "Create a new instance" },
+        { id: "providers", label: "Manage providers" },
+      ];
+    }
+    if (activeRoute.id === "instances") {
+      const actions: TuiContextAction[] = [{ id: "refresh", label: "Refresh instances" }];
+      if (selectedInstance !== undefined) {
+        actions.unshift({
+          id: "instance-details",
+          label: instanceDetailsOpen ? "Hide instance details" : "Show instance details",
+        });
+        if (
+          selectedInstance.freshness === "fresh" &&
+          selectedInstance.management === "discovered" &&
+          onInstanceMutation !== undefined
+        ) {
+          actions.push({ id: "instance-adopt", label: "Adopt for EasyServer management" });
+        }
+        if (onInstanceMutation !== undefined) {
+          for (const action of availableInstanceActions(selectedInstance)) {
+            actions.push({
+              id: `instance-action:${action}`,
+              label: `${action.slice("instance.".length)} instance`,
+            });
+          }
+        }
+        if (onBulkInstanceMutation !== undefined && selectedInstance.freshness === "fresh") {
+          actions.push({
+            id: "instance-mark",
+            label: bulkSelectedInstanceIds.includes(selectedInstance.id)
+              ? "Remove from bulk selection"
+              : "Add to bulk selection",
+          });
+        }
+      }
+      if (bulkSelectedInstanceIds.length > 0 && onBulkInstanceMutation !== undefined) {
+        actions.push({ id: "bulk-clear", label: "Clear bulk selection" });
+        if (missingBulkSelectedInstanceIds.length === 0) {
+          for (const action of bulkAvailableInstanceActions(bulkSelectedInstances)) {
+            actions.push({
+              id: `bulk-action:${action}`,
+              label: `${action.slice("instance.".length)} ${bulkSelectedInstanceIds.length} selected instance${bulkSelectedInstanceIds.length === 1 ? "" : "s"}`,
+            });
+          }
+        }
+      }
+      return actions;
+    }
+    if (activeRoute.id === "providers") {
+      const actions: TuiContextAction[] = [{ id: "refresh", label: "Refresh providers" }];
+      if (onProviderMutation !== undefined) {
+        actions.unshift({ id: "provider-add", label: "Register installed provider" });
+      }
+      if (selectedProvider !== undefined) {
+        actions.unshift({
+          id: "provider-details",
+          label: providerDetailsOpen ? "Hide provider details" : "Show provider details",
+        });
+        if (
+          onProviderMutation !== undefined &&
+          selectedProvider.state !== "disabled" &&
+          selectedProvider.state !== "failed" &&
+          (selectedProvider.credentials.items?.length ?? 0) > 0
+        ) {
+          actions.push({ id: "provider-credentials", label: "Manage credentials" });
+        }
+        if (onProviderMutation !== undefined) {
+          actions.push({
+            id: "provider-toggle",
+            label: selectedProvider.state === "disabled" ? "Enable provider" : "Disable provider",
+          });
+        }
+      }
+      return actions;
+    }
+    if (activeRoute.id === "new-instance") {
+      return [{ id: "refresh", label: "Refresh acquisition options" }];
+    }
+    if (activeRoute.id === "sessions") {
+      const actions: TuiContextAction[] = [{ id: "refresh", label: "Refresh connections" }];
+      if (selectedConnectionTarget !== undefined) {
+        actions.unshift({
+          id: "connection-details",
+          label: connectionDetailsOpen ? "Hide connection details" : "Show connection details",
+        });
+      }
+      if (onOpenForegroundConnection !== undefined && onListForegroundAccessMethods !== undefined) {
+        actions.unshift({ id: "connection-new-foreground", label: "New foreground Endpoint" });
+      }
+      if (
+        onCreatePersistentSession !== undefined &&
+        onListForegroundAccessMethods !== undefined
+      ) {
+        actions.push({ id: "connection-new-persistent", label: "New persistent Endpoint" });
+      }
+      if (onStartDaemon !== undefined && onStopDaemon !== undefined) {
+        actions.push({
+          id: "daemon-toggle",
+          label: readSnapshot?.daemon.status === "running" ? "Stop daemon" : "Start daemon",
+        });
+      }
+      if (
+        selectedConnectionTarget?.kind === "foreground" &&
+        onCloseForegroundConnection !== undefined
+      ) {
+        actions.push({ id: "connection-close-foreground", label: "Close selected foreground Endpoint" });
+      } else if (
+        selectedConnectionTarget?.kind === "persistent" &&
+        onClosePersistentSession !== undefined
+      ) {
+        actions.push({ id: "connection-close-persistent", label: "Close selected persistent Session" });
+      } else if (selectedTargetIntent !== undefined && onSetEndpointIntentEnabled !== undefined) {
+        actions.push({
+          id: "intent-toggle",
+          label: selectedTargetIntent.enabled ? "Disable selected saved Endpoint" : "Enable selected saved Endpoint",
+        });
+        if (selectedTargetIntent.state === "error" && onRetryEndpointIntent !== undefined) {
+          actions.push({ id: "intent-retry", label: "Retry selected saved Endpoint" });
+        }
+        if (onRemoveEndpointIntent !== undefined) {
+          actions.push({ id: "intent-remove", label: "Remove selected saved Endpoint" });
+        }
+      }
+      return actions;
+    }
+    const actions: TuiContextAction[] = [{ id: "refresh", label: "Refresh diagnostics" }];
+    if (diagnostics.status === "ready" && onCopyDiagnostics !== undefined) {
+      actions.push({ id: "diagnostics-copy", label: "Copy reviewed diagnostics" });
+    }
+    actions.push(
+      { id: "providers", label: "Open Providers" },
+      { id: "connections", label: "Open Connections" },
+    );
+    return actions;
+  })();
+
+  const runContextAction = (id: string): void => {
+    setActionMenuOpen(false);
+    setActionCursor(0);
+    if (id === "refresh") {
+      setStatus(`Refresh requested for ${activeRoute.label}.`);
+      onRefresh?.(activeRoute.id);
+      return;
+    }
+    if (id === "new-instance") {
+      openRoute("new-instance");
+      return;
+    }
+    if (id === "providers") {
+      openRoute("providers");
+      return;
+    }
+    if (id === "connections") {
+      openRoute("sessions");
+      return;
+    }
+    if (id === "instance-details") {
+      setInstanceDetailsOpen((open) => !open);
+      return;
+    }
+    if (id === "instance-adopt" && selectedInstance !== undefined) {
+      const mutation = { kind: "adopt", instanceId: selectedInstance.id } satisfies TuiInstanceMutation;
+      onInstanceMutation?.(mutation);
+      setStatus(instanceMutationStatus(mutation));
+      return;
+    }
+    if (id.startsWith("instance-action:") && selectedInstance !== undefined) {
+      const action = id.slice("instance-action:".length) as AvailableAction;
+      const mutation = { kind: "action", instanceId: selectedInstance.id, action } satisfies TuiInstanceMutation;
+      onInstanceMutation?.(mutation);
+      setStatus(instanceMutationStatus(mutation));
+      return;
+    }
+    if (id === "instance-mark" && selectedInstance !== undefined) {
+      setBulkSelectedInstanceIds((current) =>
+        current.includes(selectedInstance.id)
+          ? current.filter((instanceId) => instanceId !== selectedInstance.id)
+          : [...current, selectedInstance.id],
+      );
+      setStatus("Updated bulk selection.");
+      return;
+    }
+    if (id === "bulk-clear") {
+      setBulkSelectedInstanceIds([]);
+      setStatus("Cleared bulk instance targets.");
+      return;
+    }
+    if (id.startsWith("bulk-action:")) {
+      const action = id.slice("bulk-action:".length) as AvailableAction;
+      const mutation = {
+        instanceIds: [...bulkSelectedInstanceIds],
+        action,
+      } satisfies TuiBulkInstanceMutation;
+      onBulkInstanceMutation?.(mutation);
+      setStatus(bulkInstanceMutationStatus(mutation));
+      return;
+    }
+    if (id === "provider-details") {
+      setProviderDetailsOpen((open) => !open);
+      return;
+    }
+    if (id === "provider-add") {
+      setProviderSourceInput("");
+      setStatus("Enter an installed provider module or path.");
+      return;
+    }
+    if (id === "provider-credentials" && selectedProvider !== undefined) {
+      const firstCredential = selectedProvider.credentials.items?.[0];
+      if (firstCredential !== undefined) {
+        setProviderCredentialFlow({
+          kind: "picker",
+          providerSource: selectedProvider.source,
+          selectedName: firstCredential.name,
+        });
+        setStatus(`Managing credentials for ${selectedProvider.source}.`);
+      }
+      return;
+    }
+    if (id === "provider-toggle" && selectedProvider !== undefined) {
+      onProviderMutation?.({
+        kind: "set-enabled",
+        source: selectedProvider.source,
+        enabled: selectedProvider.state === "disabled",
+      });
+      setStatus(`${selectedProvider.state === "disabled" ? "Enabling" : "Disabling"} provider ${selectedProvider.source}.`);
+      return;
+    }
+    if (id === "connection-details") {
+      setConnectionDetailsOpen((open) => !open);
+      return;
+    }
+    if (id === "connection-new-foreground") {
+      beginConnectionFlow("foreground");
+      return;
+    }
+    if (id === "connection-new-persistent") {
+      beginConnectionFlow("persistent");
+      return;
+    }
+    if (id === "daemon-toggle") {
+      const action = readSnapshot?.daemon.status === "running" ? onStopDaemon : onStartDaemon;
+      if (action !== undefined) {
+        setForegroundConnectionBusy(true);
+        void action().then(() => setForegroundConnectionBusy(false));
+      }
+      return;
+    }
+    if (
+      id === "connection-close-foreground" &&
+      selectedConnectionTarget?.kind === "foreground" &&
+      onCloseForegroundConnection !== undefined
+    ) {
+      const connectionId = selectedConnectionTarget.id;
+      setForegroundConnectionBusy(true);
+      void onCloseForegroundConnection(connectionId).then((closed) => {
+        setForegroundConnectionBusy(false);
+        if (closed) {
+          setSelectedForegroundConnectionId(undefined);
+          setStatus("Foreground Endpoint closed.");
+        }
+      });
+      return;
+    }
+    if (
+      id === "connection-close-persistent" &&
+      selectedConnectionTarget?.kind === "persistent" &&
+      onClosePersistentSession !== undefined
+    ) {
+      const sessionId = selectedConnectionTarget.id;
+      setForegroundConnectionBusy(true);
+      void onClosePersistentSession(sessionId).then((closed) => {
+        setForegroundConnectionBusy(false);
+        if (closed) {
+          setSelectedPersistentSessionId(undefined);
+          setStatus("Persistent Session closed.");
+        }
+      });
+      return;
+    }
+    if (id === "intent-toggle" && selectedTargetIntent !== undefined) {
+      setForegroundConnectionBusy(true);
+      void onSetEndpointIntentEnabled?.(
+        selectedTargetIntent.operationName,
+        !selectedTargetIntent.enabled,
+      ).then(() => setForegroundConnectionBusy(false));
+      return;
+    }
+    if (id === "intent-retry" && selectedTargetIntent !== undefined) {
+      setForegroundConnectionBusy(true);
+      void onRetryEndpointIntent?.(selectedTargetIntent.operationName).then(() =>
+        setForegroundConnectionBusy(false),
+      );
+      return;
+    }
+    if (id === "intent-remove" && selectedTargetIntent !== undefined) {
+      onRemoveEndpointIntent?.(selectedTargetIntent);
+      return;
+    }
+    if (id === "diagnostics-copy" && diagnostics.status === "ready") {
+      void onCopyDiagnostics?.().then((copied) =>
+        setStatus(copied ? "Copied reviewed diagnostics." : "Diagnostics could not be copied."),
+      );
+    }
+  };
+
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
       requestExit();
@@ -525,9 +968,43 @@ export function TuiShell({
     }
 
     if (operation !== undefined) {
-      const action = operationActionForInput(operation, input, key);
-      if (action !== undefined) {
-        onOperationAction?.(action);
+      if (operation.actions.length > 0) {
+        if (key.downArrow) {
+          setOperationActionCursor(
+            (current) => (current + 1) % operation.actions.length,
+          );
+          return;
+        }
+        if (key.upArrow) {
+          setOperationActionCursor(
+            (current) =>
+              (current - 1 + operation.actions.length) % operation.actions.length,
+          );
+          return;
+        }
+        if (key.return) {
+          const action =
+            operation.actions[
+              Math.min(operationActionCursor, operation.actions.length - 1)
+            ];
+          if (action !== undefined) {
+            onOperationAction?.(action.kind);
+          }
+          return;
+        }
+        if (key.escape) {
+          const backAction =
+            operation.actions.find((action) => action.kind === "decline") ??
+            operation.actions.find((action) => action.kind === "dismiss");
+          if (backAction !== undefined) {
+            onOperationAction?.(backAction.kind);
+            return;
+          }
+        }
+      }
+      const accelerator = operationActionForInput(operation, input, key);
+      if (accelerator !== undefined) {
+        onOperationAction?.(accelerator);
         return;
       }
       if (operationInteractionOpen) {
@@ -582,12 +1059,15 @@ export function TuiShell({
               credential.name === providerCredentialFlow.selectedName,
           ),
         );
-        if ((input === "j" || input === "k") && credentialFlowItems.length > 0) {
-          const nextIndex =
-            input === "j"
-              ? (currentIndex + 1) % credentialFlowItems.length
-              : (currentIndex - 1 + credentialFlowItems.length) %
-                credentialFlowItems.length;
+        if (
+          (input === "j" || input === "k" || key.downArrow || key.upArrow) &&
+          credentialFlowItems.length > 0
+        ) {
+          const forwards = input === "j" || key.downArrow;
+          const nextIndex = forwards
+            ? (currentIndex + 1) % credentialFlowItems.length
+            : (currentIndex - 1 + credentialFlowItems.length) %
+              credentialFlowItems.length;
           const next = credentialFlowItems[nextIndex];
           if (next !== undefined) {
             setProviderCredentialFlow({
@@ -701,17 +1181,20 @@ export function TuiShell({
       }
 
       if (foregroundConnectionFlow.step === "instance") {
-        if ((input === "j" || input === "k") && inventoryItems.length > 0) {
+        if (
+          (input === "j" || input === "k" || key.downArrow || key.upArrow) &&
+          inventoryItems.length > 0
+        ) {
+          const forwards = input === "j" || key.downArrow;
           const currentIndex = Math.max(
             0,
             inventoryItems.findIndex(
               (instance) => instance.id === foregroundConnectionFlow.instanceId,
             ),
           );
-          const nextIndex =
-            input === "j"
-              ? (currentIndex + 1) % inventoryItems.length
-              : (currentIndex - 1 + inventoryItems.length) % inventoryItems.length;
+          const nextIndex = forwards
+            ? (currentIndex + 1) % inventoryItems.length
+            : (currentIndex - 1 + inventoryItems.length) % inventoryItems.length;
           const next = inventoryItems[nextIndex];
           if (next !== undefined) {
             setForegroundConnectionFlow({
@@ -821,20 +1304,20 @@ export function TuiShell({
 
       if (foregroundConnectionFlow.step === "access-method") {
         if (
-          (input === "j" || input === "k") &&
+          (input === "j" || input === "k" || key.downArrow || key.upArrow) &&
           foregroundConnectionFlow.accessMethods.length > 0
         ) {
+          const forwards = input === "j" || key.downArrow;
           const currentIndex = Math.max(
             0,
             foregroundConnectionFlow.accessMethods.findIndex(
               (method) => method.id === foregroundConnectionFlow.accessMethodId,
             ),
           );
-          const nextIndex =
-            input === "j"
-              ? (currentIndex + 1) % foregroundConnectionFlow.accessMethods.length
-              : (currentIndex - 1 + foregroundConnectionFlow.accessMethods.length) %
-                foregroundConnectionFlow.accessMethods.length;
+          const nextIndex = forwards
+            ? (currentIndex + 1) % foregroundConnectionFlow.accessMethods.length
+            : (currentIndex - 1 + foregroundConnectionFlow.accessMethods.length) %
+              foregroundConnectionFlow.accessMethods.length;
           const next = foregroundConnectionFlow.accessMethods[nextIndex];
           if (next !== undefined) {
             setForegroundConnectionFlow({
@@ -946,6 +1429,142 @@ export function TuiShell({
             `Opened TUI-owned Endpoint ${connection.endpoint.host}:${connection.endpoint.port}.`,
           );
         });
+      }
+      return;
+    }
+
+    if (actionMenuOpen) {
+      if (key.escape) {
+        setActionMenuOpen(false);
+        setActionCursor(0);
+        setStatus("Closed actions.");
+        return;
+      }
+      if (contextActions.length === 0) {
+        setActionMenuOpen(false);
+        return;
+      }
+      if (key.downArrow) {
+        setActionCursor((current) => (current + 1) % contextActions.length);
+        return;
+      }
+      if (key.upArrow) {
+        setActionCursor(
+          (current) => (current - 1 + contextActions.length) % contextActions.length,
+        );
+        return;
+      }
+      if (key.return) {
+        const action = contextActions[Math.min(actionCursor, contextActions.length - 1)];
+        if (action !== undefined) {
+          runContextAction(action.id);
+        }
+        return;
+      }
+      return;
+    }
+
+    if (contentFocused && key.escape) {
+      setContentFocused(false);
+      setActionMenuOpen(false);
+      setActionCursor(0);
+      setStatus(`${activeRoute.label} remains open; section navigation has focus.`);
+      return;
+    }
+
+    if (contentFocused && key.tab) {
+      setContentFocused(false);
+      setFocusedIndex((current) =>
+        key.shift
+          ? (current - 1 + routes.length) % routes.length
+          : (current + 1) % routes.length,
+      );
+      setStatus("Section navigation has focus.");
+      return;
+    }
+
+    if (contentFocused && (key.downArrow || key.upArrow)) {
+      const forwards = key.downArrow;
+      if (activeRoute.id === "instances" && inventoryItems.length > 0) {
+        const currentIndex = Math.max(
+          0,
+          inventoryItems.findIndex(
+            (instance) => instance.id === effectiveSelectedInstanceId,
+          ),
+        );
+        const nextIndex = forwards
+          ? (currentIndex + 1) % inventoryItems.length
+          : (currentIndex - 1 + inventoryItems.length) % inventoryItems.length;
+        const next = inventoryItems[nextIndex];
+        if (next !== undefined) {
+          setSelectedInstanceId(next.id);
+          setStatus(`Selected ${next.name ?? next.id}.`);
+        }
+        return;
+      }
+      if (activeRoute.id === "providers" && providerItems.length > 0) {
+        const currentIndex = Math.max(
+          0,
+          providerItems.findIndex(
+            (provider) => provider.source === effectiveSelectedProviderSource,
+          ),
+        );
+        const nextIndex = forwards
+          ? (currentIndex + 1) % providerItems.length
+          : (currentIndex - 1 + providerItems.length) % providerItems.length;
+        const next = providerItems[nextIndex];
+        if (next !== undefined) {
+          setSelectedProviderSource(next.source);
+          setStatus(`Selected ${next.displayName ?? next.providerId ?? next.source}.`);
+        }
+        return;
+      }
+      if (activeRoute.id === "new-instance" && workflowItems.length > 0) {
+        const currentIndex = Math.max(
+          0,
+          workflowItems.findIndex(
+            (workflow) => workflowKey(workflow) === effectiveSelectedWorkflowKey,
+          ),
+        );
+        const nextIndex = forwards
+          ? (currentIndex + 1) % workflowItems.length
+          : (currentIndex - 1 + workflowItems.length) % workflowItems.length;
+        const next = workflowItems[nextIndex];
+        if (next !== undefined) {
+          setSelectedWorkflowKey(workflowKey(next));
+          setStatus(`Selected ${next.providerId} acquisition flow.`);
+        }
+        return;
+      }
+      if (activeRoute.id === "sessions") {
+        moveConnectionSelection(forwards ? 1 : -1);
+        return;
+      }
+      return;
+    }
+
+    if (contentFocused && key.return) {
+      if (
+        activeRoute.id === "new-instance" &&
+        effectiveSelectedWorkflowKey !== undefined
+      ) {
+        const selected = workflowItems.find(
+          (workflow) => workflowKey(workflow) === effectiveSelectedWorkflowKey,
+        );
+        if (selected?.presentation.kind === "interactive-flow") {
+          onOpenProviderWorkflow?.(selected);
+          setStatus(`Opening ${selected.providerId}/${selected.commandName}.`);
+        } else if (selected !== undefined) {
+          setStatus(
+            `CLI fallback: easyserver provider ${selected.providerId} ${selected.featureId} ${selected.commandName}`,
+          );
+        }
+        return;
+      }
+      if (contextActions.length > 0) {
+        setActionMenuOpen(true);
+        setActionCursor(0);
+        setStatus(`Choose an action for ${activeRoute.label}.`);
       }
       return;
     }
@@ -1571,7 +2190,7 @@ export function TuiShell({
                 {readSnapshot !== undefined && readStatus === "stale" ? (
                   <Box flexDirection="column" marginBottom={1}>
                     <Text bold>Last refresh failed.</Text>
-                    <Text>Showing the previous snapshot; press r to try again.</Text>
+                    <Text>Showing the previous snapshot; open Actions to refresh.</Text>
                   </Box>
                 ) : null}
                 <RouteSurface
@@ -1582,6 +2201,7 @@ export function TuiShell({
                   canCopyDiagnostics={onCopyDiagnostics !== undefined}
                   narrow={narrow}
                   selectedInstanceId={selectedInstanceId}
+                  showInstanceDetails={instanceDetailsOpen}
                   bulkSelectedInstanceIds={bulkSelectedInstanceIds}
                   canMutateInstances={onInstanceMutation !== undefined}
                   canBulkMutateInstances={onBulkInstanceMutation !== undefined}
@@ -1591,6 +2211,8 @@ export function TuiShell({
                   selectedForegroundConnectionId={selectedForegroundConnectionId}
                   selectedPersistentSessionId={selectedPersistentSessionId}
                   selectedEndpointIntentName={effectiveSelectedEndpointIntentName}
+                  selectedConnectionTarget={selectedConnectionTarget}
+                  showConnectionDetails={connectionDetailsOpen}
                   canManageForegroundConnections={
                     onOpenForegroundConnection !== undefined &&
                     onCloseForegroundConnection !== undefined
@@ -1610,6 +2232,7 @@ export function TuiShell({
                   providerSourceInput={providerSourceInput}
                   providerCredentialFlow={providerCredentialFlowView}
                   selectedProviderSource={effectiveSelectedProviderSource}
+                  showProviderDetails={providerDetailsOpen}
                   canRegisterProvider={onProviderMutation !== undefined}
                   selectedWorkflowKey={effectiveSelectedWorkflowKey}
                   providerInteractiveScreen={providerInteractiveScreen}
@@ -1617,6 +2240,21 @@ export function TuiShell({
                   onProviderInteractiveEvent={onProviderInteractiveEvent}
                   onProviderInteractiveClose={onProviderInteractiveClose}
                 />
+                {actionMenuOpen ? (
+                  <ContextActionMenu
+                    actions={contextActions}
+                    cursor={Math.min(actionCursor, Math.max(0, contextActions.length - 1))}
+                    colorEnabled={colorEnabled}
+                  />
+                ) : contentFocused && providerInteractiveScreen === undefined ? (
+                  <Box marginTop={1}>
+                    <Text color={muted}>
+                      {activeRoute.id === "new-instance"
+                        ? "↑/↓ choose · Enter start · Esc sections"
+                        : "↑/↓ choose · Enter actions · Esc sections"}
+                    </Text>
+                  </Box>
+                ) : null}
               </Box>
             </Box>
           )}
@@ -1625,7 +2263,14 @@ export function TuiShell({
 
       {operation === undefined ? null : (
         <Box marginTop={1}>
-          <TuiOperationDrawer operation={operation} colorEnabled={colorEnabled} />
+          <TuiOperationDrawer
+            operation={operation}
+            colorEnabled={colorEnabled}
+            selectedActionIndex={Math.min(
+              operationActionCursor,
+              Math.max(0, operation.actions.length - 1),
+            )}
+          />
         </Box>
       )}
 
@@ -1633,11 +2278,11 @@ export function TuiShell({
         <Text aria-label={`Status: ${status}`}>Status: {status}</Text>
         {operationInteractionOpen ? (
           <Text color={muted} wrap="wrap">
-            Confirmation has focus · use the actions shown above · q quit
+            Confirmation has focus · ↑/↓ choose · Enter run · Esc decline · Ctrl+C quit
           </Text>
         ) : operation !== undefined ? (
           <Text color={muted} wrap="wrap">
-            Operation status shown · Tab/Shift+Tab or arrows still navigate · drawer actions use the keys shown above · q quit
+            Operation status shown · ↑/↓ choose drawer actions · Enter run · Tab returns to sections · Ctrl+C quit
           </Text>
         ) : providerInteractiveScreen !== undefined ? (
           <Text color={muted} wrap="wrap">
@@ -1645,14 +2290,41 @@ export function TuiShell({
           </Text>
         ) : screenReader ? (
           <Text>
-            Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help; question mark opens help; r refreshes; g opens privacy-safe Diagnostics; on Instances, J and K select, Space marks bulk targets, 0 clears marks, and number keys run lifecycle actions; on Connections, N starts a foreground Endpoint, P creates a persistent Session, D starts or stops the daemon, lowercase J/K/X manage foreground Endpoints, uppercase J/K/C manage persistent Sessions, brackets select persisted Endpoint intents, E toggles them, T retries Error state, and uppercase X removes after confirmation; on Diagnostics, lowercase c copies the reviewed payload, P opens Providers and uppercase C opens Connections; Q quits.
+            Commands: arrows move; Enter opens, selects or shows actions; Escape goes back; Tab returns to section navigation; question mark opens help; Ctrl+C quits.
           </Text>
         ) : (
           <Text color={muted} wrap="wrap">
-            Tab/Shift+Tab or arrows move · Enter open · Esc back · ? help · r refresh · g diagnostics{activeRoute.id === "instances" ? onInstanceMutation === undefined ? " · j/k select" : onBulkInstanceMutation === undefined ? " · j/k select · a adopt · 1-4 actions" : " · j/k select · Space mark · 0 clear · a adopt · 1-4 actions" : activeRoute.id === "sessions" ? " · n foreground · p persistent · d daemon · j/k/x foreground · J/K/c sessions · [/] intents · e toggle · t retry · X remove" : activeRoute.id === "providers" && onProviderMutation !== undefined ? " · j/k select · c credentials · e toggle · a register" : activeRoute.id === "new-instance" ? " · j/k select · Enter start" : activeRoute.id === "diagnostics" ? " · c copy · P providers · C connections" : ""} · q quit
+            Arrows move · Enter select/open/actions · Esc back · Tab sections · ? help · Ctrl+C quit
           </Text>
         )}
       </Box>
+    </Box>
+  );
+}
+
+function ContextActionMenu({
+  actions,
+  cursor,
+  colorEnabled,
+}: {
+  readonly actions: readonly TuiContextAction[];
+  readonly cursor: number;
+  readonly colorEnabled: boolean;
+}): React.ReactElement {
+  const accent = colorEnabled ? "cyan" : undefined;
+  return (
+    <Box marginTop={1} flexDirection="column">
+      <Text bold>Actions</Text>
+      {actions.map((action, index) => (
+        <Text
+          key={action.id}
+          bold={index === cursor}
+          color={index === cursor ? accent : undefined}
+        >
+          {index === cursor ? "> " : "  "}{action.label}
+        </Text>
+      ))}
+      <Text>↑/↓ choose · Enter run · Esc close</Text>
     </Box>
   );
 }
@@ -1665,6 +2337,7 @@ interface RouteSurfaceProps {
   readonly canCopyDiagnostics: boolean;
   readonly narrow: boolean;
   readonly selectedInstanceId?: string;
+  readonly showInstanceDetails: boolean;
   readonly bulkSelectedInstanceIds: readonly string[];
   readonly canMutateInstances: boolean;
   readonly canBulkMutateInstances: boolean;
@@ -1674,6 +2347,8 @@ interface RouteSurfaceProps {
   readonly selectedForegroundConnectionId?: string;
   readonly selectedPersistentSessionId?: string;
   readonly selectedEndpointIntentName?: string;
+  readonly selectedConnectionTarget?: TuiConnectionTarget;
+  readonly showConnectionDetails: boolean;
   readonly canManageForegroundConnections: boolean;
   readonly canManagePersistentSessions: boolean;
   readonly canManageEndpointIntents: boolean;
@@ -1681,6 +2356,7 @@ interface RouteSurfaceProps {
   readonly providerSourceInput?: string;
   readonly providerCredentialFlow?: ProviderCredentialFlowView;
   readonly selectedProviderSource?: string;
+  readonly showProviderDetails: boolean;
   readonly canRegisterProvider: boolean;
   readonly selectedWorkflowKey?: string;
   readonly providerInteractiveScreen?: ProviderInteractiveScreen;
@@ -1697,6 +2373,7 @@ function RouteSurface({
   canCopyDiagnostics,
   narrow,
   selectedInstanceId,
+  showInstanceDetails,
   bulkSelectedInstanceIds,
   canMutateInstances,
   canBulkMutateInstances,
@@ -1706,6 +2383,8 @@ function RouteSurface({
   selectedForegroundConnectionId,
   selectedPersistentSessionId,
   selectedEndpointIntentName,
+  selectedConnectionTarget,
+  showConnectionDetails,
   canManageForegroundConnections,
   canManagePersistentSessions,
   canManageEndpointIntents,
@@ -1713,6 +2392,7 @@ function RouteSurface({
   providerSourceInput,
   providerCredentialFlow,
   selectedProviderSource,
+  showProviderDetails,
   canRegisterProvider,
   selectedWorkflowKey,
   providerInteractiveScreen,
@@ -1778,6 +2458,7 @@ function RouteSurface({
         snapshot={snapshot}
         narrow={narrow}
         selectedInstanceId={selectedInstanceId}
+        showDetails={showInstanceDetails}
         bulkSelectedInstanceIds={bulkSelectedInstanceIds}
         canMutate={canMutateInstances}
         canBulkMutate={canBulkMutateInstances}
@@ -1794,6 +2475,8 @@ function RouteSurface({
         selectedConnectionId={selectedForegroundConnectionId}
         selectedPersistentSessionId={selectedPersistentSessionId}
         selectedEndpointIntentName={selectedEndpointIntentName}
+        selectedConnectionTarget={selectedConnectionTarget}
+        showDetails={showConnectionDetails}
         canManage={canManageForegroundConnections}
         canManagePersistent={canManagePersistentSessions}
         canManageIntents={canManageEndpointIntents}
@@ -1807,6 +2490,7 @@ function RouteSurface({
       sourceInput={providerSourceInput}
       credentialFlow={providerCredentialFlow}
       selectedSource={selectedProviderSource}
+      showDetails={showProviderDetails}
       canRegister={canRegisterProvider}
     />
   );
@@ -1835,14 +2519,14 @@ function OverviewSurface({ snapshot }: { readonly snapshot: TuiReadSnapshot }): 
 
   return (
     <Box flexDirection="column">
-      <Text bold>Readiness</Text>
+      <Text bold>Ready to use</Text>
       {providers.status === "failed" ? (
         <Text>Providers unavailable: {providers.message}</Text>
       ) : providerItems.length === 0 ? (
         <Text>No provider plugins configured. Open Providers for the next setup step.</Text>
       ) : (
         <Text>
-          Providers: {providerItems.length} configured · {readyProviders} ready · {missingCredentials} credentials missing · {disabledPlugins} disabled · {failedPlugins} failed
+          Providers: {providerItems.length} configured · {readyProviders} ready{missingCredentials > 0 ? ` · ${missingCredentials} need setup` : ""}{disabledPlugins + failedPlugins > 0 ? ` · ${disabledPlugins + failedPlugins} unavailable` : ""}
         </Text>
       )}
 
@@ -1854,24 +2538,16 @@ function OverviewSurface({ snapshot }: { readonly snapshot: TuiReadSnapshot }): 
           <Text>{instanceEmptyGuidance(snapshot)}</Text>
         ) : (
           <Text>
-            Instances: {instanceItems.length} total · {runningInstances} running · {staleInstances} stale · {unobservedInstances} unobserved
+            Instances: {instanceItems.length} total · {runningInstances} running{staleInstances + unobservedInstances > 0 ? ` · ${staleInstances + unobservedInstances} need refresh` : ""}
           </Text>
         )}
       </Box>
 
       <Box marginTop={1} flexDirection="column">
-        <Text bold>Daemon and connections</Text>
-        <Text>Daemon: {snapshot.daemon.status}</Text>
-        {snapshot.daemon.status !== "running" ? null : (
-          <>
-            <Text>
-              Live sessions: {snapshot.daemon.sessions.status === "ready" ? snapshot.daemon.sessions.live : "unavailable"}
-            </Text>
-            <Text>
-              Live Endpoint intents: {snapshot.daemon.endpointIntents.status === "ready" ? snapshot.daemon.endpointIntents.live : "unavailable"}
-            </Text>
-          </>
-        )}
+        <Text bold>Connections</Text>
+        <Text>
+          Daemon: {snapshot.daemon.status}{snapshot.daemon.status === "running" && snapshot.daemon.sessions.status === "ready" ? ` · ${snapshot.daemon.sessions.live} live persistent` : ""}
+        </Text>
       </Box>
 
       {failedProviderOutcomes.length === 0 ? null : (
@@ -1882,13 +2558,11 @@ function OverviewSurface({ snapshot }: { readonly snapshot: TuiReadSnapshot }): 
               {provider.providerId} · {provider.error.code} · {provider.error.message}
             </Text>
           ))}
-          <Text>Healthy provider inventory remains available above.</Text>
+          <Text>Healthy providers and instances above remain usable.</Text>
         </Box>
       )}
 
-      <Box marginTop={1}>
-        <Text>Support: press g to inspect the privacy-safe Diagnostics payload before sharing it.</Text>
-      </Box>
+
     </Box>
   );
 }
@@ -1904,7 +2578,7 @@ function DiagnosticsSurface({
     return (
       <Box flexDirection="column">
         <Text>Diagnostics have not been collected yet.</Text>
-        <Text>Press r to generate the privacy-safe support payload.</Text>
+        <Text>Press Enter for Actions, then choose Refresh diagnostics.</Text>
       </Box>
     );
   }
@@ -1915,7 +2589,7 @@ function DiagnosticsSurface({
     return (
       <Box flexDirection="column">
         <Text>{diagnostics.message}</Text>
-        <Text>Press r to retry. Do not substitute raw logs that may contain sensitive data.</Text>
+        <Text>Use Actions to retry. Do not substitute raw logs that may contain sensitive data.</Text>
       </Box>
     );
   }
@@ -1928,7 +2602,7 @@ function DiagnosticsSurface({
       </Text>
       <Text>
         {canCopy
-          ? "Press c to copy exactly the JSON shown below; nothing else is added."
+          ? "Use Actions to copy exactly the JSON shown below; nothing else is added."
           : "Clipboard integration is unavailable in this TUI session; the exact safe payload is still shown below."}
       </Text>
       <Box marginTop={1} flexDirection="column">
@@ -1937,8 +2611,7 @@ function DiagnosticsSurface({
       <Box marginTop={1} flexDirection="column">
         <Text bold>Support guidance</Text>
         <Text>Raw logs are not the same as this sanitized payload. Review raw logs separately and never share credentials, tokens or private keys.</Text>
-        <Text>Press P to open Providers for plugin, credential or readiness remediation.</Text>
-        <Text>Press C to open Connections for daemon, Endpoint or SSH remediation.</Text>
+        <Text>Providers and Connections are available from Actions or the section navigation.</Text>
       </Box>
     </Box>
   );
@@ -1948,6 +2621,7 @@ interface InstancesSurfaceProps {
   readonly snapshot: TuiReadSnapshot;
   readonly narrow: boolean;
   readonly selectedInstanceId?: string;
+  readonly showDetails: boolean;
   readonly bulkSelectedInstanceIds: readonly string[];
   readonly canMutate: boolean;
   readonly canBulkMutate: boolean;
@@ -1957,6 +2631,7 @@ function InstancesSurface({
   snapshot,
   narrow,
   selectedInstanceId,
+  showDetails,
   bulkSelectedInstanceIds,
   canMutate,
   canBulkMutate,
@@ -1965,7 +2640,7 @@ function InstancesSurface({
     return (
       <Box flexDirection="column">
         <Text>Instance inventory unavailable: {snapshot.instances.message}</Text>
-        <Text>Press r to refresh. Other TUI sections remain available.</Text>
+        <Text>Use Actions to refresh. Other TUI sections remain available.</Text>
       </Box>
     );
   }
@@ -2001,17 +2676,14 @@ function InstancesSurface({
       {snapshot.instances.complete ? null : (
         <PartialInventoryNotice failedProviders={failedProviderOutcomes} />
       )}
-      <Text>
-        j/k select instance{canBulkMutate ? " · Space mark/unmark · 0 clear marks" : ""}{canMutate ? " · a adopt · 1-4 lifecycle actions" : ""} · r refresh
-      </Text>
+      <Text>Choose an instance, then press Enter for its actions.</Text>
       <Box marginTop={1} flexDirection="column">
         {items.map((instance) => (
           <Text key={instance.id} bold={instance.id === selected?.id}>
             {instance.id === selected?.id ? "> " : "  "}
             {canBulkMutate ? (marked.has(instance.id) ? "[x] " : "[ ] ") : ""}
-            {narrow
-              ? `${instance.name ?? instance.id} · ${instance.state ?? "unobserved"} · ${instance.freshness}`
-              : `${instance.name ?? instance.id} · state=${instance.state ?? "unobserved"} · freshness=${instance.freshness} · provider=${instance.providerId} · management=${instance.management} · actions=${formatActions(availableInstanceActions(instance))}`}
+            {instance.name ?? instance.id} · {instance.providerId} · {instance.state ?? "unobserved"}
+            {instance.freshness === "fresh" ? "" : ` · ${instance.freshness}`}
           </Text>
         ))}
       </Box>
@@ -2026,10 +2698,10 @@ function InstancesSurface({
         <Box marginTop={1} flexDirection="column">
           <Text bold>Selected instance is no longer visible.</Text>
           <Text>
-            {selectedInstanceId} disappeared from the refreshed inventory. No action target has been changed; press j/k to choose a current instance.
+            {selectedInstanceId} disappeared from the refreshed inventory. No action target has been changed; use ↑/↓ to choose a current instance.
           </Text>
         </Box>
-      ) : selected === undefined ? null : (
+      ) : selected === undefined || !showDetails ? null : (
         <Box marginTop={1} flexDirection="column">
           <Text bold>Instance detail</Text>
           <Text>EasyServer ID: {selected.id}</Text>
@@ -2072,6 +2744,8 @@ function ConnectionsSurface({
   selectedConnectionId,
   selectedPersistentSessionId,
   selectedEndpointIntentName,
+  selectedConnectionTarget,
+  showDetails,
   canManage,
   canManagePersistent,
   canManageIntents,
@@ -2084,6 +2758,8 @@ function ConnectionsSurface({
   readonly selectedConnectionId?: string;
   readonly selectedPersistentSessionId?: string;
   readonly selectedEndpointIntentName?: string;
+  readonly selectedConnectionTarget?: TuiConnectionTarget;
+  readonly showDetails: boolean;
   readonly canManage: boolean;
   readonly canManagePersistent: boolean;
   readonly canManageIntents: boolean;
@@ -2113,7 +2789,7 @@ function ConnectionsSurface({
           {flow.step === "instance" ? (
             <>
               <Text bold>Choose instance</Text>
-              <Text>j/k select · Enter continue · Esc cancel</Text>
+              <Text>↑/↓ choose · Enter continue · Esc cancel</Text>
               {instances.length === 0 ? (
                 <Text>No compute instances are currently available.</Text>
               ) : (
@@ -2156,7 +2832,7 @@ function ConnectionsSurface({
                   </Text>
                 ))
               )}
-              <Text>j/k select · Enter continue · Esc back</Text>
+              <Text>↑/↓ choose · Enter continue · Esc back</Text>
             </>
           ) : flow.step === "local-port" ? (
             <>
@@ -2193,50 +2869,63 @@ function ConnectionsSurface({
     );
   }
 
-  const selected = connections.find(
-    (connection) => connection.id === selectedConnectionId,
-  );
+  const selected =
+    selectedConnectionTarget === undefined
+      ? connections.find((connection) => connection.id === selectedConnectionId)
+      : selectedConnectionTarget.kind === "foreground"
+        ? connections.find((connection) => connection.id === selectedConnectionTarget.id)
+        : undefined;
   const persistentSessions =
     snapshot.daemon.status === "running" && snapshot.daemon.sessions.status === "ready"
       ? snapshot.daemon.sessions.items ?? []
       : [];
-  const selectedPersistent = persistentSessions.find(
-    (session) => session.id === selectedPersistentSessionId,
-  );
+  const selectedPersistent =
+    selectedConnectionTarget === undefined
+      ? persistentSessions.find((session) => session.id === selectedPersistentSessionId)
+      : selectedConnectionTarget.kind === "persistent"
+        ? persistentSessions.find((session) => session.id === selectedConnectionTarget.id)
+        : undefined;
   const endpointIntents =
     snapshot.daemon.status === "running" &&
     snapshot.daemon.endpointIntents.status === "ready"
       ? snapshot.daemon.endpointIntents.items ?? []
       : [];
-  const selectedIntent = endpointIntents.find(
-    (intent) => intent.operationName === selectedEndpointIntentName,
-  );
+  const selectedIntent =
+    selectedConnectionTarget === undefined
+      ? endpointIntents.find((intent) => intent.operationName === selectedEndpointIntentName)
+      : selectedConnectionTarget.kind === "intent"
+        ? endpointIntents.find((intent) => intent.operationName === selectedConnectionTarget.id)
+        : undefined;
   return (
     <Box flexDirection="column">
       <Text>
         Foreground Endpoints belong to this TUI; persistent Endpoints belong to the daemon and survive TUI exit.
       </Text>
       <Text>
-        {canManage ? "n new foreground" : "foreground unavailable"}
-        {canManagePersistent ? " · p new persistent Session · J/K select Session · c close Session" : ""}
-        {canManageIntents ? " · [/] select persisted intent · e enable/disable · t retry Error · X remove" : ""}
-        {canManageDaemon ? " · d start/stop daemon" : ""}
+        Use ↑/↓ to move across existing connections and saved Endpoints. Press Enter for create, close, daemon and recovery actions.
       </Text>
       <Box marginTop={1} flexDirection="column">
         <Text bold>TUI-owned foreground Endpoints</Text>
         {connections.length === 0 ? (
           <Text>
-            None open. {snapshot.instances.status === "ready" && snapshot.instances.items.length === 0 ? "Create or discover an instance first." : "Press n to create one."}
+            None open. {snapshot.instances.status === "ready" && snapshot.instances.items.length === 0 ? "Create or discover an instance first." : "Press Enter for Actions to create one."}
           </Text>
         ) : (
           <>
-            <Text>j/k select · x close</Text>
             {connections.map((connection) => (
               <Text key={connection.id} bold={connection.id === selected?.id}>
                 {connection.id === selected?.id ? "> " : "  "}
-                {connection.endpoint.host}:{connection.endpoint.port} · {connection.state} · {connection.instanceId} → {escapeTerminalText(connection.remoteHost)}:{connection.remotePort} · {escapeTerminalText(connection.accessMethod.id)}
+                {connection.endpoint.host}:{connection.endpoint.port} · {connection.state} · {connection.instanceId}
               </Text>
             ))}
+            {selected === undefined || !showDetails ? null : (
+              <Box marginTop={1} flexDirection="column">
+                <Text bold>Foreground Endpoint details</Text>
+                <Text>Instance: {selected.instanceId}</Text>
+                <Text>Remote target: {escapeTerminalText(selected.remoteHost)}:{selected.remotePort}</Text>
+                <Text>Access Method: {escapeTerminalText(selected.accessMethod.id)} · {escapeTerminalText(selected.accessMethod.kind)}</Text>
+              </Box>
+            )}
           </>
         )}
       </Box>
@@ -2253,7 +2942,6 @@ function ConnectionsSurface({
           <Text>No persisted Endpoint intents configured.</Text>
         ) : (
           <>
-            {canManageIntents ? <Text>[/] select · e enable/disable · t retry Error · X remove</Text> : null}
             {endpointIntents.map((intent) => (
               <EndpointIntentLine
                 key={intent.operationName}
@@ -2261,7 +2949,7 @@ function ConnectionsSurface({
                 selected={intent.operationName === selectedIntent?.operationName}
               />
             ))}
-            {selectedIntent === undefined ? null : (
+            {selectedIntent === undefined || !showDetails ? null : (
               <EndpointIntentDetail intent={selectedIntent} />
             )}
           </>
@@ -2275,14 +2963,13 @@ function ConnectionsSurface({
         ) : snapshot.daemon.status === "unreachable" ? (
           <Text>Daemon descriptor exists, but authenticated health failed. No session mutation is attempted.</Text>
         ) : snapshot.daemon.status === "stopped" ? (
-          <Text>Daemon is stopped. Press d to start it.</Text>
+          <Text>Daemon is stopped. Press Enter for actions to start it.</Text>
         ) : "sessions" in snapshot.daemon && snapshot.daemon.sessions.status === "unavailable" ? (
           <Text>Daemon is healthy, but Connection Session details are temporarily unavailable.</Text>
         ) : persistentSessions.length === 0 ? (
-          <Text>No persistent sessions. Press p to create one.</Text>
+          <Text>No persistent sessions. Press Enter for actions to create one.</Text>
         ) : (
           <>
-            <Text>J/K select · c close · p new</Text>
             {persistentSessions.map((session) => (
               <PersistentSessionLine
                 key={session.id}
@@ -2290,7 +2977,7 @@ function ConnectionsSurface({
                 selected={session.id === selectedPersistent?.id}
               />
             ))}
-            {selectedPersistent === undefined ? null : (
+            {selectedPersistent === undefined || !showDetails ? null : (
               <PersistentSessionDetail session={selectedPersistent} />
             )}
           </>
@@ -2312,7 +2999,7 @@ function PersistentSessionLine({
     : `${session.endpoint.host}:${session.endpoint.port}`;
   return (
     <Text bold={selected}>
-      {selected ? "> " : "  "}{session.id} · {session.state} · {endpoint} · {session.instanceId} → {session.remoteHost}:{session.remotePort}
+      {selected ? "> " : "  "}{session.id} · {session.state} · {endpoint}
       {session.state === "failed" ? ` · ${session.failure?.code ?? "failure"}` : ""}
     </Text>
   );
@@ -2355,7 +3042,7 @@ function EndpointIntentLine({
       : intent.state;
   return (
     <Text bold={selected}>
-      {selected ? "> " : "  "}{intent.name} · desired={intent.enabled ? "enabled" : "disabled"} · {realization} · {intent.instanceId} → {intent.remoteHost}:{intent.remotePort} · requested-local-port={intent.requestedLocalPort ?? "dynamic"}
+      {selected ? "> " : "  "}{intent.name} · {intent.enabled ? "enabled" : "disabled"} · {realization}
       {intent.state === "error" ? ` · ${intent.failure?.code ?? "failure"}` : ""}
     </Text>
   );
@@ -2432,7 +3119,7 @@ function NewInstanceSurface({
     return (
       <Box flexDirection="column">
         <Text>Provider workflows unavailable: {snapshot.providerWorkflows.message}</Text>
-        <Text>Press r to retry. Provider CLI commands remain available.</Text>
+        <Text>Use Actions to refresh. Provider CLI commands remain available.</Text>
       </Box>
     );
   }
@@ -2451,7 +3138,7 @@ function NewInstanceSurface({
 
   return (
     <Box flexDirection="column">
-      <Text>j/k select · Enter start</Text>
+      <Text>Choose a provider workflow with ↑/↓ and press Enter to start.</Text>
       {workflows.map((workflow) => {
         const key = workflowKey(workflow);
         const selected = key === selectedWorkflowKey;
@@ -2480,12 +3167,14 @@ function ProvidersSurface({
   sourceInput,
   credentialFlow,
   selectedSource,
+  showDetails,
   canRegister,
 }: {
   readonly snapshot: TuiReadSnapshot;
   readonly sourceInput?: string;
   readonly credentialFlow?: ProviderCredentialFlowView;
   readonly selectedSource?: string;
+  readonly showDetails: boolean;
   readonly canRegister: boolean;
 }): React.ReactElement {
   if (sourceInput !== undefined) {
@@ -2525,7 +3214,7 @@ function ProvidersSurface({
       return (
         <Box flexDirection="column">
           <Text bold>Credentials for {providerLabel}</Text>
-          <Text>j/k select · Enter set or rotate · x remove configured · Esc back</Text>
+          <Text>↑/↓ choose · Enter set or rotate · Esc back</Text>
           {provider.credentials.items.map((credential) => (
             <Box key={credential.name} flexDirection="column" marginTop={1}>
               <Text bold={credential.name === credentialFlow.selectedName}>
@@ -2546,7 +3235,7 @@ function ProvidersSurface({
     return (
       <Box flexDirection="column">
         <Text>Provider configuration unavailable: {snapshot.providers.message}</Text>
-        <Text>Press r to retry. Instance inventory may still be available.</Text>
+        <Text>Use Actions to refresh. Instance inventory may still be available.</Text>
       </Box>
     );
   }
@@ -2556,7 +3245,7 @@ function ProvidersSurface({
       <Box flexDirection="column">
         <Text>No provider plugins configured.</Text>
         {canRegister ? (
-          <Text>Press a to register an already-installed provider module or path.</Text>
+          <Text>Press Enter for actions, then choose Register installed provider.</Text>
         ) : (
           <Text>For now, add one with: easyserver plugins add &lt;module&gt;</Text>
         )}
@@ -2566,46 +3255,40 @@ function ProvidersSurface({
 
   return (
     <Box flexDirection="column">
-      {canRegister ? (
-        <Box marginBottom={1}>
-          <Text>j/k select · c credentials · e enable/disable · a register another installed provider</Text>
-        </Box>
-      ) : null}
+      <Box marginBottom={1}>
+        <Text>Choose a provider, then press Enter for actions.</Text>
+      </Box>
       {snapshot.providers.items.map((provider) => {
         const selected = provider.source === selectedSource;
         return (
         <Box key={`${provider.source}:${provider.pluginId ?? "unloaded"}`} flexDirection="column" marginBottom={1}>
           <Text bold={selected}>
             {selected ? "> " : "  "}{provider.displayName ?? provider.pluginId ?? provider.providerId ?? provider.source}
+            {` · ${provider.state === "loaded" ? provider.readiness : provider.state}`}
           </Text>
-          <Text>
-            {provider.state} · {provider.failure ?? provider.readiness}
-          </Text>
-          <Text>Source: {provider.source}</Text>
-          {provider.providerId === undefined ? null : (
-            <Text>Provider ID: {provider.providerId}</Text>
+          {!selected || !showDetails ? null : (
+            <Box flexDirection="column" marginLeft={2}>
+              <Text>Source: {provider.source}</Text>
+              {provider.providerId === undefined ? null : (
+                <Text>Provider ID: {provider.providerId}</Text>
+              )}
+              {provider.version === undefined ? null : <Text>Version: {provider.version}</Text>}
+              {provider.state === "disabled" ? (
+                <Text>Credential metadata unavailable while disabled.</Text>
+              ) : provider.state === "failed" ? (
+                <Text>Failure: {provider.failure}</Text>
+              ) : provider.credentials.declared === 0 ? (
+                <Text>Credentials: none declared</Text>
+              ) : (
+                <Text>
+                  Credentials: {provider.credentials.configured}/{provider.credentials.declared} configured
+                  {provider.credentials.missingRequired === 0
+                    ? ""
+                    : ` · ${provider.credentials.missingRequired} required missing`}
+                </Text>
+              )}
+            </Box>
           )}
-          {provider.version === undefined ? null : <Text>Version: {provider.version}</Text>}
-          {provider.state === "disabled" ? (
-            <Text>Credential metadata unavailable while disabled.</Text>
-          ) : provider.state === "failed" ? (
-            <Text>Credential metadata unavailable while the provider is failed.</Text>
-          ) : provider.credentials.declared === 0 ? (
-            <Text>Credentials: none declared</Text>
-          ) : (
-            <Text>
-              Credentials: {provider.credentials.configured}/{provider.credentials.declared} configured
-              {provider.credentials.missingRequired === 0
-                ? ""
-                : ` · ${provider.credentials.missingRequired} required missing`}
-            </Text>
-          )}
-          {provider.state === "failed" ? (
-            <Text>Remediation: verify the installed module and compatibility, then press r to refresh.</Text>
-          ) : null}
-          {provider.state === "failed" || provider.credentials.missingRequired > 0 ? (
-            <Text>Support: press g to inspect privacy-safe Diagnostics before sharing provider details.</Text>
-          ) : null}
         </Box>
         );
       })}
@@ -2639,7 +3322,7 @@ function PartialInventoryNotice({
 
 function instanceEmptyGuidance(snapshot: TuiReadSnapshot): string {
   if (snapshot.providers.status === "failed") {
-    return "No compute instances are visible. Provider configuration could not be inspected; resolve provider setup and press r to refresh.";
+    return "No compute instances are visible. Provider configuration could not be inspected; resolve provider setup and refresh from Actions.";
   }
   if (snapshot.providers.items.length === 0) {
     return "No compute instances yet. Configure a provider first, then acquisition can create one.";
@@ -3005,29 +3688,16 @@ function HelpPanel({ colorEnabled }: { readonly colorEnabled: boolean }): React.
       aria-role="menu"
     >
       <Text bold>Keyboard help</Text>
-      <Text>Tab / Shift+Tab — move focus</Text>
-      <Text>Arrow keys — move focus</Text>
-      <Text>Enter — open focused section</Text>
-      <Text>Esc — close help or return to Overview</Text>
+      <Text>Arrow keys — move through sections, items and actions</Text>
+      <Text>Enter — open, select, edit or run the focused action</Text>
+      <Text>Esc — go back one level or close help</Text>
+      <Text>Tab — return to section navigation</Text>
+      <Text>Ctrl+C — quit safely</Text>
       <Text>? — toggle this help</Text>
-      <Text>r — refresh current section</Text>
-      <Text>g — open privacy-safe Diagnostics from any main surface</Text>
-      <Text>c / P / C — on Diagnostics: copy reviewed payload / open Providers / open Connections</Text>
-      <Text>j / k — select next / previous instance on Instances</Text>
-      <Text>Space — mark or unmark the selected fresh instance for a bulk lifecycle action</Text>
-      <Text>0 — clear the exact bulk target set</Text>
-      <Text>a — adopt the selected discovered instance when offered</Text>
-      <Text>1-4 — run the shown lifecycle action on the selected instance, or on all marked targets</Text>
-      <Text>n — start a TUI-owned foreground Endpoint on Connections</Text>
-      <Text>p — create a daemon-owned persistent Connection Session</Text>
-      <Text>d — start or stop the managed daemon</Text>
-      <Text>j / k and x — select or close foreground Endpoints</Text>
-      <Text>J / K and c — select or close daemon-owned Connection Sessions</Text>
-      <Text>[ / ] — select persisted Endpoint intents (desired state)</Text>
-      <Text>e — enable or disable the selected persisted Endpoint intent</Text>
-      <Text>t — retry realization for a selected intent in Error state</Text>
-      <Text>X — remove the selected persisted intent after destructive confirmation</Text>
-      <Text>q / Ctrl+C — quit EasyServer; live foreground Endpoints require a second quit confirmation, persistent Sessions survive</Text>
+      <Box marginTop={1} flexDirection="column">
+        <Text>Actions are shown in context after Enter; you do not need to memorize letter or number shortcuts.</Text>
+        <Text>Live foreground Endpoints still require safe cleanup before exit; persistent Sessions survive TUI exit.</Text>
+      </Box>
     </Box>
   );
 }

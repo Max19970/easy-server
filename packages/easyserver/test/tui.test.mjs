@@ -24,6 +24,23 @@ async function typeText(view, text) {
   }
 }
 
+async function chooseVisibleAction(view, label, { open = true } = {}) {
+  if (open) {
+    view.stdin.write("\r");
+    await tick();
+  }
+  for (let index = 0; index < 20; index += 1) {
+    if (view.lastFrame()?.includes(`> ${label}`)) {
+      view.stdin.write("\r");
+      await tick();
+      return;
+    }
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.fail(`Visible action not found: ${label}\n${view.lastFrame()}`);
+}
+
 function shell(props = {}) {
   return React.createElement(TuiShell, { colorEnabled: false, ...props });
 }
@@ -191,7 +208,7 @@ test("screen-reader runtime stays linear and preserves route, focus, content and
   assert.match(stdout.text(), /Overview, active, focused/);
   assert.match(stdout.text(), /EasyServer at a glance/);
   assert.match(stdout.text(), /Choose a section to inspect or manage/);
-  assert.match(stdout.text(), /Commands: Tab or arrows move focus/);
+  assert.match(stdout.text(), /Commands: arrows move; Enter opens, selects or shows actions/);
 
   let offset = stdout.text().length;
   stdin.write("\t");
@@ -202,7 +219,7 @@ test("screen-reader runtime stays linear and preserves route, focus, content and
   stdin.write("\r");
   await app.waitUntilRenderFlush();
   const openedInstances = stdout.text().slice(offset);
-  assert.match(openedInstances, /Instances, active, focused/);
+  assert.match(openedInstances, /Instances, active/);
   assert.match(openedInstances, /Instance inventory and lifecycle workflows/);
 
   offset = stdout.text().length;
@@ -210,8 +227,8 @@ test("screen-reader runtime stays linear and preserves route, focus, content and
   await app.waitUntilRenderFlush();
   const helpUpdate = stdout.text().slice(offset);
   assert.match(helpUpdate, /Keyboard help/);
-  assert.match(helpUpdate, /Tab \/ Shift\+Tab — move focus/);
-  assert.match(helpUpdate, /q \/ Ctrl\+C — quit EasyServer/);
+  assert.match(helpUpdate, /Arrow keys — move through sections, items and actions/);
+  assert.match(helpUpdate, /Ctrl\+C — quit safely/);
 
   stdin.write("q");
   await app.waitUntilExit();
@@ -278,11 +295,16 @@ test("outcome-unknown drawer maps the shared R shortcut to Refresh, never Retry"
   );
 
   assert.doesNotMatch(view.lastFrame(), /Retry/);
-  assert.match(view.lastFrame(), /R Refresh/);
+  assert.match(view.lastFrame(), /> Observe state/);
+  assert.match(view.lastFrame(), /Refresh/);
 
-  view.stdin.write("R");
+  view.stdin.write("\u001b[B");
   await tick();
-  view.stdin.write("o");
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\u001b[A");
+  await tick();
+  view.stdin.write("\r");
   await tick();
   assert.deepEqual(actions, ["refresh", "observe"]);
   assert.equal(actions.includes("retry"), false);
@@ -320,7 +342,7 @@ test("untrusted structural operation presentations fail closed at the shell seam
   assert.deepEqual(actions, []);
 });
 
-test("non-modal drawer shortcuts do not steal route refresh or Escape navigation", async () => {
+test("operation result actions use the same arrow, Enter and Escape vocabulary", async () => {
   const actions = [];
   const operation = presentProviderExecution("Rent GPU", {
     operation: "mutation",
@@ -343,35 +365,16 @@ test("non-modal drawer shortcuts do not steal route refresh or Escape navigation
     }),
   );
 
-  view.stdin.write("\t");
+  assert.match(view.lastFrame(), /> Observe state/);
+  view.stdin.write("\u001b[B");
   await tick();
+  assert.match(view.lastFrame(), /> Refresh/);
   view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /> Instances \[active\]/);
-
-  view.stdin.write("?");
-  await tick();
-  assert.match(view.lastFrame(), /Keyboard help/);
-  view.stdin.write("\u001b");
-  await flushEscape();
-  assert.doesNotMatch(view.lastFrame(), /Keyboard help/);
-  assert.match(view.lastFrame(), /> Instances \[active\]/);
-  assert.deepEqual(actions, []);
-
-  view.stdin.write("r");
-  await tick();
-  assert.match(view.lastFrame(), /Refresh requested for Instances\./);
-  assert.deepEqual(actions, []);
+  assert.deepEqual(actions, ["refresh"]);
 
   view.stdin.write("\u001b");
   await flushEscape();
-  assert.match(view.lastFrame(), /> Overview \[active\]/);
-  assert.deepEqual(actions, []);
-
-  view.stdin.write("R");
-  await tick();
-  view.stdin.write("x");
-  await tick();
   assert.deepEqual(actions, ["refresh", "dismiss"]);
 });
 
@@ -419,9 +422,12 @@ test("Providers can register an already-installed plugin module without leaving 
   await tick();
   view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /Press a to register an already-installed provider/);
+  assert.match(view.lastFrame(), /Press Enter for actions, then choose Register installed provider/);
 
-  view.stdin.write("a");
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /> Register installed provider/);
+  view.stdin.write("\r");
   await tick();
   assert.match(view.lastFrame(), /Register installed provider/);
   assert.match(view.lastFrame(), /Module or path:/);
@@ -434,7 +440,7 @@ test("Providers can register an already-installed plugin module without leaving 
   assert.deepEqual(mutations, [
     { kind: "add-plugin", source: "q-provider" },
   ]);
-  assert.doesNotMatch(view.lastFrame(), /Register installed provider/);
+  assert.doesNotMatch(view.lastFrame(), /Module or path:/);
 });
 
 test("provider registration prompt can be cancelled without mutation", async () => {
@@ -456,7 +462,9 @@ test("provider registration prompt can be cancelled without mutation", async () 
   await tick();
   view.stdin.write("\r");
   await tick();
-  view.stdin.write("a");
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\r");
   await tick();
   assert.match(view.lastFrame(), /Register installed provider/);
   await typeText(view, "@fixture/provider");
@@ -464,7 +472,7 @@ test("provider registration prompt can be cancelled without mutation", async () 
   await flushEscape();
 
   assert.deepEqual(mutations, []);
-  assert.doesNotMatch(view.lastFrame(), /Register installed provider/);
+  assert.doesNotMatch(view.lastFrame(), /Module or path:/);
   assert.match(view.lastFrame(), /No provider plugins configured/);
 });
 
@@ -511,7 +519,9 @@ test("TuiApp refreshes provider state after registration mutation succeeds", asy
   await tick();
   view.stdin.write("\r");
   await tick();
-  view.stdin.write("a");
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\r");
   await tick();
   await typeText(view, "@fixture/provider");
   view.stdin.write("\r");
@@ -522,8 +532,7 @@ test("TuiApp refreshes provider state after registration mutation succeeds", asy
   assert.deepEqual(mutations, [
     { kind: "add-plugin", source: "@fixture/provider" },
   ]);
-  assert.match(view.lastFrame(), /Fixture Provider/);
-  assert.match(view.lastFrame(), /Source: @fixture\/provider/);
+  assert.match(view.lastFrame(), /> Fixture Provider · ready/);
 });
 
 test("Providers enable and disable the selected configured plugin by source", async () => {
@@ -842,7 +851,7 @@ test("Providers explain credential eligibility for providers without usable desc
   await tick();
   view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /Credential metadata unavailable while disabled/);
+  assert.match(view.lastFrame(), /> Disabled Provider · disabled/);
 
   view.stdin.write("c");
   await tick();
@@ -977,8 +986,7 @@ test("TuiApp never exposes credential values while mutating and refreshes readin
   await tick();
   await tick();
   await tick();
-  assert.match(view.lastFrame(), /loaded · ready/);
-  assert.match(view.lastFrame(), /Credentials: 1\/1 configured/);
+  assert.match(view.lastFrame(), /> Credential Provider · ready/);
   assert.doesNotMatch(view.lastFrame(), new RegExp(secret));
 });
 
@@ -1251,18 +1259,14 @@ test("TuiApp runs a generic provider workflow through host confirmation and navi
   await tick();
   await tick();
   assert.match(view.lastFrame(), /Instances/);
-  assert.match(view.lastFrame(), /EasyServer ID: instance:nebula-42/);
+  assert.match(view.lastFrame(), /> instance:nebula-42 · nebula · running/);
+  assert.doesNotMatch(view.lastFrame(), /EasyServer ID: instance:nebula-42/);
   assert.equal(closeCalls, 0);
 
   view.stdin.write("\u001b");
   await flushEscape();
-  assert.match(view.lastFrame(), /> Overview \[active\]/);
-  view.stdin.write("r");
-  await tick();
-  await tick();
-  await tick();
-  assert.match(view.lastFrame(), /> Overview \[active\]/);
-  assert.doesNotMatch(view.lastFrame(), /EasyServer ID: instance:nebula-42/);
+  await chooseVisibleAction(view, "Show instance details");
+  assert.match(view.lastFrame(), /EasyServer ID: instance:nebula-42/);
 });
 
 test("degraded provider state remains visible while healthy instance inventory stays usable", async () => {
@@ -1336,7 +1340,7 @@ test("degraded provider state remains visible while healthy instance inventory s
   assert.match(view.lastFrame(), /Provider issues/);
   assert.match(view.lastFrame(), /offline.*provider-unavailable/);
   assert.match(view.lastFrame(), /Instances: 1 total/);
-  assert.match(view.lastFrame(), /Live sessions: 1/);
+  assert.match(view.lastFrame(), /Daemon: running · 1 live persistent/);
 
   view.stdin.write("\t");
   await tick();
@@ -1344,7 +1348,9 @@ test("degraded provider state remains visible while healthy instance inventory s
   await tick();
   assert.match(view.lastFrame(), /Some providers are unavailable/);
   assert.match(view.lastFrame(), /offline.*provider-unavailable/);
-  assert.match(view.lastFrame(), /Healthy GPU/);
+  assert.match(view.lastFrame(), /> Healthy GPU · healthy · running/);
+  assert.doesNotMatch(view.lastFrame(), /Normalized state: running/);
+  await chooseVisibleAction(view, "Show instance details");
   assert.match(view.lastFrame(), /Normalized state: running/);
   assert.match(view.lastFrame(), /Available actions: none/);
 
@@ -1352,10 +1358,8 @@ test("degraded provider state remains visible while healthy instance inventory s
   await tick();
   view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /Healthy Provider/);
-  assert.match(view.lastFrame(), /broken-plugin\.mjs/);
-  assert.match(view.lastFrame(), /failed · incompatible/);
-  assert.match(view.lastFrame(), /Remediation: verify the installed module and compatibility/);
+  assert.match(view.lastFrame(), /Healthy Provider · ready/);
+  assert.match(view.lastFrame(), /broken-plugin\.mjs · failed/);
 });
 
 test("stale retained instance state is visibly distinct from a fresh provider observation", async () => {
@@ -1400,7 +1404,9 @@ test("stale retained instance state is visibly distinct from a fresh provider ob
   view.stdin.write("\r");
   await tick();
 
-  assert.match(view.lastFrame(), /Retained GPU.*freshness=stale/);
+  assert.match(view.lastFrame(), /> Retained GPU · offline · running · stale/);
+  assert.doesNotMatch(view.lastFrame(), /Last observed:/);
+  await chooseVisibleAction(view, "Show instance details");
   assert.match(view.lastFrame(), /Freshness: stale/);
   assert.match(view.lastFrame(), /Last observed: 2026-08-12T10:00:00\.000Z/);
   assert.match(view.lastFrame(), /retained last-known state/);
@@ -1493,12 +1499,16 @@ test("instance actions come only from provider-declared availableActions", async
   await tick();
   view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /EasyServer ID: instance:a/);
+  assert.match(view.lastFrame(), /> instance:a · fixture · running/);
+  assert.doesNotMatch(view.lastFrame(), /Available actions:/);
+  await chooseVisibleAction(view, "Show instance details");
   assert.match(view.lastFrame(), /Available actions: none/);
 
-  view.stdin.write("j");
+  view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /EasyServer ID: instance:b/);
+  assert.match(view.lastFrame(), /> instance:b · fixture · running/);
+  assert.doesNotMatch(view.lastFrame(), /Available actions:/);
+  await chooseVisibleAction(view, "Show instance details");
   assert.match(view.lastFrame(), /Available actions: instance\.stop, instance\.destroy/);
 });
 
@@ -1559,11 +1569,7 @@ test("Instances multi-select preserves the exact target set and uses host bulk a
   assert.match(view.lastFrame(), /Bulk targets \(2\)/);
   assert.match(view.lastFrame(), /instance:a · provider=alpha · freshness=fresh/);
   assert.match(view.lastFrame(), /instance:b · provider=beta · freshness=fresh/);
-  assert.match(view.lastFrame(), /1 stop \(1\/2 advertise\)/);
-  assert.match(view.lastFrame(), /2 restart \(1\/2 advertise\)/);
-
-  view.stdin.write("1");
-  await tick();
+  await chooseVisibleAction(view, "stop 2 selected instances");
   assert.deepEqual(mutations, [
     {
       instanceIds: ["instance:a", "instance:b"],
@@ -1571,8 +1577,7 @@ test("Instances multi-select preserves the exact target set and uses host bulk a
     },
   ]);
 
-  view.stdin.write("0");
-  await tick();
+  await chooseVisibleAction(view, "Clear bulk selection");
   assert.doesNotMatch(view.lastFrame(), /Bulk targets \(2\)/);
 });
 
@@ -1619,14 +1624,15 @@ test("instance selection is preserved by canonical ID across reorder and narrow 
   await tick();
   view.stdin.write("\r");
   await tick();
-  view.stdin.write("j");
+  view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /EasyServer ID: instance:b/);
+  assert.match(view.lastFrame(), /> instance:b · fixture · stopped/);
 
   view.rerender(shell({ width: 60, readSnapshot: reordered, readStatus: "ready" }));
   await tick();
   assert.match(view.lastFrame(), /Control center · compact layout/);
-  assert.match(view.lastFrame(), /EasyServer ID: instance:b/);
+  assert.match(view.lastFrame(), /> instance:b · fixture · stopped/);
+  await chooseVisibleAction(view, "Show instance details");
   assert.match(view.lastFrame(), /Provider: fixture/);
   assert.match(view.lastFrame(), /Management: discovered/);
   assert.match(view.lastFrame(), /Normalized state: stopped/);
@@ -1669,21 +1675,17 @@ test("discovered instances expose adoption and reversible provider actions but n
   view.stdin.write("\r");
   await tick();
 
-  assert.match(view.lastFrame(), /Management: discovered/);
-  assert.match(view.lastFrame(), /Available actions: instance\.stop/);
-  assert.doesNotMatch(view.lastFrame(), /Available actions:.*instance\.destroy/);
-  assert.match(view.lastFrame(), /a Adopt for EasyServer management/);
-  assert.match(view.lastFrame(), /Destroy is unavailable until this resource is explicitly adopted/);
-  assert.match(view.lastFrame(), /Actions: 1 stop/);
+  assert.match(view.lastFrame(), /> instance:discovered · fixture · running/);
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Adopt for EasyServer management/);
+  assert.match(view.lastFrame(), /stop instance/);
+  assert.doesNotMatch(view.lastFrame(), /destroy instance/);
+  view.stdin.write("\u001b");
+  await flushEscape();
 
-  view.stdin.write("2");
-  await tick();
-  assert.deepEqual(mutations, []);
-
-  view.stdin.write("1");
-  await tick();
-  view.stdin.write("a");
-  await tick();
+  await chooseVisibleAction(view, "stop instance");
+  await chooseVisibleAction(view, "Adopt for EasyServer management");
   assert.deepEqual(mutations, [
     {
       kind: "action",
@@ -1741,9 +1743,9 @@ test("disappearing selected instance never silently retargets lifecycle input", 
   await tick();
   view.stdin.write("\r");
   await tick();
-  view.stdin.write("j");
+  view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /EasyServer ID: instance:b/);
+  assert.match(view.lastFrame(), /> instance:b · fixture · stopped/);
 
   view.rerender(
     shell({
@@ -1762,11 +1764,10 @@ test("disappearing selected instance never silently retargets lifecycle input", 
   await tick();
   assert.deepEqual(mutations, []);
 
-  view.stdin.write("j");
+  view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /EasyServer ID: instance:a/);
-  view.stdin.write("1");
-  await tick();
+  assert.match(view.lastFrame(), /> instance:a · fixture · stopped/);
+  await chooseVisibleAction(view, "start instance");
   assert.deepEqual(mutations, [
     { kind: "action", instanceId: "instance:a", action: "instance.start" },
   ]);
@@ -1928,7 +1929,8 @@ test("TuiApp outcome-unknown offers observation refresh without redispatching th
   await tick();
   view.stdin.write("\r");
   await tick();
-  view.stdin.write("1");
+  await chooseVisibleAction(view, "start instance");
+  await tick();
   await tick();
 
   assert.equal(runnerCalls, 1);
@@ -1937,7 +1939,7 @@ test("TuiApp outcome-unknown offers observation refresh without redispatching th
   assert.match(view.lastFrame(), /Refresh/);
   assert.doesNotMatch(view.lastFrame(), /Retry/);
 
-  view.stdin.write("o");
+  view.stdin.write("\r");
   await tick();
   await tick();
   assert.equal(loaderCalls, 2);
@@ -1992,12 +1994,10 @@ test("TuiApp guides foreground Endpoint creation with visible deterministic Acce
   await tick();
   await tick();
   await openConnectionsRoute(view);
-  assert.match(view.lastFrame(), /> Connections/);
   assert.match(view.lastFrame(), /Status: Opened Connections\./);
   assert.match(view.lastFrame(), /TUI-owned foreground Endpoints/);
 
-  view.stdin.write("n");
-  await tick();
+  await chooseVisibleAction(view, "New foreground Endpoint");
   assert.match(view.lastFrame(), /Choose instance/);
   assert.match(view.lastFrame(), /> instance:connect/);
 
@@ -2039,8 +2039,7 @@ test("TuiApp guides foreground Endpoint creation with visible deterministic Acce
     /Foreground Endpoints belong to this TUI; persistent Endpoints belong to the[\s\S]*daemon/,
   );
 
-  view.stdin.write("x");
-  await tick();
+  await chooseVisibleAction(view, "Close selected foreground Endpoint");
   await tick();
   assert.equal(closedId, "foreground:fixture");
   assert.match(view.lastFrame(), /None open/);
@@ -2596,14 +2595,15 @@ test("cleanup-failed persistent Session remains visible by stable ID beside heal
   await openConnectionsRoute(view);
   assert.match(view.lastFrame(), /session:healthy · live/);
   assert.match(view.lastFrame(), /session:cleanup-failed · failed/);
-  view.stdin.write("J");
+  view.stdin.write("\u001b[B");
   await tick();
+  assert.match(view.lastFrame(), /> session:cleanup-failed · failed/);
+  await chooseVisibleAction(view, "Show connection details");
   assert.match(view.lastFrame(), /Session ID: session:cleanup-failed/);
   assert.match(view.lastFrame(), /Cleanup failure: plugin-failure: Connection Session cleanup failed/);
   assert.match(view.lastFrame(), /session:healthy · live/);
 
-  view.stdin.write("c");
-  await tick();
+  await chooseVisibleAction(view, "Close selected persistent Session");
   await tick();
   assert.deepEqual(closed, ["session:cleanup-failed"]);
 });
@@ -2783,7 +2783,7 @@ test("TUI shell exposes discoverable focus and keyboard navigation", async () =>
 
   assert.match(view.lastFrame(), /Control center · wide layout/);
   assert.match(view.lastFrame(), /> Overview \[active\]/);
-  assert.match(view.lastFrame(), /Tab\/Shift\+Tab or arrows move/);
+  assert.match(view.lastFrame(), /Arrows move · Enter select\/open\/actions/);
 
   view.stdin.write("\t");
   await tick();
@@ -2792,11 +2792,10 @@ test("TUI shell exposes discoverable focus and keyboard navigation", async () =>
 
   view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /> Instances \[active\]/);
+  assert.match(view.lastFrame(), /Instances \[active\]/);
   assert.match(view.lastFrame(), /Opened Instances\./);
 
-  view.stdin.write("r");
-  await tick();
+  await chooseVisibleAction(view, "Refresh instances");
   assert.match(view.lastFrame(), /Refresh requested for Instances\./);
 });
 
@@ -2822,7 +2821,7 @@ test("TUI help behaves like a modal and Escape returns to the active surface", a
   view.stdin.write("?");
   await tick();
   assert.match(view.lastFrame(), /Keyboard help/);
-  assert.match(view.lastFrame(), /q \/ Ctrl\+C — quit EasyServer/);
+  assert.match(view.lastFrame(), /Ctrl\+C — quit safely/);
 
   view.stdin.write("\u001b");
   await flushEscape();
@@ -2855,7 +2854,7 @@ test("TUI screen-reader mode renders a calm linear command summary", () => {
   assert.match(view.lastFrame(), /Control center · compact layout/);
   assert.match(
     view.lastFrame(),
-    /Commands: Tab or arrows move focus; Enter opens; Escape returns or closes help;/,
+    /Commands: arrows move; Enter opens, selects or shows actions; Escape goes back;/,
   );
   assert.match(view.lastFrame(), /> Overview \[active\]/);
 });

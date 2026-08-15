@@ -47,8 +47,8 @@ test("generic provider form edits provider-owned fields without domain-specific 
             label: "Tier",
             required: true,
             choices: [
-              { id: "balanced", label: "Balanced" },
-              { id: "burst", label: "Burst" },
+              { id: "balanced", label: "Balanced", description: "Balanced price and capacity" },
+              { id: "burst", label: "Burst", description: "Highest short-term capacity" },
             ],
             value: "balanced",
           },
@@ -81,9 +81,9 @@ test("generic provider form edits provider-owned fields without domain-specific 
     value: "eu-north-west",
   });
 
-  view.stdin.write("j");
+  view.stdin.write("\u001b[B");
   await tick();
-  view.stdin.write("j");
+  view.stdin.write("\u001b[B");
   await tick();
   view.stdin.write("\r");
   await tick();
@@ -93,17 +93,22 @@ test("generic provider form edits provider-owned fields without domain-specific 
     value: true,
   });
 
-  view.stdin.write("j");
+  view.stdin.write("\u001b[B");
   await tick();
+  assert.match(view.lastFrame(), /Balanced price and capacity/);
   view.stdin.write("\u001b[C");
   await tick();
+  assert.match(view.lastFrame(), /Highest short-term capacity/);
   assert.deepEqual(events.at(-1), {
     kind: "field-change",
     fieldId: "tier",
     value: "burst",
   });
 
-  view.stdin.write("1");
+  view.stdin.write("\u001b[B");
+  await tick();
+  assert.match(view.lastFrame(), /> Continue/);
+  view.stdin.write("\r");
   await tick();
   assert.deepEqual(events.at(-1), {
     kind: "action",
@@ -182,7 +187,7 @@ test("generic provider table supports provider-owned selection and review submit
 
   assert.match(view.lastFrame(), /Nebula offers/);
   assert.match(view.lastFrame(), /Alpha.*1.25/);
-  view.stdin.write("j");
+  view.stdin.write("\u001b[B");
   await tick();
   view.stdin.write("\r");
   await tick();
@@ -190,7 +195,10 @@ test("generic provider table supports provider-owned selection and review submit
     kind: "table-selection",
     rowIds: ["b"],
   });
-  view.stdin.write("1");
+  view.stdin.write("\u001b[B");
+  await tick();
+  assert.match(view.lastFrame(), /> Continue/);
+  view.stdin.write("\r");
   await tick();
   assert.deepEqual(events.at(-1), { kind: "action", actionId: "continue" });
 
@@ -218,6 +226,10 @@ test("generic provider table supports provider-owned selection and review submit
   );
   await tick();
   assert.match(view.lastFrame(), /Review allocation/);
+  assert.match(view.lastFrame(), /> Back/);
+  view.stdin.write("\u001b[B");
+  await tick();
+  assert.match(view.lastFrame(), /> Provision/);
   view.stdin.write("\r");
   await tick();
   assert.deepEqual(events.at(-1), { kind: "action", actionId: "submit" });

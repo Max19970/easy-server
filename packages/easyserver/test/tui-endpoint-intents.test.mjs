@@ -6,6 +6,23 @@ import { TuiApp, TuiShell } from "../dist/tui.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
+async function chooseVisibleAction(view, label, { open = true } = {}) {
+  if (open) {
+    view.stdin.write("\r");
+    await tick();
+  }
+  for (let index = 0; index < 20; index += 1) {
+    if (view.lastFrame()?.includes(`> ${label}`)) {
+      view.stdin.write("\r");
+      await tick();
+      return;
+    }
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.fail(`Visible action not found: ${label}\n${view.lastFrame()}`);
+}
+
 function snapshot(items) {
   return {
     providerWorkflows: { status: "ready", items: [] },
@@ -163,44 +180,54 @@ test("Connections keeps persisted Endpoint intents distinct from runtime Session
   await openConnections(view);
   assert.match(view.lastFrame(), /Persisted Endpoint intents \(desired state\)/);
   assert.match(view.lastFrame(), /Daemon-owned Connection Sessions \(runtime state\)/);
-  assert.match(view.lastFrame(), /comfy · desired=enabled · live endpoint=127\.0\.0\.1:55123/);
-  assert.match(view.lastFrame(), /requested-local-port=dynamic/);
+  assert.match(view.lastFrame(), /comfy · enabled · live endpoint=127\.0\.0\.1:55123/);
+  assert.doesNotMatch(view.lastFrame(), /Requested local port:/);
   assert.match(view.lastFrame(), /127\.0\.0\.1:53000 · live · instance:foreground/);
   assert.match(view.lastFrame(), /session:runtime-only · live · 127\.0\.0\.1:49000/);
   assert.match(view.lastFrame(), /old dead transport is never treated as live/);
 
-  view.stdin.write("]");
+  view.stdin.write("\u001b[B");
   await tick();
+  await chooseVisibleAction(view, "Show connection details");
+  assert.match(view.lastFrame(), /Name: comfy/);
+  assert.match(view.lastFrame(), /Desired state: enabled/);
+  assert.match(view.lastFrame(), /Requested local port: dynamic/);
+
+  view.stdin.write("\u001b[B");
+  await tick();
+  await chooseVisibleAction(view, "Show connection details");
   assert.match(view.lastFrame(), /Name: api/);
   assert.match(view.lastFrame(), /Realization state: starting/);
   assert.match(view.lastFrame(), /Requested local port: 48000/);
 
-  view.stdin.write("]");
+  view.stdin.write("\u001b[B");
   await tick();
+  await chooseVisibleAction(view, "Show connection details");
   assert.match(view.lastFrame(), /Name: port-conflict/);
   assert.match(view.lastFrame(), /fixed local port is unavailable/);
-  view.stdin.write("t");
-  await tick();
+  await chooseVisibleAction(view, "Retry selected saved Endpoint");
   assert.deepEqual(retryCalls, ["port-conflict"]);
 
-  view.stdin.write("]");
+  view.stdin.write("\u001b[B");
   await tick();
+  await chooseVisibleAction(view, "Show connection details");
   assert.match(view.lastFrame(), /exact SSH host fingerprint/);
-  view.stdin.write("]");
+  view.stdin.write("\u001b[B");
   await tick();
+  await chooseVisibleAction(view, "Show connection details");
   assert.match(view.lastFrame(), /configure or rotate the required provider credential/);
-  view.stdin.write("]");
+  view.stdin.write("\u001b[B");
   await tick();
+  await chooseVisibleAction(view, "Show connection details");
   assert.match(view.lastFrame(), /restore provider or instance availability/);
-  view.stdin.write("]");
+  view.stdin.write("\u001b[B");
   await tick();
+  await chooseVisibleAction(view, "Show connection details");
   assert.match(view.lastFrame(), /Desired state: disabled/);
   assert.match(view.lastFrame(), /disabled\\u001b\[2J/);
-  view.stdin.write("e");
-  await tick();
+  await chooseVisibleAction(view, "Enable selected saved Endpoint");
   assert.deepEqual(enabledCalls, [["disabled\u001b[2J", true]]);
-  view.stdin.write("X");
-  await tick();
+  await chooseVisibleAction(view, "Remove selected saved Endpoint");
   assert.deepEqual(removeCalls, ["disabled\u001b[2J"]);
 });
 
@@ -233,14 +260,13 @@ test("TuiApp confirms live persisted intent removal and delegates cleanup to the
   await tick();
   await tick();
   await openConnections(view);
-  view.stdin.write("X");
-  await tick();
+  await chooseVisibleAction(view, "Remove selected saved Endpoint");
 
   assert.equal(removed, false);
   assert.match(view.lastFrame(), /Confirmation required/);
   assert.match(view.lastFrame(), /Remove persisted Endpoint intent comfy/);
   assert.match(view.lastFrame(), /Consequence:/);
-  assert.match(view.lastFrame(), /Current live Endpoint:? 127\.0\.0\.1:55123/);
+  assert.match(view.lastFrame(), /Current live Endpoint[\s\S]*127\.0\.0\.1:55123/);
 
   view.stdin.write("\r");
   await tick();

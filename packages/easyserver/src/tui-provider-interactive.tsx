@@ -41,13 +41,14 @@ export function ProviderInteractiveSurface({
   const [choiceCursor, setChoiceCursor] = useState(0);
   const [draft, setDraft] = useState<DraftValue | undefined>();
 
-  const selectableCount =
+  const contentCount =
     screen.kind === "form"
       ? screen.fields.length
       : screen.kind === "table"
         ? screen.rows.length
         : 0;
   const actions = screen.actions.filter((action) => !action.disabled);
+  const selectableCount = contentCount + actions.length;
 
   useEffect(() => {
     setCursor(0);
@@ -64,7 +65,11 @@ export function ProviderInteractiveSurface({
   }, [selectableCount]);
 
   const activeField =
-    screen.kind === "form" ? screen.fields[cursor] : undefined;
+    screen.kind === "form" && cursor < screen.fields.length
+      ? screen.fields[cursor]
+      : undefined;
+  const activeAction =
+    cursor >= contentCount ? actions[cursor - contentCount] : undefined;
   const activeChoices =
     activeField?.kind === "single-choice" ||
     activeField?.kind === "multiple-choice"
@@ -143,38 +148,19 @@ export function ProviderInteractiveSurface({
       return;
     }
 
-    const actionIndex = /^[1-9]$/u.test(input) ? Number(input) - 1 : -1;
-    if (actionIndex >= 0 && actions[actionIndex] !== undefined) {
-      onEvent({ kind: "action", actionId: actions[actionIndex]!.id });
-      return;
-    }
-
-    if (input === "r") {
-      const refresh = actions.find((action) => action.kind === "refresh");
-      if (refresh !== undefined) {
-        onEvent({ kind: "action", actionId: refresh.id });
-        return;
-      }
-    }
-
-    if (screen.kind === "review") {
-      if (key.return) {
-        const submit =
-          actions.find((action) => action.kind === "submit") ??
-          actions.find((action) => action.kind === "primary");
-        if (submit !== undefined) {
-          onEvent({ kind: "action", actionId: submit.id });
-        }
-      }
-      return;
-    }
-
-    if ((input === "j" || key.downArrow) && selectableCount > 0) {
+    if (key.downArrow && selectableCount > 0) {
       setCursor((current) => (current + 1) % selectableCount);
       return;
     }
-    if ((input === "k" || key.upArrow) && selectableCount > 0) {
+    if (key.upArrow && selectableCount > 0) {
       setCursor((current) => (current - 1 + selectableCount) % selectableCount);
+      return;
+    }
+
+    if (activeAction !== undefined) {
+      if (key.return) {
+        onEvent({ kind: "action", actionId: activeAction.id });
+      }
       return;
     }
 
@@ -199,6 +185,10 @@ export function ProviderInteractiveSurface({
       return;
     }
 
+    if (screen.kind !== "form") {
+      return;
+    }
+
     const field = screen.fields[cursor];
     if (field === undefined || field.disabled) {
       return;
@@ -208,7 +198,7 @@ export function ProviderInteractiveSurface({
       field.kind === "single-choice" ||
       field.kind === "multiple-choice"
     ) {
-      if ((key.rightArrow || input === "l") && activeChoices.length > 0) {
+      if (key.rightArrow && activeChoices.length > 0) {
         const nextIndex = (choiceCursor + 1) % activeChoices.length;
         setChoiceCursor(nextIndex);
         if (field.kind === "single-choice") {
@@ -220,7 +210,7 @@ export function ProviderInteractiveSurface({
         }
         return;
       }
-      if ((key.leftArrow || input === "h") && activeChoices.length > 0) {
+      if (key.leftArrow && activeChoices.length > 0) {
         const nextIndex =
           (choiceCursor - 1 + activeChoices.length) % activeChoices.length;
         setChoiceCursor(nextIndex);
@@ -238,7 +228,7 @@ export function ProviderInteractiveSurface({
         (key.return || input === " ") &&
         activeChoices[choiceCursor] !== undefined
       ) {
-        const selected = new Set(field.value ?? []);
+        const selected = new Set<string>(field.value ?? []);
         const id = activeChoices[choiceCursor]!.id;
         if (selected.has(id)) {
           selected.delete(id);
@@ -305,17 +295,21 @@ export function ProviderInteractiveSurface({
       </Box>
       {actions.length === 0 ? null : (
         <Box marginTop={1} flexDirection="column">
-          {actions.map((action, index) => (
-            <Text key={action.id}>
-              {index + 1} — {safe(action.label)} ({action.kind})
-            </Text>
-          ))}
+          <Text bold>Actions</Text>
+          {actions.map((action, index) => {
+            const focused = cursor === contentCount + index;
+            return (
+              <Text key={action.id} bold={focused} color={focused ? accent : undefined}>
+                {focused ? "> " : "  "}{safe(action.label)}
+              </Text>
+            );
+          })}
         </Box>
       )}
       <Box marginTop={1}>
         <Text color={muted} wrap="wrap">
           {draft === undefined
-            ? "j/k move · Enter edit/select · h/l choices · number action · Esc back · q quit"
+            ? "↑/↓ move · ←/→ change choice · Enter select/edit/action · Esc back · Ctrl+C quit"
             : "Enter apply · Backspace edit · Esc cancel input"}
         </Text>
       </Box>
@@ -335,6 +329,11 @@ function FieldLine({
   readonly draft?: string;
 }): React.ReactElement {
   const value = draft ?? fieldDisplayValue(field, choiceCursor);
+  const choiceDescription =
+    focused &&
+    (field.kind === "single-choice" || field.kind === "multiple-choice")
+      ? field.choices.filter((choice) => !choice.disabled)[choiceCursor]?.description
+      : undefined;
   return (
     <Box flexDirection="column">
       <Text bold={focused}>
@@ -342,6 +341,9 @@ function FieldLine({
       </Text>
       {field.description === undefined ? null : (
         <Text>    {safe(field.description)}</Text>
+      )}
+      {choiceDescription === undefined ? null : (
+        <Text>    {safe(choiceDescription)}</Text>
       )}
       {field.validation?.state === "invalid" ? (
         <Text>    Invalid{field.validation.message === undefined ? "" : `: ${safe(field.validation.message)}`}</Text>
