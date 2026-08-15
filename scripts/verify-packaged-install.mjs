@@ -40,6 +40,7 @@ try {
     sdkTarball,
     cliTarball,
     requiredCredentialName: "api-key",
+    discoverableDisplayName: "Vast.ai",
   });
   await verifyPluginInstall({
     packageName: "@easyai101/easyserver-plugin-intelion",
@@ -49,6 +50,7 @@ try {
     sdkTarball,
     cliTarball,
     requiredCredentialName: "api-token",
+    discoverableDisplayName: "Intelion.cloud",
   });
   await verifyPluginInstall({
     packageName: "@easyai101/easyserver-example-provider",
@@ -61,6 +63,7 @@ try {
     providerCommand: ["provider", "example", "catalog", "show"],
     providerCommandOutput: "example-offer gpu=ExampleGPU price=0.00\n",
     requiredCredentialName: "api-key",
+    discoverableDisplayName: "Example Provider",
   });
   await verifyPluginInstall({
     packageName: "@easyai101/easyserver-external-ts-provider",
@@ -374,6 +377,7 @@ async function verifyPluginInstall({
   providerCommand,
   providerCommandOutput,
   requiredCredentialName,
+  discoverableDisplayName,
 }) {
   const prefix = await createPrefix(providerId);
   installGlobally(prefix, sdkTarball, cliTarball);
@@ -383,6 +387,7 @@ async function verifyPluginInstall({
 
   assertPackagePresent(prefix, packageName);
   assertPackageAbsent(prefix, absentPackageName);
+  verifyInstalledProviderDiscovery(prefix, packageName, discoverableDisplayName);
 
   const add = runCli(prefix, "plugins", "add", packageName);
   assert.equal(add.stdout, `Added ${pluginId}\n`);
@@ -498,6 +503,48 @@ function uninstallGlobally(prefix, ...packageNames) {
 
 function stateFile(prefix) {
   return join(prefix, "easyserver-state.json");
+}
+
+function verifyInstalledProviderDiscovery(
+  prefix,
+  packageName,
+  discoverableDisplayName,
+) {
+  const modulePath = join(
+    globalNodeModules(prefix),
+    "@easyai101",
+    "easyserver",
+    "dist",
+    "plugin-discovery.js",
+  );
+  const script = [
+    'import { pathToFileURL } from "node:url";',
+    `const discovery = await import(pathToFileURL(${JSON.stringify(modulePath)}));`,
+    "const candidates = await discovery.discoverInstalledProviderPlugins();",
+    "process.stdout.write(JSON.stringify(candidates));",
+  ].join(" ");
+  const candidates = JSON.parse(
+    run(
+      process.execPath,
+      ["--input-type=module", "--eval", script],
+      repositoryRoot,
+      cliEnvironment(prefix),
+    ).stdout,
+  );
+  const candidate = candidates.find((item) => item.source === packageName);
+  if (discoverableDisplayName === undefined) {
+    assert.equal(
+      candidate,
+      undefined,
+      `${packageName} must remain Advanced-only without EasyServer discovery metadata`,
+    );
+    return;
+  }
+  assert.equal(
+    candidate?.displayName,
+    discoverableDisplayName,
+    `${packageName} must be discoverable by human display identity before registration`,
+  );
 }
 
 function runCli(prefix, ...args) {
