@@ -45,7 +45,7 @@ Before using an SSH-backed Provider Access Method, verify:
 
 ```powershell
 ssh -V
-ssh-keyscan -h
+Get-Command ssh-keyscan
 ```
 
 If either command is unavailable, install/enable the Windows OpenSSH Client feature and make sure the executables are reachable through `PATH`.
