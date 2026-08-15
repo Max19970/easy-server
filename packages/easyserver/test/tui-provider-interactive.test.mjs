@@ -95,15 +95,24 @@ test("generic provider form edits provider-owned fields without domain-specific 
 
   view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /Balanced price and capacity/);
-  view.stdin.write("\u001b[C");
+  assert.match(view.lastFrame(), /> Tier.*Balanced/);
+  view.stdin.write("\r");
   await tick();
+  assert.match(view.lastFrame(), /Choose Tier/);
+  assert.match(view.lastFrame(), /> \[x\] Balanced/);
+  assert.match(view.lastFrame(), /Balanced price and capacity/);
+  view.stdin.write("\u001b[B");
+  await tick();
+  assert.match(view.lastFrame(), /> \[ \] Burst/);
   assert.match(view.lastFrame(), /Highest short-term capacity/);
+  view.stdin.write("\r");
+  await tick();
   assert.deepEqual(events.at(-1), {
     kind: "field-change",
     fieldId: "tier",
     value: "burst",
   });
+  assert.doesNotMatch(view.lastFrame(), /Choose Tier/);
 
   view.stdin.write("\u001b[B");
   await tick();

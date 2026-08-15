@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Box,
   Text,
@@ -45,6 +45,7 @@ export function ProviderInteractiveSurface({
   const terminalRows = height ?? windowSize.rows ?? 24;
   const [cursor, setCursor] = useState(0);
   const [choiceCursor, setChoiceCursor] = useState(0);
+  const [choiceFieldId, setChoiceFieldId] = useState<string | undefined>();
   const [draft, setDraft] = useState<DraftValue | undefined>();
 
   const contentCount =
@@ -68,6 +69,7 @@ export function ProviderInteractiveSurface({
   useEffect(() => {
     setCursor(0);
     setChoiceCursor(0);
+    setChoiceFieldId(undefined);
     setDraft(undefined);
   }, [screen.id, screen.kind]);
 
@@ -148,6 +150,60 @@ export function ProviderInteractiveSurface({
       return;
     }
 
+    if (choiceFieldId !== undefined) {
+      const choiceField =
+        screen.kind === "form"
+          ? screen.fields.find((field) => field.id === choiceFieldId)
+          : undefined;
+      const choices =
+        choiceField?.kind === "single-choice" ||
+        choiceField?.kind === "multiple-choice"
+          ? choiceField.choices.filter((choice) => !choice.disabled)
+          : [];
+
+      if (key.escape || choiceField === undefined || choices.length === 0) {
+        setChoiceFieldId(undefined);
+        return;
+      }
+      if (key.downArrow) {
+        setChoiceCursor((current) => moveTuiFocus(current, choices.length, 1));
+        return;
+      }
+      if (key.upArrow) {
+        setChoiceCursor((current) => moveTuiFocus(current, choices.length, -1));
+        return;
+      }
+      if (key.return) {
+        const choice = choices[choiceCursor];
+        if (choice === undefined) {
+          return;
+        }
+        if (choiceField.kind === "single-choice") {
+          onEvent({
+            kind: "field-change",
+            fieldId: choiceField.id,
+            value: choice.id,
+          });
+          setChoiceFieldId(undefined);
+          return;
+        }
+        if (choiceField.kind === "multiple-choice") {
+          const selected = new Set<string>(choiceField.value ?? []);
+          if (selected.has(choice.id)) {
+            selected.delete(choice.id);
+          } else {
+            selected.add(choice.id);
+          }
+          onEvent({
+            kind: "field-change",
+            fieldId: choiceField.id,
+            value: [...selected],
+          });
+        }
+      }
+      return;
+    }
+
     if (input === "q") {
       exit();
       return;
@@ -213,48 +269,13 @@ export function ProviderInteractiveSurface({
       field.kind === "single-choice" ||
       field.kind === "multiple-choice"
     ) {
-      if (key.rightArrow && activeChoices.length > 0) {
-        const nextIndex = (choiceCursor + 1) % activeChoices.length;
-        setChoiceCursor(nextIndex);
-        if (field.kind === "single-choice") {
-          onEvent({
-            kind: "field-change",
-            fieldId: field.id,
-            value: activeChoices[nextIndex]!.id,
-          });
-        }
-        return;
-      }
-      if (key.leftArrow && activeChoices.length > 0) {
-        const nextIndex =
-          (choiceCursor - 1 + activeChoices.length) % activeChoices.length;
-        setChoiceCursor(nextIndex);
-        if (field.kind === "single-choice") {
-          onEvent({
-            kind: "field-change",
-            fieldId: field.id,
-            value: activeChoices[nextIndex]!.id,
-          });
-        }
-        return;
-      }
-      if (
-        field.kind === "multiple-choice" &&
-        (key.return || input === " ") &&
-        activeChoices[choiceCursor] !== undefined
-      ) {
-        const selected = new Set<string>(field.value ?? []);
-        const id = activeChoices[choiceCursor]!.id;
-        if (selected.has(id)) {
-          selected.delete(id);
-        } else {
-          selected.add(id);
-        }
-        onEvent({
-          kind: "field-change",
-          fieldId: field.id,
-          value: [...selected],
-        });
+      if (key.return && activeChoices.length > 0) {
+        const selectedIndex =
+          field.kind === "single-choice"
+            ? activeChoices.findIndex((choice) => choice.id === field.value)
+            : activeChoices.findIndex((choice) => (field.value ?? []).includes(choice.id));
+        setChoiceCursor(selectedIndex < 0 ? 0 : selectedIndex);
+        setChoiceFieldId(field.id);
       }
       return;
     }
@@ -280,6 +301,24 @@ export function ProviderInteractiveSurface({
 
   const accent = colorEnabled ? "cyan" : undefined;
   const muted = colorEnabled ? "gray" : undefined;
+  const choiceField =
+    choiceFieldId === undefined || screen.kind !== "form"
+      ? undefined
+      : screen.fields.find((field) => field.id === choiceFieldId);
+
+  if (
+    choiceField?.kind === "single-choice" ||
+    choiceField?.kind === "multiple-choice"
+  ) {
+    return (
+      <ChoicePicker
+        field={choiceField}
+        cursor={choiceCursor}
+        height={terminalRows}
+        colorEnabled={colorEnabled}
+      />
+    );
+  }
 
   return (
     <Box flexDirection="column">
@@ -302,7 +341,6 @@ export function ProviderInteractiveSurface({
                     key={field.id}
                     field={field}
                     focused={index === cursor}
-                    choiceCursor={index === cursor ? choiceCursor : 0}
                     draft={draft?.fieldId === field.id ? draft.value : undefined}
                   />
                 );
@@ -345,7 +383,7 @@ export function ProviderInteractiveSurface({
       <Box marginTop={1}>
         <Text color={muted} wrap="wrap">
           {draft === undefined
-            ? "↑/↓ move · ←/→ change choice · Enter select/edit/action · Esc back · Ctrl+C quit"
+            ? "↑/↓ move · Enter select/edit/action · Esc back · Ctrl+C quit"
             : "Enter apply · Backspace edit · Esc cancel input"}
         </Text>
       </Box>
@@ -356,20 +394,13 @@ export function ProviderInteractiveSurface({
 function FieldLine({
   field,
   focused,
-  choiceCursor,
   draft,
 }: {
   readonly field: ProviderInteractiveField;
   readonly focused: boolean;
-  readonly choiceCursor: number;
   readonly draft?: string;
 }): React.ReactElement {
-  const value = draft ?? fieldDisplayValue(field, choiceCursor);
-  const choiceDescription =
-    focused &&
-    (field.kind === "single-choice" || field.kind === "multiple-choice")
-      ? field.choices.filter((choice) => !choice.disabled)[choiceCursor]?.description
-      : undefined;
+  const value = draft ?? fieldDisplayValue(field);
   return (
     <Box flexDirection="column">
       <Text bold={focused}>
@@ -378,14 +409,72 @@ function FieldLine({
       {field.description === undefined ? null : (
         <Text>    {safe(field.description)}</Text>
       )}
-      {choiceDescription === undefined ? null : (
-        <Text>    {safe(choiceDescription)}</Text>
-      )}
       {field.validation?.state === "invalid" ? (
         <Text>    Invalid{field.validation.message === undefined ? "" : `: ${safe(field.validation.message)}`}</Text>
       ) : field.validation?.state === "pending" ? (
         <Text>    Validating…</Text>
       ) : null}
+    </Box>
+  );
+}
+
+function ChoicePicker({
+  field,
+  cursor,
+  height,
+  colorEnabled,
+}: {
+  readonly field: Extract<ProviderInteractiveField, {
+    readonly kind: "single-choice" | "multiple-choice";
+  }>;
+  readonly cursor: number;
+  readonly height: number;
+  readonly colorEnabled: boolean;
+}): React.ReactElement {
+  const choices = field.choices.filter((choice) => !choice.disabled);
+  const window = tuiFocusWindow(cursor, choices.length, Math.max(1, height - 6));
+  const selected = new Set(
+    field.kind === "single-choice"
+      ? field.value === undefined
+        ? []
+        : [field.value]
+      : field.value ?? [],
+  );
+  const muted = colorEnabled ? "gray" : undefined;
+  const accent = colorEnabled ? "cyan" : undefined;
+  const focusedChoice = choices[window.cursor];
+
+  return (
+    <Box flexDirection="column">
+      <Text bold color={accent}>Choose {safe(field.label)}</Text>
+      {field.description === undefined ? null : (
+        <Text color={muted}>{safe(field.description)}</Text>
+      )}
+      <Box marginTop={1} flexDirection="column">
+        {window.hiddenBefore > 0 ? <Text color={muted}>↑ {window.hiddenBefore} more</Text> : null}
+        {choices.slice(window.start, window.end).map((choice, visibleIndex) => {
+          const index = window.start + visibleIndex;
+          const focused = index === window.cursor;
+          return (
+            <Text key={choice.id} bold={focused} color={focused ? accent : undefined}>
+              {focused ? "> " : "  "}{selected.has(choice.id) ? "[x] " : "[ ] "}{safe(choice.label)}
+            </Text>
+          );
+        })}
+        {window.hiddenAfter > 0 ? <Text color={muted}>↓ {window.hiddenAfter} more</Text> : null}
+      </Box>
+      {focusedChoice?.description === undefined ? null : (
+        <Box marginTop={1}>
+          <Text>{safe(focusedChoice.description)}</Text>
+        </Box>
+      )}
+      <Box marginTop={1}>
+        <Text color={muted} wrap="wrap">
+          {field.kind === "single-choice"
+            ? "↑/↓ move · Enter choose · Esc back"
+            : "↑/↓ move · Enter toggle · Esc done"}
+        </Text>
+      </Box>
     </Box>
   );
 }
@@ -467,17 +556,13 @@ function parseDraft(draft: DraftValue): ProviderInteractiveFieldValue | undefine
   return draft.repeatable ? numbers : numbers[0];
 }
 
-function fieldDisplayValue(
-  field: ProviderInteractiveField,
-  choiceCursor: number,
-): string {
+function fieldDisplayValue(field: ProviderInteractiveField): string {
   if (field.kind === "boolean") {
     return field.value ? "yes" : "no";
   }
   if (field.kind === "single-choice") {
     const selected = field.choices.find((choice) => choice.id === field.value);
-    const cursorChoice = field.choices.filter((choice) => !choice.disabled)[choiceCursor];
-    return selected?.label ?? cursorChoice?.label ?? "not selected";
+    return selected?.label ?? "not selected";
   }
   if (field.kind === "multiple-choice") {
     const selected = new Set(field.value ?? []);
