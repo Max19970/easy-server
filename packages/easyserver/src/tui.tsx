@@ -28,6 +28,7 @@ import {
   type TuiEndpointIntentReadItem,
   type TuiInstanceReadItem,
   type TuiPersistentSessionReadItem,
+  type TuiProviderCandidateReadItem,
   type TuiProviderWorkflowReadItem,
   type TuiReadSnapshot,
 } from "./tui-read-model.js";
@@ -215,7 +216,12 @@ type ProviderCredentialFlow =
       readonly kind: "picker";
       readonly providerSource: string;
       readonly selectedName: string;
-      readonly selectedAction: "set" | "remove";
+    }
+  | {
+      readonly kind: "actions";
+      readonly providerSource: string;
+      readonly credentialName: string;
+      readonly cursor: number;
     }
   | {
       readonly kind: "secret";
@@ -224,8 +230,14 @@ type ProviderCredentialFlow =
       readonly secret: string;
     };
 
+interface ProviderCandidatePickerView {
+  readonly items: readonly TuiProviderCandidateReadItem[];
+  readonly cursor: number;
+}
+
 type ProviderCredentialFlowView =
   | Extract<ProviderCredentialFlow, { readonly kind: "picker" }>
+  | Extract<ProviderCredentialFlow, { readonly kind: "actions" }>
   | {
       readonly kind: "secret";
       readonly providerSource: string;
@@ -403,6 +415,8 @@ export function TuiShell({
   const [helpOpen, setHelpOpen] = useState(false);
   const [status, setStatus] = useState("Ready.");
   const [providerSourceInput, setProviderSourceInput] = useState<string | undefined>();
+  const [providerCandidatePickerOpen, setProviderCandidatePickerOpen] = useState(false);
+  const [providerCandidateCursor, setProviderCandidateCursor] = useState(0);
   const [providerCredentialFlow, setProviderCredentialFlow] =
     useState<ProviderCredentialFlow | undefined>();
   const [selectedProviderSource, setSelectedProviderSource] = useState<string | undefined>(
@@ -431,6 +445,20 @@ export function TuiShell({
     readSnapshot?.providers.status === "ready"
       ? readSnapshot.providers.items
       : [];
+  const providerCandidateItems =
+    readSnapshot?.providerCandidates?.status === "ready"
+      ? readSnapshot.providerCandidates.items
+      : [];
+  const providerCandidatePickerView: ProviderCandidatePickerView | undefined =
+    providerCandidatePickerOpen
+      ? {
+          items: providerCandidateItems,
+          cursor: Math.min(
+            providerCandidateCursor,
+            Math.max(0, providerCandidateItems.length - 1),
+          ),
+        }
+      : undefined;
   const effectiveSelectedProviderSource =
     selectedProviderSource !== undefined &&
     providerItems.some((provider) => provider.source === selectedProviderSource)
@@ -443,14 +471,14 @@ export function TuiShell({
   const providerCredentialFlowView: ProviderCredentialFlowView | undefined =
     providerCredentialFlow === undefined
       ? undefined
-      : providerCredentialFlow.kind === "picker"
-        ? providerCredentialFlow
-        : {
+      : providerCredentialFlow.kind === "secret"
+        ? {
             kind: "secret",
             providerSource: providerCredentialFlow.providerSource,
             credentialName: providerCredentialFlow.credentialName,
             hasSecret: providerCredentialFlow.secret.length > 0,
-          };
+          }
+        : providerCredentialFlow;
   const workflowItems =
     readSnapshot?.providerWorkflows.status === "ready"
       ? readSnapshot.providerWorkflows.items.filter(
@@ -774,7 +802,16 @@ export function TuiShell({
     if (activeRoute.id === "providers") {
       const actions: TuiContextAction[] = [{ id: "refresh", label: "Refresh providers" }];
       if (onProviderMutation !== undefined) {
-        actions.unshift({ id: "provider-add", label: "Register installed provider" });
+        actions.unshift({
+          id: "provider-add-advanced",
+          label: "Advanced: add module or path",
+        });
+        if (providerCandidateItems.length > 0) {
+          actions.unshift({
+            id: "provider-add-installed",
+            label: "Add installed provider",
+          });
+        }
       }
       if (selectedProvider !== undefined) {
         actions.unshift({
@@ -924,9 +961,15 @@ export function TuiShell({
       setProviderDetailsOpen((open) => !open);
       return;
     }
-    if (id === "provider-add") {
+    if (id === "provider-add-installed") {
+      setProviderCandidateCursor(0);
+      setProviderCandidatePickerOpen(true);
+      setStatus("Choose an installed provider to add.");
+      return;
+    }
+    if (id === "provider-add-advanced") {
       setProviderSourceInput("");
-      setStatus("Enter an installed provider module or path.");
+      setStatus("Advanced provider registration: enter a module or path.");
       return;
     }
     if (id === "provider-credentials" && selectedProvider !== undefined) {
@@ -936,7 +979,6 @@ export function TuiShell({
           kind: "picker",
           providerSource: selectedProvider.source,
           selectedName: firstCredential.name,
-          selectedAction: "set",
         });
         setStatus(`Managing credentials for ${selectedProvider.source}.`);
       }
@@ -1083,6 +1125,42 @@ export function TuiShell({
       return;
     }
 
+    if (providerCandidatePickerOpen) {
+      if (input === "q") {
+        requestExit();
+        return;
+      }
+      if (key.escape) {
+        setProviderCandidatePickerOpen(false);
+        setStatus("Installed provider picker closed.");
+        return;
+      }
+      if (key.downArrow && providerCandidateItems.length > 0) {
+        setProviderCandidateCursor((current) =>
+          moveTuiFocus(current, providerCandidateItems.length, 1),
+        );
+        return;
+      }
+      if (key.upArrow && providerCandidateItems.length > 0) {
+        setProviderCandidateCursor((current) =>
+          moveTuiFocus(current, providerCandidateItems.length, -1),
+        );
+        return;
+      }
+      if (key.return) {
+        const candidate =
+          providerCandidateItems[
+            Math.min(providerCandidateCursor, providerCandidateItems.length - 1)
+          ];
+        if (candidate !== undefined) {
+          onProviderMutation?.({ kind: "add-plugin", source: candidate.source });
+          setProviderCandidatePickerOpen(false);
+          setStatus(`Adding ${candidate.displayName}.`);
+        }
+      }
+      return;
+    }
+
     if (providerSourceInput !== undefined) {
       if (key.escape) {
         setProviderSourceInput(undefined);
@@ -1109,11 +1187,12 @@ export function TuiShell({
     }
 
     if (providerCredentialFlow !== undefined) {
+      if (input === "q" && providerCredentialFlow.kind !== "secret") {
+        requestExit();
+        return;
+      }
+
       if (providerCredentialFlow.kind === "picker") {
-        if (input === "q") {
-          requestExit();
-          return;
-        }
         if (key.escape) {
           setProviderCredentialFlow(undefined);
           setStatus("Credential setup closed.");
@@ -1122,43 +1201,68 @@ export function TuiShell({
         const currentIndex = Math.max(
           0,
           credentialFlowItems.findIndex(
-            (credential) =>
-              credential.name === providerCredentialFlow.selectedName,
+            (credential) => credential.name === providerCredentialFlow.selectedName,
           ),
         );
-        if (
-          (input === "j" || input === "k" || key.downArrow || key.upArrow) &&
-          credentialFlowItems.length > 0
-        ) {
-          const forwards = input === "j" || key.downArrow;
-          const nextIndex = forwards
-            ? (currentIndex + 1) % credentialFlowItems.length
-            : (currentIndex - 1 + credentialFlowItems.length) %
-              credentialFlowItems.length;
+        if ((key.downArrow || key.upArrow) && credentialFlowItems.length > 0) {
+          const nextIndex = moveTuiFocus(
+            currentIndex,
+            credentialFlowItems.length,
+            key.downArrow ? 1 : -1,
+          );
           const next = credentialFlowItems[nextIndex];
           if (next !== undefined) {
             setProviderCredentialFlow({
               ...providerCredentialFlow,
               selectedName: next.name,
-              selectedAction: "set",
             });
           }
           return;
         }
+        if (key.return) {
+          const selected = credentialFlowItems.find(
+            (credential) => credential.name === providerCredentialFlow.selectedName,
+          );
+          if (selected !== undefined) {
+            setProviderCredentialFlow({
+              kind: "actions",
+              providerSource: providerCredentialFlow.providerSource,
+              credentialName: selected.name,
+              cursor: 0,
+            });
+            setStatus(`Choose what to do with credential ${selected.name}.`);
+          }
+        }
+        return;
+      }
+
+      if (providerCredentialFlow.kind === "actions") {
         const selected = credentialFlowItems.find(
-          (credential) =>
-            credential.name === providerCredentialFlow.selectedName,
+          (credential) => credential.name === providerCredentialFlow.credentialName,
         );
-        if ((key.leftArrow || key.rightArrow) && selected?.configured) {
+        const actionCount = selected?.configured ? 2 : 1;
+        if (key.escape) {
+          setProviderCredentialFlow({
+            kind: "picker",
+            providerSource: providerCredentialFlow.providerSource,
+            selectedName: providerCredentialFlow.credentialName,
+          });
+          setStatus("Returned to credential selection.");
+          return;
+        }
+        if (key.downArrow || key.upArrow) {
           setProviderCredentialFlow({
             ...providerCredentialFlow,
-            selectedAction:
-              providerCredentialFlow.selectedAction === "set" ? "remove" : "set",
+            cursor: moveTuiFocus(
+              providerCredentialFlow.cursor,
+              actionCount,
+              key.downArrow ? 1 : -1,
+            ),
           });
           return;
         }
         if (key.return && selected !== undefined) {
-          if (providerCredentialFlow.selectedAction === "remove" && selected.configured) {
+          if (providerCredentialFlow.cursor === 1 && selected.configured) {
             onProviderMutation?.({
               kind: "remove-credential",
               source: providerCredentialFlow.providerSource,
@@ -1175,17 +1279,16 @@ export function TuiShell({
             secret: "",
           });
           setStatus(`Enter a new value for credential ${selected.name}.`);
-          return;
         }
         return;
       }
 
       if (key.escape) {
         setProviderCredentialFlow({
-          kind: "picker",
+          kind: "actions",
           providerSource: providerCredentialFlow.providerSource,
-          selectedName: providerCredentialFlow.credentialName,
-          selectedAction: "set",
+          credentialName: providerCredentialFlow.credentialName,
+          cursor: 0,
         });
         setStatus("Credential value entry cancelled.");
         return;
@@ -1943,91 +2046,6 @@ export function TuiShell({
     }
 
     if (
-      activeRoute.id === "providers" &&
-      input === "a" &&
-      onProviderMutation !== undefined
-    ) {
-      setProviderSourceInput("");
-      setStatus("Enter an installed provider module or path.");
-      return;
-    }
-
-    if (
-      activeRoute.id === "providers" &&
-      input === "c" &&
-      onProviderMutation !== undefined
-    ) {
-      const selected = providerItems.find(
-        (provider) => provider.source === effectiveSelectedProviderSource,
-      );
-      if (selected?.state === "disabled") {
-        setStatus("Enable the selected provider before managing credentials.");
-        return;
-      }
-      if (selected?.state === "failed") {
-        setStatus("Resolve the provider load failure before managing credentials.");
-        return;
-      }
-      const firstCredential = selected?.credentials.items?.[0];
-      if (selected !== undefined && firstCredential !== undefined) {
-        setProviderCredentialFlow({
-          kind: "picker",
-          providerSource: selected.source,
-          selectedName: firstCredential.name,
-          selectedAction: "set",
-        });
-        setStatus(`Managing credentials for ${selected.source}.`);
-      } else {
-        setStatus("The selected provider declares no credentials.");
-      }
-      return;
-    }
-
-    if (
-      activeRoute.id === "providers" &&
-      providerItems.length > 0 &&
-      (input === "j" || input === "k")
-    ) {
-      const currentIndex = Math.max(
-        0,
-        providerItems.findIndex(
-          (provider) => provider.source === effectiveSelectedProviderSource,
-        ),
-      );
-      const nextIndex =
-        input === "j"
-          ? (currentIndex + 1) % providerItems.length
-          : (currentIndex - 1 + providerItems.length) % providerItems.length;
-      const next = providerItems[nextIndex];
-      if (next !== undefined) {
-        setSelectedProviderSource(next.source);
-        setStatus(`Selected provider ${next.source}.`);
-      }
-      return;
-    }
-
-    if (
-      activeRoute.id === "providers" &&
-      input === "e" &&
-      onProviderMutation !== undefined
-    ) {
-      const selected = providerItems.find(
-        (provider) => provider.source === effectiveSelectedProviderSource,
-      );
-      if (selected !== undefined) {
-        onProviderMutation({
-          kind: "set-enabled",
-          source: selected.source,
-          enabled: selected.state === "disabled",
-        });
-        setStatus(
-          `${selected.state === "disabled" ? "Enabling" : "Disabling"} provider ${selected.source}.`,
-        );
-      }
-      return;
-    }
-
-    if (
       activeRoute.id === "new-instance" &&
       workflowItems.length > 0 &&
       (input === "j" || input === "k")
@@ -2288,6 +2306,7 @@ export function TuiShell({
               canManageDaemon={
                 onStartDaemon !== undefined && onStopDaemon !== undefined
               }
+              providerCandidatePicker={providerCandidatePickerView}
               providerSourceInput={providerSourceInput}
               providerCredentialFlow={providerCredentialFlowView}
               selectedProviderSource={effectiveSelectedProviderSource}
@@ -2444,6 +2463,7 @@ interface RouteSurfaceProps {
   readonly canManagePersistentSessions: boolean;
   readonly canManageEndpointIntents: boolean;
   readonly canManageDaemon: boolean;
+  readonly providerCandidatePicker?: ProviderCandidatePickerView;
   readonly providerSourceInput?: string;
   readonly providerCredentialFlow?: ProviderCredentialFlowView;
   readonly selectedProviderSource?: string;
@@ -2483,6 +2503,7 @@ function RouteSurface({
   canManagePersistentSessions,
   canManageEndpointIntents,
   canManageDaemon,
+  providerCandidatePicker,
   providerSourceInput,
   providerCredentialFlow,
   selectedProviderSource,
@@ -2587,6 +2608,7 @@ function RouteSurface({
   return (
     <ProvidersSurface
       snapshot={snapshot}
+      candidatePicker={providerCandidatePicker}
       sourceInput={providerSourceInput}
       credentialFlow={providerCredentialFlow}
       selectedSource={selectedProviderSource}
@@ -3264,6 +3286,7 @@ function NewInstanceSurface({
 
 function ProvidersSurface({
   snapshot,
+  candidatePicker,
   sourceInput,
   credentialFlow,
   selectedSource,
@@ -3271,19 +3294,45 @@ function ProvidersSurface({
   canRegister,
 }: {
   readonly snapshot: TuiReadSnapshot;
+  readonly candidatePicker?: ProviderCandidatePickerView;
   readonly sourceInput?: string;
   readonly credentialFlow?: ProviderCredentialFlowView;
   readonly selectedSource?: string;
   readonly showDetails: boolean;
   readonly canRegister: boolean;
 }): React.ReactElement {
+  if (candidatePicker !== undefined) {
+    return (
+      <Box flexDirection="column">
+        <Text bold>Add an installed provider</Text>
+        {candidatePicker.items.length === 0 ? (
+          <Text>No discoverable installed Provider Plugins are available.</Text>
+        ) : (
+          candidatePicker.items.map((candidate, index) => (
+            <Box key={candidate.source} flexDirection="column" marginTop={index === 0 ? 1 : 0}>
+              <Text bold={index === candidatePicker.cursor}>
+                {index === candidatePicker.cursor ? "> " : "  "}{candidate.displayName}
+              </Text>
+              {index !== candidatePicker.cursor || candidate.description === undefined ? null : (
+                <Text>    {candidate.description}</Text>
+              )}
+            </Box>
+          ))
+        )}
+        <Box marginTop={1}>
+          <Text>↑/↓ choose · Enter add · Esc back</Text>
+        </Box>
+      </Box>
+    );
+  }
+
   if (sourceInput !== undefined) {
     return (
       <Box flexDirection="column">
-        <Text bold>Register installed provider</Text>
+        <Text bold>Advanced provider registration</Text>
         <Text>Module or path: {escapeTerminalText(sourceInput)}</Text>
-        <Text>Enter register · Esc cancel</Text>
-        <Text>Install, update and uninstall stay with your package manager.</Text>
+        <Text>Enter add · Esc cancel</Text>
+        <Text>Use this only for a package or local path that is not discoverable in the installed-provider picker.</Text>
       </Box>
     );
   }
@@ -3311,13 +3360,38 @@ function ProvidersSurface({
         );
       }
 
-      const selectedCredential = provider.credentials.items.find(
-        (credential) => credential.name === credentialFlow.selectedName,
-      );
+      if (credentialFlow.kind === "actions") {
+        const selectedCredential = provider.credentials.items.find(
+          (credential) => credential.name === credentialFlow.credentialName,
+        );
+        return (
+          <Box flexDirection="column">
+            <Text bold>{credentialFlow.credentialName}</Text>
+            {selectedCredential?.description === undefined ? null : (
+              <Text>{selectedCredential.description}</Text>
+            )}
+            <Box marginTop={1} flexDirection="column">
+              <Text bold>Actions</Text>
+              <Text bold={credentialFlow.cursor === 0}>
+                {credentialFlow.cursor === 0 ? "> " : "  "}Set or rotate
+              </Text>
+              {selectedCredential?.configured ? (
+                <Text bold={credentialFlow.cursor === 1}>
+                  {credentialFlow.cursor === 1 ? "> " : "  "}Remove credential
+                </Text>
+              ) : null}
+            </Box>
+            <Box marginTop={1}>
+              <Text>↑/↓ choose · Enter run · Esc back</Text>
+            </Box>
+          </Box>
+        );
+      }
+
       return (
         <Box flexDirection="column">
           <Text bold>Credentials for {providerLabel}</Text>
-          <Text>↑/↓ choose credential · ←/→ choose action · Enter run · Esc back</Text>
+          <Text>↑/↓ choose credential · Enter actions · Esc back</Text>
           {provider.credentials.items.map((credential) => (
             <Box key={credential.name} flexDirection="column" marginTop={1}>
               <Text bold={credential.name === credentialFlow.selectedName}>
@@ -3329,19 +3403,6 @@ function ProvidersSurface({
               )}
             </Box>
           ))}
-          {selectedCredential === undefined ? null : (
-            <Box marginTop={1} flexDirection="column">
-              <Text bold>Actions</Text>
-              <Text bold={credentialFlow.selectedAction === "set"}>
-                {credentialFlow.selectedAction === "set" ? "> " : "  "}Set or rotate
-              </Text>
-              {selectedCredential.configured ? (
-                <Text bold={credentialFlow.selectedAction === "remove"}>
-                  {credentialFlow.selectedAction === "remove" ? "> " : "  "}Remove credential
-                </Text>
-              ) : null}
-            </Box>
-          )}
         </Box>
       );
     }
@@ -3359,11 +3420,11 @@ function ProvidersSurface({
   if (snapshot.providers.items.length === 0) {
     return (
       <Box flexDirection="column">
-        <Text>No provider plugins configured.</Text>
+        <Text>No providers added yet.</Text>
         {canRegister ? (
-          <Text>Press Enter for actions, then choose Register installed provider.</Text>
+          <Text>Press Enter for Actions, then choose Add installed provider.</Text>
         ) : (
-          <Text>For now, add one with: easyserver plugins add &lt;module&gt;</Text>
+          <Text>Provider setup is unavailable in this TUI session.</Text>
         )}
       </Box>
     );

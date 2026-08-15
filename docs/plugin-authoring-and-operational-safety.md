@@ -24,6 +24,10 @@ The plugin should depend on `@easyai101/easyserver-plugin-sdk`, not on EasyServe
   "version": "0.2.0",
   "type": "module",
   "main": "dist/index.js",
+  "easyserver": {
+    "kind": "provider-plugin",
+    "displayName": "Example Provider"
+  },
   "dependencies": {
     "@easyai101/easyserver-plugin-sdk": "^0.2.0"
   }
@@ -96,7 +100,7 @@ The manifest Provider ID and `provider.providerId` must agree. IDs are stable AP
 
 ## 2. Installing, enabling and disabling
 
-EasyServer does not scan arbitrary installed packages. Installing a package and registering it with EasyServer are intentionally separate actions: installation puts the module in the CLI's module-resolution environment; `plugins add` validates and persists the plugin registration.
+Installing a package and registering it with EasyServer remain separate actions. For TUI discovery, EasyServer reads package metadata from the CLI's normal Node module-resolution paths but does **not** import unconfigured packages. A package is offered in **Settings & Support → Providers → Add installed provider** only when its `package.json` explicitly declares `easyserver.kind` as `provider-plugin` and provides a human `easyserver.displayName`. Selecting it then uses the ordinary `plugins add` validation/import path. Packages without this metadata can still be registered by module name or local path through the Advanced TUI action or explicit CLI command.
 
 For a global CLI installation, install the plugin globally as well:
 

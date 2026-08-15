@@ -53,15 +53,11 @@ If you installed the CLI globally from npm, install only the providers you want 
 
 ```powershell
 npm install --global @easyai101/easyserver-plugin-vastai
-easyserver plugins add @easyai101/easyserver-plugin-vastai
-```
-
-or:
-
-```powershell
+# or
 npm install --global @easyai101/easyserver-plugin-intelion
-easyserver plugins add @easyai101/easyserver-plugin-intelion
 ```
+
+For ordinary interactive setup, run `easyserver`, open **Settings & Support → Providers → Add installed provider**, and choose the installed provider by name. Explicit `easyserver plugins add <module>` remains available for automation, advanced package/path registration, and plugins that do not advertise TUI discovery metadata.
 
 If you use the portable GitHub Release ZIP, install Provider Plugins into the extracted EasyServer prefix instead of npm's ordinary global prefix. The exact `--prefix` commands are in [Install from GitHub Releases](docs/github-release-install.md#add-a-provider-plugin-later).
 
@@ -79,7 +75,7 @@ For ordinary interactive use, run EasyServer without arguments:
 easyserver
 ```
 
-The TUI provides Overview, Instances, Providers, New instance, Connections and privacy-safe Diagnostics over the same host-owned operations as command mode. It supports compact terminals, `NO_COLOR` and a linear `INK_SCREEN_READER=true` mode. Foreground Endpoints close with the TUI; daemon-owned persistent Sessions and Endpoint intents survive TUI exit.
+The TUI starts from four user tasks — **Rent a server**, **My servers**, **Connections**, and **Settings & Support** — over the same host-owned operations as command mode. Provider setup can select discoverable installed plugins by human name, and first-party rental flows stay guided inside the TUI. It supports compact terminals, `NO_COLOR` and a linear `INK_SCREEN_READER=true` mode. Foreground Endpoints close with the TUI; daemon-owned persistent Sessions and Endpoint intents survive TUI exit.
 
 Use `easyserver --help` and nested `--help` pages for automation and advanced command-mode workflows. Plain `easyserver` on a non-interactive stdin/stdout fails clearly instead of emitting terminal control output.
 

@@ -3,6 +3,10 @@
   "version": "0.2.0",
   "private": true,
   "description": "Minimal EasyServer Provider Plugin example.",
+  "easyserver": {
+    "kind": "provider-plugin",
+    "displayName": "Example Provider"
+  },
   "license": "MIT",
   "type": "module",
   "main": "index.mjs",

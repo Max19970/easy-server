@@ -2,6 +2,10 @@
   "name": "@easyai101/easyserver-plugin-vastai",
   "version": "0.2.0",
   "description": "EasyServer Provider Plugin for Vast.ai.",
+  "easyserver": {
+    "kind": "provider-plugin",
+    "displayName": "Vast.ai"
+  },
   "license": "MIT",
   "type": "module",
   "keywords": [

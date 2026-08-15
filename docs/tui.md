@@ -77,7 +77,7 @@ This no-argument behavior is a compatibility-relevant change in the `0.2.0` line
 
 ## Provider setup and package-management boundary
 
-The TUI can register and configure a Provider Plugin that is already installed in the EasyServer package environment. It deliberately does **not** install, update or uninstall npm packages.
+The TUI can add and configure a Provider Plugin that is already installed in the EasyServer package environment. It deliberately does **not** install, update or uninstall npm packages. Packages that advertise EasyServer provider metadata appear by human display name under **Settings & Support → Providers → Add installed provider**; opening that picker reads package metadata only and does not execute an unconfigured plugin. Import/compatibility validation still happens only after the user explicitly chooses **Add**. Literal package names and local module paths remain available under **Advanced: add module or path**.
 
 For a global npm installation, package ownership stays with npm:
 
@@ -86,7 +86,7 @@ npm install --global @easyai101/easyserver-plugin-vastai
 easyserver
 ```
 
-Then open **Settings & Support → Providers** and configure the installed package. Package installation itself remains outside the TUI; advanced command-mode equivalents remain available for automation.
+Then open **Settings & Support → Providers**, choose **Add installed provider**, select **Vast.ai**, and configure its declared credential from the visible Actions menu. Provider and credential selection use the same ↑/↓ → Enter → Esc hierarchy as the rest of TUI v2; no Left/Right action toggle or provider-specific letter shortcut is required. Package installation itself remains outside the TUI; advanced command-mode equivalents remain available for automation.
 
 For the portable GitHub Release ZIP, Provider Plugins must be installed into that extracted EasyServer prefix. Follow [Install from GitHub Releases](github-release-install.md#add-a-provider-plugin-later); installing a plugin into an unrelated global npm prefix does not make it part of the portable EasyServer environment.
 

@@ -47,6 +47,7 @@ function shell(props = {}) {
 
 function readSnapshot(overrides = {}) {
   return {
+    providerCandidates: { status: "ready", items: [] },
     providerWorkflows: { status: "ready", items: [] },
     providers: { status: "ready", items: [] },
     instances: {
@@ -464,10 +465,50 @@ test("read-only surfaces make zero-provider and zero-instance states actionable"
 
   await openProvidersRoute(view);
   assert.match(view.lastFrame(), /Providers/);
-  assert.match(view.lastFrame(), /easyserver plugins add <module>/);
+  assert.match(view.lastFrame(), /No providers added yet/);
+  assert.doesNotMatch(view.lastFrame(), /easyserver plugins add/);
 });
 
-test("Providers can register an already-installed plugin module without leaving the TUI", async () => {
+test("Providers adds a discoverable installed plugin by human display identity", async () => {
+  const mutations = [];
+  const view = render(
+    shell({
+      width: 100,
+      readSnapshot: readSnapshot({
+        providerCandidates: {
+          status: "ready",
+          items: [
+            {
+              source: "@fixture/provider",
+              displayName: "Fixture Cloud",
+              description: "Rent fixture compute",
+            },
+          ],
+        },
+      }),
+      readStatus: "ready",
+      onProviderMutation(mutation) {
+        mutations.push(mutation);
+      },
+    }),
+  );
+
+  await openProvidersRoute(view);
+  await chooseVisibleAction(view, "Add installed provider");
+  assert.match(view.lastFrame(), /Add an installed provider/);
+  assert.match(view.lastFrame(), /> Fixture Cloud/);
+  assert.match(view.lastFrame(), /Rent fixture compute/);
+  assert.doesNotMatch(view.lastFrame(), /@fixture\/provider/);
+
+  view.stdin.write("\r");
+  await tick();
+  assert.deepEqual(mutations, [
+    { kind: "add-plugin", source: "@fixture/provider" },
+  ]);
+  assert.doesNotMatch(view.lastFrame(), /Add an installed provider/);
+});
+
+test("Providers keeps literal module or path registration behind Advanced", async () => {
   const mutations = [];
   const view = render(
     shell({
@@ -481,25 +522,16 @@ test("Providers can register an already-installed plugin module without leaving 
   );
 
   await openProvidersRoute(view);
-  assert.match(view.lastFrame(), /Press Enter for actions, then choose Register installed provider/);
-
-  view.stdin.write("\r");
-  await tick();
-  assert.match(view.lastFrame(), /> Register installed provider/);
-  view.stdin.write("\r");
-  await tick();
-  assert.match(view.lastFrame(), /Register installed provider/);
+  await chooseVisibleAction(view, "Advanced: add module or path");
+  assert.match(view.lastFrame(), /Advanced provider registration/);
   assert.match(view.lastFrame(), /Module or path:/);
 
   await typeText(view, "q-provider");
-  assert.match(view.lastFrame(), /q-provider/);
-
   view.stdin.write("\r");
   await tick();
   assert.deepEqual(mutations, [
     { kind: "add-plugin", source: "q-provider" },
   ]);
-  assert.doesNotMatch(view.lastFrame(), /Module or path:/);
 });
 
 test("provider registration prompt can be cancelled without mutation", async () => {
@@ -516,18 +548,15 @@ test("provider registration prompt can be cancelled without mutation", async () 
   );
 
   await openProvidersRoute(view);
-  view.stdin.write("\r");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
-  assert.match(view.lastFrame(), /Register installed provider/);
+  await chooseVisibleAction(view, "Advanced: add module or path");
+  assert.match(view.lastFrame(), /Advanced provider registration/);
   await typeText(view, "@fixture/provider");
   view.stdin.write("\u001b");
   await flushEscape();
 
   assert.deepEqual(mutations, []);
   assert.doesNotMatch(view.lastFrame(), /Module or path:/);
-  assert.match(view.lastFrame(), /No provider plugins configured/);
+  assert.match(view.lastFrame(), /No providers added yet/);
 });
 
 test("TuiApp refreshes provider state after registration mutation succeeds", async () => {
@@ -535,6 +564,18 @@ test("TuiApp refreshes provider state after registration mutation succeeds", asy
   const mutations = [];
   const loader = async () =>
     readSnapshot({
+      providerCandidates: registered
+        ? { status: "ready", items: [] }
+        : {
+            status: "ready",
+            items: [
+              {
+                source: "@fixture/provider",
+                displayName: "Fixture Provider",
+                description: "Fixture provider package",
+              },
+            ],
+          },
       providers: registered
         ? {
             status: "ready",
@@ -568,11 +609,8 @@ test("TuiApp refreshes provider state after registration mutation succeeds", asy
   await tick();
   await tick();
   await openProvidersRoute(view);
-  view.stdin.write("\r");
-  await tick();
-  view.stdin.write("\r");
-  await tick();
-  await typeText(view, "@fixture/provider");
+  await chooseVisibleAction(view, "Add installed provider");
+  assert.match(view.lastFrame(), /> Fixture Provider/);
   view.stdin.write("\r");
   await tick();
   await tick();
@@ -622,17 +660,15 @@ test("Providers enable and disable the selected configured plugin by source", as
   await openProvidersRoute(view);
   assert.match(view.lastFrame(), /> Enabled Provider/);
 
-  view.stdin.write("e");
-  await tick();
+  await chooseVisibleAction(view, "Disable provider");
   assert.deepEqual(mutations, [
     { kind: "set-enabled", source: "@fixture/enabled", enabled: false },
   ]);
 
-  view.stdin.write("j");
+  view.stdin.write("\u001b[B");
   await tick();
   assert.match(view.lastFrame(), /> Disabled Provider/);
-  view.stdin.write("e");
-  await tick();
+  await chooseVisibleAction(view, "Enable provider");
   assert.deepEqual(mutations, [
     { kind: "set-enabled", source: "@fixture/enabled", enabled: false },
     { kind: "set-enabled", source: "@fixture/disabled", enabled: true },
@@ -686,14 +722,17 @@ test("Providers configure only declared credentials through masked input", async
   );
 
   await openProvidersRoute(view);
-  view.stdin.write("c");
-  await tick();
+  await chooseVisibleAction(view, "Manage credentials");
 
   assert.match(view.lastFrame(), /Credentials for Credential Provider/);
   assert.match(view.lastFrame(), /> api-key · required · missing/);
   assert.match(view.lastFrame(), /profile · optional · configured/);
   assert.doesNotMatch(view.lastFrame(), /Credential name:/);
 
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Actions/);
+  assert.match(view.lastFrame(), /> Set or rotate/);
   view.stdin.write("\r");
   await tick();
   assert.match(view.lastFrame(), /Configure credential api-key/);
@@ -759,9 +798,10 @@ test("Providers remove a configured declared credential without reading its valu
   await openProvidersRoute(view);
   await chooseVisibleAction(view, "Manage credentials");
   assert.match(view.lastFrame(), /> api-key · required · configured/);
+  view.stdin.write("\r");
+  await tick();
   assert.match(view.lastFrame(), /> Set or rotate/);
-
-  view.stdin.write("\u001b[C");
+  view.stdin.write("\u001b[B");
   await tick();
   assert.match(view.lastFrame(), /> Remove credential/);
   view.stdin.write("\r");
@@ -816,7 +856,9 @@ test("TuiApp confirms credential removal before deleting the stored value", asyn
   await tick();
   await openProvidersRoute(view);
   await chooseVisibleAction(view, "Manage credentials");
-  view.stdin.write("\u001b[C");
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\u001b[B");
   await tick();
   view.stdin.write("\r");
   await tick();
@@ -832,7 +874,9 @@ test("TuiApp confirms credential removal before deleting the stored value", asyn
   assert.doesNotMatch(view.lastFrame(), /Confirmation required/);
 
   await chooseVisibleAction(view, "Manage credentials");
-  view.stdin.write("\u001b[C");
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\u001b[B");
   await tick();
   view.stdin.write("\r");
   await tick();
@@ -885,9 +929,10 @@ test("Providers explain credential eligibility for providers without usable desc
   await openProvidersRoute(view);
   assert.match(view.lastFrame(), /> Disabled Provider · disabled/);
 
-  view.stdin.write("c");
+  view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /Enable the selected provider before managing credentials/);
+  assert.doesNotMatch(view.lastFrame(), /Manage credentials/);
+  assert.match(view.lastFrame(), /Enable provider/);
 });
 
 test("credential secret input cancels without emitting or revealing secret", async () => {
@@ -925,7 +970,8 @@ test("credential secret input cancels without emitting or revealing secret", asy
   );
 
   await openProvidersRoute(view);
-  view.stdin.write("c");
+  await chooseVisibleAction(view, "Manage credentials");
+  view.stdin.write("\r");
   await tick();
   view.stdin.write("\r");
   await tick();
@@ -935,7 +981,8 @@ test("credential secret input cancels without emitting or revealing secret", asy
   view.stdin.write("\u001b");
   await flushEscape();
   assert.deepEqual(mutations, []);
-  assert.match(view.lastFrame(), /Credentials for Credential Provider/);
+  assert.match(view.lastFrame(), /Actions/);
+  assert.match(view.lastFrame(), /> Set or rotate/);
 });
 
 test("TuiApp never exposes credential values while mutating and refreshes readiness after success", async () => {
@@ -989,7 +1036,8 @@ test("TuiApp never exposes credential values while mutating and refreshes readin
   await tick();
   await tick();
   await openProvidersRoute(view);
-  view.stdin.write("c");
+  await chooseVisibleAction(view, "Manage credentials");
+  view.stdin.write("\r");
   await tick();
   view.stdin.write("\r");
   await tick();
@@ -1050,7 +1098,8 @@ test("credential mutation failures cannot echo the submitted secret into the ope
   await tick();
   await tick();
   await openProvidersRoute(view);
-  view.stdin.write("c");
+  await chooseVisibleAction(view, "Manage credentials");
+  view.stdin.write("\r");
   await tick();
   view.stdin.write("\r");
   await tick();
@@ -1097,7 +1146,7 @@ test("provider selection is preserved by source across refreshed ordering", asyn
   );
 
   await openProvidersRoute(view);
-  view.stdin.write("j");
+  view.stdin.write("\u001b[B");
   await tick();
   assert.match(view.lastFrame(), /> Provider B/);
 

@@ -68,6 +68,15 @@ test("default TUI read path fails closed when primary and recovery Local State a
 
 test("read snapshot keeps healthy inventory beside degraded providers and plugin failures", async () => {
   const operations = new TuiReadOperations({
+    async listProviderCandidates() {
+      return [
+        {
+          source: "@fixture/installed",
+          displayName: "Installed Provider\u001b[31m",
+          description: "Ready to add\u001b[2J",
+        },
+      ];
+    },
     async listProviderWorkflows() {
       return [
         {
@@ -188,6 +197,15 @@ test("read snapshot keeps healthy inventory beside degraded providers and plugin
 
   const snapshot = await operations.load(context());
 
+  assert.equal(snapshot.providerCandidates.status, "ready");
+  assert.deepEqual(snapshot.providerCandidates.items, [
+    {
+      source: "@fixture/installed",
+      displayName: "Installed Provider\\u001b[31m",
+      description: "Ready to add\\u001b[2J",
+    },
+  ]);
+
   assert.equal(snapshot.providerWorkflows.status, "ready");
   assert.deepEqual(snapshot.providerWorkflows.items, [
     {
@@ -253,6 +271,9 @@ test("read snapshot keeps healthy inventory beside degraded providers and plugin
 
 test("read snapshot isolates section failure instead of hiding healthy sections", async () => {
   const operations = new TuiReadOperations({
+    async listProviderCandidates() {
+      throw new Error("private filesystem details");
+    },
     async listProviderWorkflows() {
       throw new Error("private feature details");
     },
@@ -268,6 +289,9 @@ test("read snapshot isolates section failure instead of hiding healthy sections"
   });
 
   const snapshot = await operations.load(context());
+  assert.equal(snapshot.providerCandidates.status, "failed");
+  assert.match(snapshot.providerCandidates.message, /installed provider packages/i);
+  assert.doesNotMatch(snapshot.providerCandidates.message, /private filesystem details/);
   assert.equal(snapshot.providerWorkflows.status, "failed");
   assert.match(snapshot.providerWorkflows.message, /provider workflows/i);
   assert.doesNotMatch(snapshot.providerWorkflows.message, /private feature details/);

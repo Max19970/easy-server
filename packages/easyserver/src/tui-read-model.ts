@@ -19,6 +19,10 @@ import {
 } from "./local-daemon.js";
 import type { EndpointIntentStatus } from "./endpoint-intent-service.js";
 import type { PluginStatus } from "./plugin-host.js";
+import {
+  discoverInstalledProviderPlugins,
+  type InstalledProviderPluginCandidate,
+} from "./plugin-discovery.js";
 import type {
   ProviderFeatureCommandDescriptor,
 } from "./provider-feature-operations.js";
@@ -34,6 +38,12 @@ export type TuiProviderReadiness =
   | "credentials-missing"
   | "disabled"
   | "failed";
+
+export interface TuiProviderCandidateReadItem {
+  readonly source: string;
+  readonly displayName: string;
+  readonly description?: string;
+}
 
 export interface TuiProviderReadItem {
   readonly source: string;
@@ -177,6 +187,9 @@ export interface TuiProviderWorkflowSourceItem {
 }
 
 export interface TuiReadSnapshot {
+  readonly providerCandidates: TuiReadSection<{
+    readonly items: readonly TuiProviderCandidateReadItem[];
+  }>;
   readonly providerWorkflows: TuiReadSection<{
     readonly items: readonly TuiProviderWorkflowReadItem[];
   }>;
@@ -192,6 +205,7 @@ export interface TuiReadSnapshot {
 }
 
 export interface TuiReadSources {
+  listProviderCandidates?(): Promise<readonly InstalledProviderPluginCandidate[]>;
   listProviderWorkflows?(): Promise<readonly TuiProviderWorkflowSourceItem[]>;
   listProviders(): Promise<readonly PluginStatus[]>;
   listInventory(context: OperationContext): Promise<InventoryResult>;
@@ -214,6 +228,12 @@ export async function loadDefaultTuiReadSnapshot(
   ];
 
   return new TuiReadOperations({
+    async listProviderCandidates() {
+      const configured = new Set(runtime.state.plugins.map((plugin) => plugin.source));
+      return (await discoverInstalledProviderPlugins()).filter(
+        (candidate) => !configured.has(candidate.source),
+      );
+    },
     async listProviderWorkflows() {
       return runtime.providerFeatureOperations.listFeatures().flatMap((feature) =>
         runtime.providerFeatureOperations
@@ -242,7 +262,8 @@ export class TuiReadOperations {
   constructor(private readonly sources: TuiReadSources) {}
 
   async load(context: OperationContext): Promise<TuiReadSnapshot> {
-    const [providerWorkflows, providers, inventory, daemon] = await Promise.allSettled([
+    const [providerCandidates, providerWorkflows, providers, inventory, daemon] = await Promise.allSettled([
+      this.sources.listProviderCandidates?.() ?? Promise.resolve([]),
       this.sources.listProviderWorkflows?.() ?? Promise.resolve([]),
       this.sources.listProviders(),
       this.sources.listInventory(context),
@@ -254,6 +275,16 @@ export class TuiReadOperations {
     }
 
     return {
+      providerCandidates:
+        providerCandidates.status === "fulfilled"
+          ? {
+              status: "ready",
+              items: providerCandidates.value.map(projectProviderCandidate),
+            }
+          : readFailure(
+              providerCandidates.reason,
+              "Installed provider packages could not be inspected",
+            ),
       providerWorkflows:
         providerWorkflows.status === "fulfilled"
           ? {
@@ -368,6 +399,18 @@ function projectProviderWorkflow(
             flowId: escapeTerminalText(workflow.command.presentation.flowId),
           }
         : { kind: "cli-fallback" },
+  };
+}
+
+function projectProviderCandidate(
+  candidate: InstalledProviderPluginCandidate,
+): TuiProviderCandidateReadItem {
+  return {
+    source: escapeTerminalText(candidate.source),
+    displayName: escapeTerminalText(candidate.displayName),
+    ...(candidate.description === undefined
+      ? {}
+      : { description: escapeTerminalText(candidate.description) }),
   };
 }
 
