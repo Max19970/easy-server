@@ -723,11 +723,14 @@ test("Providers remove a configured declared credential without reading its valu
   await tick();
   view.stdin.write("\r");
   await tick();
-  view.stdin.write("c");
-  await tick();
+  await chooseVisibleAction(view, "Manage credentials");
   assert.match(view.lastFrame(), /> api-key · required · configured/);
+  assert.match(view.lastFrame(), /> Set or rotate/);
 
-  view.stdin.write("x");
+  view.stdin.write("\u001b[C");
+  await tick();
+  assert.match(view.lastFrame(), /> Remove credential/);
+  view.stdin.write("\r");
   await tick();
   assert.deepEqual(mutations, [
     {
@@ -783,9 +786,10 @@ test("TuiApp confirms credential removal before deleting the stored value", asyn
   await tick();
   view.stdin.write("\r");
   await tick();
-  view.stdin.write("c");
+  await chooseVisibleAction(view, "Manage credentials");
+  view.stdin.write("\u001b[C");
   await tick();
-  view.stdin.write("x");
+  view.stdin.write("\r");
   await tick();
 
   assert.deepEqual(mutations, []);
@@ -798,9 +802,10 @@ test("TuiApp confirms credential removal before deleting the stored value", asyn
   assert.deepEqual(mutations, []);
   assert.doesNotMatch(view.lastFrame(), /Confirmation required/);
 
-  view.stdin.write("c");
+  await chooseVisibleAction(view, "Manage credentials");
+  view.stdin.write("\u001b[C");
   await tick();
-  view.stdin.write("x");
+  view.stdin.write("\r");
   await tick();
   view.stdin.write("\r");
   await tick();

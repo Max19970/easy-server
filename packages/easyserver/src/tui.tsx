@@ -166,6 +166,7 @@ type ProviderCredentialFlow =
       readonly kind: "picker";
       readonly providerSource: string;
       readonly selectedName: string;
+      readonly selectedAction: "set" | "remove";
     }
   | {
       readonly kind: "secret";
@@ -869,6 +870,7 @@ export function TuiShell({
           kind: "picker",
           providerSource: selectedProvider.source,
           selectedName: firstCredential.name,
+          selectedAction: "set",
         });
         setStatus(`Managing credentials for ${selectedProvider.source}.`);
       }
@@ -1073,6 +1075,7 @@ export function TuiShell({
             setProviderCredentialFlow({
               ...providerCredentialFlow,
               selectedName: next.name,
+              selectedAction: "set",
             });
           }
           return;
@@ -1081,7 +1084,25 @@ export function TuiShell({
           (credential) =>
             credential.name === providerCredentialFlow.selectedName,
         );
+        if ((key.leftArrow || key.rightArrow) && selected?.configured) {
+          setProviderCredentialFlow({
+            ...providerCredentialFlow,
+            selectedAction:
+              providerCredentialFlow.selectedAction === "set" ? "remove" : "set",
+          });
+          return;
+        }
         if (key.return && selected !== undefined) {
+          if (providerCredentialFlow.selectedAction === "remove" && selected.configured) {
+            onProviderMutation?.({
+              kind: "remove-credential",
+              source: providerCredentialFlow.providerSource,
+              name: selected.name,
+            });
+            setProviderCredentialFlow(undefined);
+            setStatus(`Removing credential ${selected.name}.`);
+            return;
+          }
           setProviderCredentialFlow({
             kind: "secret",
             providerSource: providerCredentialFlow.providerSource,
@@ -1089,16 +1110,6 @@ export function TuiShell({
             secret: "",
           });
           setStatus(`Enter a new value for credential ${selected.name}.`);
-          return;
-        }
-        if (input === "x" && selected?.configured) {
-          onProviderMutation?.({
-            kind: "remove-credential",
-            source: providerCredentialFlow.providerSource,
-            name: selected.name,
-          });
-          setProviderCredentialFlow(undefined);
-          setStatus(`Removing credential ${selected.name}.`);
           return;
         }
         return;
@@ -1109,6 +1120,7 @@ export function TuiShell({
           kind: "picker",
           providerSource: providerCredentialFlow.providerSource,
           selectedName: providerCredentialFlow.credentialName,
+          selectedAction: "set",
         });
         setStatus("Credential value entry cancelled.");
         return;
@@ -1895,12 +1907,13 @@ export function TuiShell({
         setStatus("Resolve the provider load failure before managing credentials.");
         return;
       }
-      const firstCredential = selected?.credentials.items[0];
+      const firstCredential = selected?.credentials.items?.[0];
       if (selected !== undefined && firstCredential !== undefined) {
         setProviderCredentialFlow({
           kind: "picker",
           providerSource: selected.source,
           selectedName: firstCredential.name,
+          selectedAction: "set",
         });
         setStatus(`Managing credentials for ${selected.source}.`);
       } else {
@@ -3079,7 +3092,7 @@ function EndpointIntentDetail({
           <Text>Remediation: {endpointIntentRemediation(intent)}</Text>
         </>
       ) : intent.state === "disabled" ? (
-        <Text>Recovery: desired state is disabled; press e to enable and realize it again.</Text>
+        <Text>Recovery: desired state is disabled; use Actions to enable and realize it again.</Text>
       ) : (
         <Text>Recovery: current transport is live. On daemon restart it will be recreated from this persisted definition.</Text>
       )}
@@ -3091,21 +3104,21 @@ function endpointIntentRemediation(intent: TuiEndpointIntentReadItem): string {
   const code = intent.failure?.code;
   const message = intent.failure?.message ?? "";
   if (code === "host-trust-required") {
-    return "review and enroll the exact SSH host fingerprint through a normal TUI connection flow, then press t to retry this intent";
+    return "review and enroll the exact SSH host fingerprint through a normal TUI connection flow, then use Actions to retry this intent";
   }
   if (code === "authentication") {
-    return "configure or rotate the required provider credential in Providers, then press t to retry";
+    return "configure or rotate the required provider credential in Providers, then use Actions to retry";
   }
   if (code === "provider-unavailable") {
-    return "restore provider or instance availability, refresh state, then press t to retry";
+    return "restore provider or instance availability, refresh state, then use Actions to retry";
   }
   if (code === "conflict" && /port/i.test(message)) {
     return "the requested fixed local port is unavailable; free it, or remove and recreate the intent with another fixed or dynamic port, then retry";
   }
   if (code === "unsupported-operation") {
-    return "restore a compatible provider Access Method, then press t to retry";
+    return "restore a compatible provider Access Method, then use Actions to retry";
   }
-  return "resolve the reported cause without deleting the desired intent, then press t to retry realization";
+  return "resolve the reported cause without deleting the desired intent, then use Actions to retry realization";
 }
 
 function NewInstanceSurface({
@@ -3211,10 +3224,13 @@ function ProvidersSurface({
         );
       }
 
+      const selectedCredential = provider.credentials.items.find(
+        (credential) => credential.name === credentialFlow.selectedName,
+      );
       return (
         <Box flexDirection="column">
           <Text bold>Credentials for {providerLabel}</Text>
-          <Text>↑/↓ choose · Enter set or rotate · Esc back</Text>
+          <Text>↑/↓ choose credential · ←/→ choose action · Enter run · Esc back</Text>
           {provider.credentials.items.map((credential) => (
             <Box key={credential.name} flexDirection="column" marginTop={1}>
               <Text bold={credential.name === credentialFlow.selectedName}>
@@ -3226,6 +3242,19 @@ function ProvidersSurface({
               )}
             </Box>
           ))}
+          {selectedCredential === undefined ? null : (
+            <Box marginTop={1} flexDirection="column">
+              <Text bold>Actions</Text>
+              <Text bold={credentialFlow.selectedAction === "set"}>
+                {credentialFlow.selectedAction === "set" ? "> " : "  "}Set or rotate
+              </Text>
+              {selectedCredential.configured ? (
+                <Text bold={credentialFlow.selectedAction === "remove"}>
+                  {credentialFlow.selectedAction === "remove" ? "> " : "  "}Remove credential
+                </Text>
+              ) : null}
+            </Box>
+          )}
         </Box>
       );
     }
@@ -3553,7 +3582,7 @@ function BulkInstanceActionGuidance({
   return (
     <Box flexDirection="column">
       <Text>
-        Bulk actions: {actions.map((action, index) => `${index + 1} ${action.slice("instance.".length)} (${bulkActionSupportCount(instances, action)}/${instances.length} advertise)`).join(" · ")}
+        Available bulk actions: {actions.map((action) => `${action.slice("instance.".length)} (${bulkActionSupportCount(instances, action)}/${instances.length} advertise)`).join(" · ")}
       </Text>
       <Text>Unsupported, failed and outcome-unknown targets stay visible independently; no target is retried blindly.</Text>
     </Box>
@@ -3573,7 +3602,7 @@ function InstanceActionGuidance({
   return (
     <Box flexDirection="column">
       {instance.management === "discovered" ? (
-        <Text>a Adopt for EasyServer management</Text>
+        <Text>Adopt for EasyServer management is available from Actions.</Text>
       ) : null}
       {instance.management === "discovered" &&
       instance.availableActions.includes("instance.destroy") ? (
@@ -3583,7 +3612,7 @@ function InstanceActionGuidance({
         <Text>No lifecycle actions are currently available.</Text>
       ) : (
         <Text>
-          Actions: {actions.map((action, index) => `${index + 1} ${action.slice("instance.".length)}`).join(" · ")}
+          Available lifecycle actions: {actions.map((action) => action.slice("instance.".length)).join(" · ")}
         </Text>
       )}
     </Box>
