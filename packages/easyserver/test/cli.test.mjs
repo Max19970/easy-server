@@ -2666,6 +2666,223 @@ test("daemon-owned sessions survive the creating CLI and restart without phantom
   }
 });
 
+test("global JSON mode exposes stable persisted Endpoint-intent identity and live endpoint state", async () => {
+  const stateFile = join(testDirectory, "json-endpoint-intent-state.json");
+  const daemonFile = join(testDirectory, "json-endpoint-intent-daemon.json");
+  const instanceId = "instance:550e8400-e29b-41d4-a716-446655440000";
+  const failedName = "json-failed";
+  const failedRemotePort = 9;
+  await writeFile(
+    stateFile,
+    `${JSON.stringify({
+      version: 1,
+      plugins: [{ source: daemonPlugin, enabled: true }],
+      instances: [
+        {
+          id: instanceId,
+          providerId: "daemon-fixture",
+          providerExternalId: "remote-1",
+        },
+      ],
+      endpointIntents: [
+        {
+          name: failedName,
+          enabled: true,
+          instanceId,
+          remoteHost: "127.0.0.1",
+          remotePort: failedRemotePort,
+          accessMethodId: "missing-method",
+        },
+      ],
+    })}\n`,
+    "utf8",
+  );
+
+  const echo = createServer((socket) => socket.pipe(socket));
+  echo.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+  await once(echo, "listening");
+  const echoAddress = echo.address();
+  assert.ok(echoAddress && typeof echoAddress !== "string");
+
+  const daemon = startDaemon(stateFile, daemonFile);
+  try {
+    await waitForDaemonFile(daemonFile, daemon);
+    const localPort = await findFreePort();
+    const expectedDefinition = {
+      name: "json-main",
+      enabled: true,
+      instanceId,
+      remoteHost: "127.0.0.1",
+      remotePort: echoAddress.port,
+      localPort,
+      accessMethodId: "fixture-loopback",
+    };
+    const created = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "--json",
+      "sessions",
+      "intents",
+      "create",
+      expectedDefinition.name,
+      instanceId,
+      "--port",
+      String(echoAddress.port),
+      "--local-port",
+      String(localPort),
+      "--access-method",
+      "fixture-loopback",
+    );
+    assert.equal(created.status, 0, created.stderr);
+    assert.equal(created.stderr, "");
+    const createdIntent = JSON.parse(created.stdout).data.endpointIntent;
+    assert.deepEqual(createdIntent, {
+      ...expectedDefinition,
+      state: "starting",
+    });
+    assert.equal("endpoint" in createdIntent, false);
+    assert.equal("accessMethod" in createdIntent, false);
+
+    let liveIntent;
+    const liveDeadline = Date.now() + 3000;
+    while (Date.now() < liveDeadline) {
+      const listed = runWithDaemon(
+        stateFile,
+        daemonFile,
+        "--json",
+        "sessions",
+        "intents",
+        "list",
+      );
+      assert.equal(listed.status, 0, listed.stderr);
+      const intents = JSON.parse(listed.stdout).data.endpointIntents;
+      liveIntent = intents.find(
+        (intent) => intent.name === expectedDefinition.name,
+      );
+      if (liveIntent?.state === "live") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.deepEqual(liveIntent, {
+      ...expectedDefinition,
+      state: "live",
+      endpoint: { host: "127.0.0.1", port: localPort },
+      accessMethod: {
+        id: "fixture-loopback",
+        kind: "daemon-fixture:loopback",
+        mode: "tcp-forward",
+      },
+    });
+    assert.equal(
+      await roundTrip(liveIntent.endpoint, "json-endpoint-intent"),
+      "json-endpoint-intent",
+    );
+
+    const disabled = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "--json",
+      "sessions",
+      "intents",
+      "disable",
+      expectedDefinition.name,
+    );
+    assert.equal(disabled.status, 0, disabled.stderr);
+    const disabledIntent = JSON.parse(disabled.stdout).data.endpointIntent;
+    assert.deepEqual(disabledIntent, {
+      ...expectedDefinition,
+      enabled: false,
+      state: "disabled",
+    });
+    assert.equal("endpoint" in disabledIntent, false);
+    assert.equal("accessMethod" in disabledIntent, false);
+
+    const enabled = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "--json",
+      "sessions",
+      "intents",
+      "enable",
+      expectedDefinition.name,
+    );
+    assert.equal(enabled.status, 0, enabled.stderr);
+    const enabledIntent = JSON.parse(enabled.stdout).data.endpointIntent;
+    assert.equal(enabledIntent.state, "starting");
+    assert.equal("endpoint" in enabledIntent, false);
+
+    let failedIntent;
+    const failureDeadline = Date.now() + 3000;
+    while (Date.now() < failureDeadline) {
+      const listed = runWithDaemon(
+        stateFile,
+        daemonFile,
+        "--json",
+        "sessions",
+        "intents",
+        "list",
+      );
+      assert.equal(listed.status, 0, listed.stderr);
+      const intents = JSON.parse(listed.stdout).data.endpointIntents;
+      failedIntent = intents.find((intent) => intent.name === failedName);
+      if (failedIntent?.state === "error") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(failedIntent?.state, "error");
+    assert.equal(failedIntent?.enabled, true);
+    assert.equal(failedIntent?.instanceId, instanceId);
+    assert.equal(failedIntent?.remoteHost, "127.0.0.1");
+    assert.equal(failedIntent?.remotePort, failedRemotePort);
+    assert.equal(failedIntent?.accessMethodId, "missing-method");
+    assert.equal(typeof failedIntent?.failure?.code, "string");
+    assert.equal(typeof failedIntent?.failure?.message, "string");
+    assert.equal("endpoint" in failedIntent, false);
+    assert.equal("accessMethod" in failedIntent, false);
+
+    const retried = runWithDaemon(
+      stateFile,
+      daemonFile,
+      "--json",
+      "sessions",
+      "intents",
+      "retry",
+      failedName,
+    );
+    assert.equal(retried.status, 0, retried.stderr);
+    const retriedIntent = JSON.parse(retried.stdout).data.endpointIntent;
+    assert.equal(retriedIntent.state, "starting");
+    assert.equal("endpoint" in retriedIntent, false);
+
+    for (const name of [failedName, expectedDefinition.name]) {
+      const removed = runWithDaemon(
+        stateFile,
+        daemonFile,
+        "--json",
+        "sessions",
+        "intents",
+        "remove",
+        name,
+      );
+      assert.equal(removed.status, 0, removed.stderr);
+      assert.deepEqual(JSON.parse(removed.stdout).data.endpointIntent, {
+        name,
+        removed: true,
+      });
+    }
+  } finally {
+    if (daemon.child.exitCode === null) {
+      daemon.child.kill();
+      await once(daemon.child, "exit");
+    }
+    await new Promise((resolve, reject) =>
+      echo.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
 test("rejects malformed plugin list arguments", () => {
   const result = run("plugins", "list", "--plugin");
   assert.equal(result.status, 1);

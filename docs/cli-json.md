@@ -48,7 +48,7 @@ Common core shapes include:
 - single lifecycle mutations → `data.action`, `data.instanceId`, `data.status` and any host warnings;
 - bulk lifecycle mutations → `data.result` plus any host warnings, preserving every per-target result and summary;
 - `sessions list` → `data.sessions`;
-- Endpoint-intent commands → `data.endpointIntents` or `data.endpointIntent`;
+- Endpoint-intent commands → `data.endpointIntents` or `data.endpointIntent`. Each persisted intent status exposes stable definition fields `name`, `enabled`, `instanceId`, `remoteHost`, and `remotePort`, plus requested `localPort` / `accessMethodId` when supplied. `state` is one of `starting`, `live`, `error`, or `disabled`. Only `live` carries a usable `endpoint` (`host`, `port`) and selected `accessMethod` (`id`, `kind`, `mode`); `error` instead carries `failure.code` and `failure.message`, while `starting` and `disabled` carry neither a live endpoint nor access-method realization. `sessions intents remove` returns `data.endpointIntent` with the removed `name` and `removed: true`. Automation may locate an intent by stable `name` and verify `instanceId`, but must treat the realized localhost endpoint as runtime state: when no fixed `localPort` was requested it may change after daemon restart;
 - provider-feature discovery → `data.features` or provider/feature command descriptors;
 - daemon commands → `data.daemon`;
 - `connect` → the published `data.endpoint` and selected `data.accessMethod` once the foreground Endpoint is ready.
