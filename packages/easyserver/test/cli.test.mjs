@@ -1323,6 +1323,20 @@ test("global JSON mode exposes stable core plugin, inventory, lifecycle and erro
     status: "requested",
     warnings: [],
   });
+
+  const daemonStatus = runWithDaemon(
+    stateFile,
+    join(testDirectory, "json-stopped-daemon.json"),
+    "--json",
+    "daemon",
+    "status",
+  );
+  assert.equal(daemonStatus.status, 0, daemonStatus.stderr);
+  assert.deepEqual(JSON.parse(daemonStatus.stdout), {
+    schemaVersion: 1,
+    ok: true,
+    data: { daemon: { status: "stopped" } },
+  });
 });
 
 test("global JSON mode preserves provider-owned command output as namespaced raw transcript", () => {
@@ -1415,6 +1429,28 @@ test("bulk lifecycle accepts multiple explicit instance IDs and reports partial 
     result.stdout,
     /Summary action=instance\.stop requested=2 completed=1 failed=1 outcome-unknown=0/,
   );
+
+  const jsonStateFile = join(testDirectory, "json-bulk-instance-state.json");
+  assert.equal(
+    runWithState(jsonStateFile, "plugins", "add", inventoryPlugin).status,
+    0,
+  );
+  const jsonList = runWithState(jsonStateFile, "instances", "list");
+  const [jsonInstanceId] = jsonList.stdout.match(/instance:[0-9a-f-]+/i) ?? [];
+  assert.ok(jsonInstanceId);
+  const jsonResult = runWithState(
+    jsonStateFile,
+    "--json",
+    "instances",
+    "stop",
+    jsonInstanceId,
+    missingId,
+  );
+  assert.equal(jsonResult.status, 0, jsonResult.stderr);
+  const envelope = JSON.parse(jsonResult.stdout);
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.result.summary.completed, 1);
+  assert.equal(envelope.data.result.summary.failed, 1);
 });
 
 test("non-interactive destroy requires --yes before provider dispatch", async () => {
@@ -1830,6 +1866,19 @@ test("instances list returns useful partial inventory with explicit degraded sta
     /Provider partial-failing inventory failed \(provider-unavailable\): Provider partial-failing inventory refresh failed/,
   );
   assert.doesNotMatch(result.stderr, /provider-private-payload=must-not-escape/);
+
+  const jsonResult = runWithState(stateFile, "--json", "instances", "list");
+  assert.equal(jsonResult.status, 0, jsonResult.stderr);
+  assert.equal(jsonResult.stderr, "");
+  const envelope = JSON.parse(jsonResult.stdout);
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.inventory.complete, false);
+  assert.equal(
+    envelope.data.inventory.providers.some(
+      (provider) => provider.providerId === "partial-failing" && provider.status === "failed",
+    ),
+    true,
+  );
 });
 
 test("instances list reports total inventory failure when no useful state exists", async () => {

@@ -53,7 +53,9 @@ Common core shapes include:
 - daemon commands → `data.daemon`;
 - `connect` → the published `data.endpoint` and selected `data.accessMethod` once the foreground Endpoint is ready.
 
-Some successful observations intentionally retain a non-zero legacy exit status. For example, a partial bulk result or a daemon status such as `stopped`/`stale` is still a successfully structured result (`ok: true`) even though its exit status communicates degraded/non-running state. Treat `ok: false` as a terminal command failure; use the documented command data together with the process exit status when the distinction matters.
+JSON mode has one success channel: an `ok: true` envelope exits with status `0`, while an `ok: false` terminal command failure exits non-zero. Degraded-but-successful state stays explicit in `data` instead of conflicting with the envelope through a non-zero exit code. For example, partial inventory keeps `data.inventory.complete: false` and per-provider failures; partial bulk results keep every per-target result; daemon status keeps `stopped` or `stale` in `data.daemon.status`.
+
+When running the repository through an npm development script, npm may append its own lifecycle diagnostics after a non-zero EasyServer command. Those lines are not part of the EasyServer JSON contract. Installed `easyserver` owns only its JSON document and process exit status.
 
 ## Provider-specific commands
 

@@ -371,14 +371,14 @@ async function reportManagedDaemonStatus(): Promise<void> {
   }
   if (state.status === "stopped") {
     writeCliSuccess({ daemon: { status: "stopped" } }, "stopped\n");
-    process.exitCode = 1;
+    setHumanDegradedExitCode(1);
     return;
   }
   writeCliSuccess(
     { daemon: { status: "stale", reason: state.reason } },
     `stale reason=${escapeTerminalText(state.reason)}\n`,
   );
-  process.exitCode = 2;
+  setHumanDegradedExitCode(2);
 }
 
 async function startManagedDaemon(): Promise<void> {
@@ -410,7 +410,7 @@ async function stopManagedDaemon(): Promise<void> {
       { daemon: { status: "stale", reason: result.reason } },
       `EasyServer daemon is unreachable; descriptor left intact (${escapeTerminalText(result.reason)}).\n`,
     );
-    process.exitCode = 2;
+    setHumanDegradedExitCode(2);
     return;
   }
   writeCliSuccess(
@@ -985,7 +985,7 @@ async function runInstances(args: readonly string[]): Promise<void> {
         }
       }
       if (!inventory.complete) {
-        process.exitCode = inventory.instances.length > 0 ? 2 : 1;
+        setHumanDegradedExitCode(inventory.instances.length > 0 ? 2 : 1);
       }
       return;
     }
@@ -1104,7 +1104,7 @@ async function runInstances(args: readonly string[]): Promise<void> {
         formatBulkInstanceActionResult(result),
       );
       if (result.summary.failed + result.summary.outcomeUnknown > 0) {
-        process.exitCode = result.summary.completed > 0 ? 2 : 1;
+        setHumanDegradedExitCode(result.summary.completed > 0 ? 2 : 1);
       }
       return;
     }
@@ -1671,6 +1671,12 @@ function parseCliInvocation(args: readonly string[]): {
   return args[0] === "--json"
     ? { outputMode: "json", args: args.slice(1) }
     : { outputMode: "human", args };
+}
+
+function setHumanDegradedExitCode(code: 1 | 2): void {
+  if (cliOutputMode === "human") {
+    process.exitCode = code;
+  }
 }
 
 function writeCliSuccess<T>(data: T, humanText: string): void {
