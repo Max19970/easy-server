@@ -205,7 +205,7 @@ function verifyPortableTui(prefix) {
       "-Program 'cmd.exe'",
       `-ProgramArgsJson '${powerShellLiteral(JSON.stringify(["/d", "/c", executable]))}'`,
       "-ExitMode 'quit'",
-      "-ExpectedText 'No provider plugins configured.'",
+      "-ExpectedText 'What do you want to do?'",
     ].join(" "),
   );
 }

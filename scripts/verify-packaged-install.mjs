@@ -542,7 +542,7 @@ function verifyInstalledTui(prefix) {
 
   const executable = installedExecutable(prefix);
   assert.equal(existsSync(executable), true, "npm must expose the easyserver executable");
-  runWindowsTuiSmoke(executable, "No provider plugins configured.");
+  runWindowsTuiSmoke(executable, "What do you want to do?");
 }
 
 function runWindowsTuiSmoke(executable, expectedText) {
