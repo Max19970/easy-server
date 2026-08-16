@@ -1,18 +1,29 @@
 # @easyai101/easyserver-plugin-vastai
 
-Opt-in EasyServer Provider Plugin for Vast.ai compute.
+First-party Vast.ai Provider Plugin for EasyServer: marketplace search/rental plus shared EasyServer lifecycle and SSH-backed local connections.
 
-## Install and register
+## Install
 
-Install EasyServer separately, then install only the provider you want:
+Install it into the same npm environment as the EasyServer CLI:
 
-```sh
+```powershell
 npm install --global @easyai101/easyserver-plugin-vastai
+```
+
+Then run:
+
+```powershell
+easyserver
+```
+
+Open **Settings & Support → Providers → Add installed provider**, choose **Vast.ai**, and configure the declared API-key credential.
+
+For automation/advanced setup, the installed package can also be registered explicitly:
+
+```powershell
 easyserver plugins add @easyai101/easyserver-plugin-vastai
 ```
 
-This package does not install Intelion.cloud or any other Provider Plugin.
+The provider requires account preparation for SSH-backed rentals; do not assume a valid API key is also an SSH login identity.
 
-After registration, configure the plugin credential through EasyServer rather than placing provider API keys in repository files or command arguments.
-
-Documentation and source: https://github.com/Max19970/easy-server
+Full provider guide: https://github.com/Max19970/easy-server/blob/main/docs/providers/vastai.md

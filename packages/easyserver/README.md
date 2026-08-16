@@ -1,20 +1,35 @@
 # @easyai101/easyserver
 
-EasyServer is a provider-independent CLI for acquiring, managing and locally accessing rented compute.
+EasyServer is the CLI/TUI package for renting and managing provider compute, then exposing remote TCP services on local `127.0.0.1` addresses.
 
 ## Install
 
-```sh
+```powershell
 npm install --global @easyai101/easyserver
 ```
 
-The CLI installs with **zero Provider Plugins**. Providers are opt-in packages selected by the user. For example:
+Run the interactive TUI:
 
-```sh
-npm install --global @easyai101/easyserver-plugin-vastai
-easyserver plugins add @easyai101/easyserver-plugin-vastai
+```powershell
+easyserver
 ```
 
-Use `easyserver plugins list` to inspect configured plugins and `easyserver --help` for the command surface.
+Open the automation/advanced CLI hierarchy:
 
-Full documentation and source: https://github.com/Max19970/easy-server
+```powershell
+easyserver --help
+```
+
+The core package installs with **zero Provider Plugins**. Add only the providers you want, for example:
+
+```powershell
+npm install --global @easyai101/easyserver-plugin-vastai
+```
+
+Then run `easyserver` and use **Settings & Support → Providers → Add installed provider**, or register the package explicitly from command mode.
+
+Project documentation:
+
+- [README](https://github.com/Max19970/easy-server#readme)
+- [Getting started](https://github.com/Max19970/easy-server/blob/main/docs/getting-started.md)
+- [Documentation index](https://github.com/Max19970/easy-server/blob/main/docs/README.md)

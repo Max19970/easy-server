@@ -1,74 +1,109 @@
-# Support and maintenance policy
+# Support and maintenance
 
-EasyServer is a young open-source project. The current `0.2.x` line is maintained on a best-effort basis, with compatibility rules defined by [Versioning and compatibility](versioning-and-compatibility.md). This policy explains what users and contributors can expect without creating an enterprise-style SLA or an indefinite support promise.
+EasyServer is a young open-source project maintained on a best-effort basis. This page explains where to report problems and what maintenance users should expect without implying an enterprise support contract or fixed release cadence.
 
-## Reporting bugs and provider regressions
+Compatibility guarantees are defined separately in [Versioning and compatibility](versioning-and-compatibility.md). Security vulnerabilities use the private process in [SECURITY.md](../SECURITY.md).
 
-Use a public GitHub issue for ordinary product bugs and regressions. Include, where relevant:
+## Report an ordinary bug
 
-- EasyServer and Provider Plugin versions;
+Open a public GitHub issue for reproducible product bugs, usability defects, provider regressions, and documentation problems.
+
+Useful reports include:
+
+- EasyServer version;
+- Provider Plugin/version when the problem is provider-specific;
 - operating system and Node.js version;
-- the command or public workflow that failed;
-- expected and observed behavior;
-- a minimal reproduction or sanitized diagnostic output.
+- the command or TUI workflow that failed;
+- what you expected and what happened instead;
+- a minimal reproduction when practical;
+- a reviewed/sanitized Diagnostics report when it helps.
 
-Provider-specific breakage should name the affected provider and whether the same workflow worked previously. Prefer attaching the output of `easyserver doctor` instead of raw logs when it contains enough information to reproduce or triage the problem.
+For provider regressions, name the affected provider and say whether the same workflow previously worked.
 
-Never include API keys, passwords, private SSH material, bearer tokens, daemon authentication tokens, raw credential values, Secret References such as `secret:<uuid>`, provider resource/account identifiers, or raw provider payloads that may contain sensitive account data. Do not paste a whole `~/.easyserver` directory, OS-keyring export or unreviewed debug log into a public issue.
+Do not include secrets or private account material in a public issue.
 
-### Privacy-safe diagnostics
+## Use privacy-safe Diagnostics
 
-`easyserver doctor` produces a JSON troubleshooting payload designed to be safe to review and paste into a public bug report. It reports only bounded product/runtime state:
+The TUI exposes **Settings & Support → Diagnostics**. Command mode also provides:
 
-- EasyServer, Node.js, operating-system platform and architecture versions;
-- whether Local State is readable plus counts of configured plugins, credential bindings and canonical instance bindings;
-- configured Provider Plugin status, safe plugin/provider identity where available, and loaded plugin version;
-- coarse plugin failure classes such as `incompatible`, `timeout` or `load-failed` instead of raw exception text;
-- daemon health and, when available, only the count of daemon-owned sessions;
-- local OpenSSH command availability needed for SSH access troubleshooting.
+```powershell
+easyserver doctor
+```
 
-The diagnostic payload intentionally excludes credential values and Secret References, SSH private keys, daemon tokens and loopback descriptor details, canonical/provider instance identifiers, provider-originated names/payloads, local plugin filesystem paths and raw plugin/provider exception text. EasyServer does not dispatch provider operations or resolve configured credentials in order to build this report.
+The report is designed to provide bounded product/runtime health information without resolving provider credentials or dumping raw provider responses.
 
-Review the generated JSON before posting it anyway, especially when using third-party Provider Plugins. A plugin module is ordinary JavaScript and may have its own import-time behavior outside EasyServer's diagnostic payload contract.
+It can include information such as:
 
-Security vulnerabilities are different: report them privately using the repository's **Security → Report a vulnerability** flow, as described in the root [`SECURITY.md`](../SECURITY.md). Do not open a public issue for an undisclosed vulnerability.
+- EasyServer, Node.js, platform, and architecture versions;
+- whether Local State is readable and coarse counts of configured objects;
+- configured Provider Plugin load/readiness state and loaded versions;
+- coarse plugin failure classes;
+- daemon health and bounded connection counts;
+- local OpenSSH tool availability.
 
-## Triage and patch releases
+It intentionally excludes raw credential values and Secret References, private SSH material, daemon bearer tokens, loopback descriptor secrets, provider account/resource identifiers, local plugin filesystem paths, and raw provider/plugin exception bodies from the normal support payload.
 
-While `0.2.x` is the current released minor line, confirmed regressions in documented public behavior are candidates for the next `0.2.x` patch when they can be fixed without breaking the `0.2.x` compatibility contract.
+Review the generated report before posting it anyway, especially when third-party Provider Plugins are installed.
 
-A patch release may contain:
+## Never paste these into a public issue
 
-- backward-compatible bug and security fixes;
-- Provider Plugin compatibility repairs for upstream provider changes;
+Do not publish:
+
+- API keys/tokens;
+- passwords;
+- private SSH keys;
+- bearer/session/daemon authentication tokens;
+- raw credential values;
+- Secret References such as `secret:<uuid>`;
+- unreviewed `~/.easyserver` contents;
+- OS-keyring exports;
+- raw provider payloads containing account/resource data;
+- unreviewed debug logs.
+
+If the issue is a suspected vulnerability rather than an ordinary bug, stop and use the private vulnerability-reporting path in [SECURITY.md](../SECURITY.md).
+
+## Maintenance of the current line
+
+While `0.2.x` is the current released compatibility line, confirmed regressions in documented `0.2.x` behavior are candidates for a patch release when they can be fixed without breaking that line's public contract.
+
+A compatible patch may include:
+
+- bug/security fixes;
+- repairs for upstream provider API changes;
 - dependency maintenance;
 - documentation corrections;
-- small additive changes that do not change existing public requirements.
+- small additive changes that do not change existing requirements.
 
-A change that requires existing users, scripts or compatible Provider Plugins to change belongs in a later minor line such as `0.3.0`, unless an external service has made the old behavior impossible or unsafe. Such exceptional cases must be documented explicitly rather than disguised as ordinary patch compatibility.
+A change that requires users, scripts, or compatible Provider Plugins to migrate normally belongs in the next minor compatibility line.
 
-With `0.2.x` as the current release line, `0.1.x` no longer receives general maintenance. Critical security or data-integrity fixes may still be backported at maintainer discretion, but no backport commitment or fixed end-of-life date is promised.
+`0.1.x` no longer receives general maintenance while `0.2.x` is current. Critical security/data-integrity fixes may be backported at maintainer discretion, but there is no indefinite backport promise.
 
-## First-party Provider Plugins
+## First-party provider maintenance
 
-The first-party Vast.ai and Intelion.cloud Provider Plugins are maintained under the same `0.2.x` compatibility line as the core packages while their documented provider integrations remain viable.
+The Vast.ai and Intelion.cloud plugins are maintained with the same current compatibility line as EasyServer while the documented provider integrations remain viable.
 
-Provider APIs and policies are external dependencies. If an upstream provider change temporarily breaks an integration, maintainers will prefer one of these outcomes:
+Provider APIs/policies are external dependencies. When an upstream change breaks an integration, the project may:
 
-1. ship a backward-compatible Provider Plugin repair in the next patch;
-2. document a temporary known limitation when the provider-side condition cannot be repaired immediately;
-3. deprecate or remove support in a later minor release when continued compatibility is no longer practical.
+1. ship a backward-compatible plugin repair;
+2. document a temporary limitation while a repair is unavailable;
+3. deprecate/remove the integration in a later compatibility line when the upstream contract is no longer practical.
 
-A `0.2.x` patch should not silently remove a still-viable documented provider contract. If a provider shuts down, withdraws the required API or otherwise makes the existing contract impossible, EasyServer may fail that provider clearly and update the documentation even though the external service is no longer usable.
+If the provider itself removes an API or service needed by the integration, EasyServer cannot guarantee continued provider availability; it should fail the affected provider clearly rather than corrupt unrelated provider state.
 
 ## Security handling
 
-Private vulnerability reports are acknowledged and investigated on a best-effort basis. Confirmed vulnerabilities are prioritized according to severity and user impact. A compatible fix may be released as an urgent `0.2.x` patch while that line is current; compatibility-breaking remediation moves to a later minor unless preserving the old behavior would keep users unsafe.
+Private vulnerability reports are investigated and remediated on a best-effort basis. A compatible fix can ship as a patch in the current line; compatibility-breaking remediation moves to a later line unless preserving old behavior would keep users unsafe.
 
-EasyServer does not promise a fixed acknowledgement time, remediation time or release deadline. Reporters should avoid public disclosure until maintainers have had a reasonable opportunity to assess and ship a fix.
+No fixed acknowledgement/remediation SLA is promised. Coordinate disclosure through the private report rather than opening a public issue for an undisclosed vulnerability.
 
-## What this policy does not promise
+## What support does not promise
 
-There is no paid support contract, uptime guarantee, provider availability guarantee, response-time SLA, guaranteed release cadence or perpetual maintenance commitment for pre-1.0 lines. Maintainers may prioritize work based on severity, reproducibility, user impact and available project capacity.
+EasyServer currently provides no:
 
-The compatibility promises in the versioning policy remain the source of truth for what a release may change; this document only defines how maintenance work is triaged and supported over time.
+- paid support contract;
+- response-time SLA;
+- uptime/provider-availability guarantee;
+- guaranteed release cadence;
+- perpetual maintenance commitment for pre-1.0 lines.
+
+Maintainers may prioritize based on severity, reproducibility, user impact, security/data-integrity risk, and available project capacity.

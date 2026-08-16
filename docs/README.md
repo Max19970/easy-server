@@ -43,7 +43,8 @@ Provider-specific command trees expose their own nested help when the installed 
 
 ## Build a Provider Plugin
 
-- [Provider Plugin authoring and operational safety](plugin-authoring-and-operational-safety.md) — current full SDK authoring, contract, and safety guide. This will be split into a shorter onboarding path and dense reference as the documentation rewrite continues.
+- [Build a Provider Plugin](plugin-authoring.md) — approachable package-to-working-provider path.
+- [Provider Plugin contracts and operational safety](plugin-reference.md) — precise identity, lifecycle, feature, mutation, credential, access, cleanup, trust, and compatibility contracts.
 - [`@easyai101/easyserver-plugin-sdk`](../packages/plugin-sdk/README.md) — package-level SDK entry point.
 - [Minimal Provider Plugin example](../examples/minimal-provider-plugin/README.md) — small executable example package.
 

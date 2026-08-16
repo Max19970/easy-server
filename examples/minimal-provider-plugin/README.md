@@ -1,21 +1,37 @@
 # Minimal Provider Plugin example
 
-This directory is a deliberately small third-party-style EasyServer Provider Plugin. It depends only on the public `@easyai101/easyserver-plugin-sdk` package and is intentionally outside the repository's npm workspace graph.
+This directory is a deliberately small third-party-style EasyServer Provider Plugin built only against the public `@easyai101/easyserver-plugin-sdk` package.
 
-Read `index.mjs` from top to bottom: it demonstrates the recommended minimum extension surfaces without production-provider HTTP/client noise:
+It is intentionally outside the repository's npm workspace graph so it remains representative of an external provider package rather than silently depending on EasyServer source internals.
 
-- manifest identity plus EasyServer/Plugin SDK compatibility ranges;
+## What the example demonstrates
+
+Read `index.mjs` from top to bottom. It shows:
+
+- manifest identity and EasyServer/Plugin SDK compatibility ranges;
 - a normalized Provider Adapter with inventory and authoritative `getInstance()` behavior;
-- declaring `api-key` as a required credential in manifest metadata so the host can validate names and expose readiness without reading the secret;
-- resolving that plugin-owned named credential through `context.resolveCredential()` instead of storing raw secrets;
-- a secret-free SSH Access Method while leaving generic SSH transport to EasyServer's built-in Access Adapter;
-- a provider-owned `catalog/show` CLI command contributed through a Provider Feature;
-- no lifecycle capabilities or custom Access Adapter when the example does not actually need them.
+- a declared `api-key` credential name;
+- resolving that credential through `context.resolveCredential()` instead of storing raw secret values;
+- a secret-free SSH Access Method that reuses EasyServer's built-in SSH transport;
+- one provider-owned read-only `catalog/show` Provider Feature;
+- no lifecycle capability or custom Access Adapter when the example does not need one.
 
-A real acquisition flow is also provider-specific and belongs in a Provider Feature, but this reference intentionally keeps its feature read-only so it does not teach fake mutation/idempotency semantics. The full guide covers mutation dispatch, `outcome-unknown`, provider-deferred access credentials and custom Access Adapters for providers that genuinely need them.
+The feature is intentionally read-only. A fake mutation would teach the wrong lessons about dispatch, idempotency, and `outcome-unknown`; those contracts are documented separately.
 
-The package is marked `private` only so this repository cannot accidentally publish the example name. When using it as a scaffold, choose your own package name and remove `private` before publishing.
+## Use it as a scaffold
 
-The release verification packs this directory, installs it outside the monorepo alongside packed EasyServer artifacts, registers it with `easyserver plugins add @easyai101/easyserver-example-provider`, verifies that the host loads provider `example`, and invokes its provider-owned `catalog/show` command through the installed CLI.
+The example package is marked `private` only to prevent this repository from accidentally publishing the example name.
 
-See [`../../docs/plugin-authoring-and-operational-safety.md`](../../docs/plugin-authoring-and-operational-safety.md) for the complete contract, including mutation/acquisition and custom-transport patterns.
+When adapting it for a real provider:
+
+1. choose your own package name and stable provider/plugin IDs;
+2. remove `private` when the package is meant to be published;
+3. add only the capabilities/features/transports your provider actually supports;
+4. keep provider-specific acquisition/configuration inside Provider Features;
+5. validate the packed package from an external install layout before publishing.
+
+## Read the full contracts
+
+- [Build a Provider Plugin](../../docs/plugin-authoring.md)
+- [Provider Plugin contracts and operational safety](../../docs/plugin-reference.md)
+- [`@easyai101/easyserver-plugin-sdk`](../../packages/plugin-sdk/README.md)

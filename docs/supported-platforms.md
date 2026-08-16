@@ -1,71 +1,86 @@
 # Supported platforms
 
-EasyServer `0.2.0` makes a deliberately narrow platform promise: **Windows 11 x64**.
+EasyServer `0.2.x` currently makes one release-level client-platform promise: **Windows 11 x64**.
 
-The codebase and native dependencies may run on additional operating systems, but installation success alone is not a support claim. A platform is supported only after clean installation, deterministic release checks, packaged plugin loading, real OS Secret Store integration and representative access behavior have been qualified together.
+Other operating systems may run parts of the project, but installability alone is not a support claim. Linux and macOS remain unqualified until their package, Secret Store, terminal, provider, and connection paths are verified to the same standard.
 
-## 0.2.0 supported matrix
+## Supported matrix
 
-| Platform | Architecture | Status | Secret Store | SSH access prerequisite |
+| Platform | Architecture | Status | Secret Store | SSH prerequisite |
 | --- | --- | --- | --- | --- |
-| Windows 11 | x64 | Supported | Windows Credential Manager through the OS keyring integration | Windows OpenSSH Client: `ssh` on `PATH`; `ssh-keyscan` is preferred for first-use discovery but has a bounded `ssh` handshake fallback |
+| Windows 11 | x64 | Supported | Windows Credential Manager through EasyServer's OS keyring integration | Windows OpenSSH Client; `ssh` on `PATH` |
 
-Runtime line:
+Qualified runtime for the `0.2.x` release line:
 
 - Node.js `24.18.1`;
 - npm `11.16.0` for npm-based installation and Provider Plugin package installation.
 
-The supported GitHub Release download for this platform is `easyserver-<version>-windows-x64.zip`. It is a portable core-CLI bundle rather than a native executable: Node.js is required on `PATH`, while npm is not required merely to run the extracted core bundle. Every release ZIP is paired with `easyserver-<version>-SHA256SUMS.txt` and verified after clean extraction outside the repository before release.
+The published package engine range accepts Node.js from `24.18.1` up to, but not including, Node 25. When diagnosing release-specific behavior, use the qualified runtime above before treating another Node version as equivalent evidence.
 
-The npm package `engines` ranges accept the Node 24 line from `24.18.1` up to, but not including, Node 25. The release itself is built and continuously verified with the exact runtime versions above; use those versions when diagnosing release-specific behavior.
+## Windows OpenSSH
 
-## What is qualified on Windows
+EasyServer's built-in SSH connection path uses the system OpenSSH client rather than embedding an SSH implementation.
 
-The release verification covers:
-
-- clean `npm ci`, typechecking, build and deterministic test suites;
-- packed CLI/Plugin SDK/first-party Provider Plugin artifacts;
-- a global npm installation with a working `easyserver` executable and real no-argument TUI launch;
-- a portable GitHub Release ZIP built from packed core packages, checksum verification and a clean extracted-bundle TUI smoke test;
-- real Windows terminal qualification for normal quit, Ctrl+C, thrown-error cleanup, narrow/wide rendering, resize, `NO_COLOR` and screen-reader mode;
-- the default zero-Provider-Plugin installation and explicit plugin installation/loading;
-- Local State persistence and atomic updates;
-- a real create/read/delete round trip through the OS keyring adapter;
-- Provider Plugin lifecycle/feature contracts;
-- generic SSH Access Adapter behavior, host-trust handling and local Endpoint/session cleanup;
-- real-account first-party Provider acceptance on a Windows 11 x64 client before release.
-
-Real provider acceptance is a maintainer release check and intentionally does not run in ordinary public pull-request CI because it would require provider credentials and potentially paid compute resources.
-
-## OpenSSH prerequisite
-
-EasyServer `0.2.0` uses the production OpenSSH command-line tools for its generic SSH access path rather than embedding an SSH implementation.
-
-Before using an SSH-backed Provider Access Method, verify the OpenSSH client:
+Check the client with:
 
 ```powershell
 ssh -V
 ```
 
-`ssh-keyscan` is also used when available and can be checked with `Get-Command ssh-keyscan`. If keyscan is missing or cannot negotiate with a particular server, EasyServer can obtain first-use public host-key evidence through one bounded `ssh` handshake against an isolated temporary known-hosts file. That fallback is discovery only: the temporary file is removed, permanent EasyServer trust still requires explicit fingerprint approval, and changed previously trusted keys still fail closed. If `ssh` itself is unavailable, install/enable the Windows OpenSSH Client feature and make sure it is reachable through `PATH`.
+`ssh-keyscan` is preferred for first-use host-key discovery when available:
 
-EasyServer manages its own permanent known-host trust file. On first interactive access it can show the discovered fingerprint and ask for explicit confirmation; non-interactive daemon setup never auto-trusts an unknown host.
+```powershell
+Get-Command ssh-keyscan
+```
 
-## Not supported by the 0.2.0 contract
+If `ssh-keyscan` is missing or cannot negotiate with a particular server, EasyServer can fall back to one bounded, commandless `ssh` handshake against an isolated temporary known-hosts file. That fallback only obtains public host-key evidence for review; it does not create permanent trust.
 
-The following are **not qualified support targets for 0.2.0**:
+If `ssh` itself is unavailable, enable/install the Windows OpenSSH Client feature and make sure the executable is reachable through `PATH`.
+
+See [Connections](connections.md#first-use-ssh-host-trust) for the trust flow.
+
+## Secret Store requirement
+
+Provider credentials are kept through the operating-system Secret Store rather than ordinary EasyServer Local State.
+
+On the supported Windows path, EasyServer uses Windows Credential Manager through its keyring integration. A functioning native keyring integration is part of the support contract; a machine where that integration cannot operate is not equivalent to the qualified environment even if the JavaScript package installs successfully.
+
+See the [Security model](security-model.md#provider-credentials-and-secret-store) for the trust boundary.
+
+## npm installation
+
+The primary package path is:
+
+```powershell
+npm install --global @easyai101/easyserver
+```
+
+Provider Plugins are separate opt-in packages installed into the same package environment. See [Getting started](getting-started.md).
+
+## Portable GitHub Release ZIP
+
+Windows releases also provide:
+
+```text
+easyserver-<version>-windows-x64.zip
+easyserver-<version>-SHA256SUMS.txt
+```
+
+The ZIP contains the core CLI/runtime dependencies but not Node.js or Provider Plugins. It is not a native standalone executable.
+
+Follow [Install from GitHub Releases](github-release-install.md) for checksum verification, extraction, and prefix-aware plugin installation.
+
+## Not supported by the current `0.2.x` contract
+
+The following are not currently release-qualified client targets:
 
 - Linux distributions;
 - macOS;
 - Windows on ARM64;
 - Windows versions other than Windows 11;
-- containers/WSL/headless environments as a distinct client platform contract;
+- WSL/containers/headless environments as distinct client-platform contracts;
 - Node 25 or newer.
 
-During pre-release qualification, Windows completed the release gate and real OS-keyring probe. Ubuntu and macOS GitHub runners did not complete the same release gate reliably enough to justify a support claim. The follow-up work is tracked separately rather than weakening the meaning of “supported”.
+“Not supported” does not necessarily mean “known incompatible”. It means the project does not currently promise release-level support for that environment.
 
-An unsupported platform is not necessarily known to be incompatible; it means EasyServer `0.2.0` does not promise release-level support for it.
-
-## Future platform expansion
-
-Additional platforms should be added only after the full platform smoke is reproducible: clean package install, CLI startup, Local State, real Secret Store, plugin loading and applicable access/cleanup behavior. Linux also needs an explicit supported Secret Service/keyring prerequisite instead of assuming every headless machine has a desktop credential service.
+Linux/macOS qualification is tracked separately in [GitHub issue #39](https://github.com/Max19970/easy-server/issues/39).

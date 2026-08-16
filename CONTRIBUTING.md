@@ -1,31 +1,62 @@
 # Contributing to EasyServer
 
-Thanks for helping improve EasyServer.
+Thanks for helping improve EasyServer. Contributions should preserve the product boundaries that let provider-specific behavior evolve without turning core into a collection of provider branches.
 
 ## Development setup
 
-EasyServer 0.2.x is developed and verified with Node.js 24.18.1 and npm 11.16.0. The exact Node version is recorded in `.nvmrc`.
+EasyServer `0.2.x` is developed and verified with Node.js `24.18.1` and npm `11.16.0`. The exact Node version is recorded in `.nvmrc`.
 
-```sh
+Install the repository dependencies:
+
+```powershell
 npm ci
+```
+
+Run the full deterministic release-level repository check before submitting a substantial change:
+
+```powershell
 npm run release:check
 ```
 
-`release:check` typechecks, builds, runs the deterministic test suites, dry-runs every publishable workspace package, verifies clean packaged installs and builds/checks the supported GitHub Release artifact from a clean extracted copy.
+That check covers typechecking, tests, publishable package shapes, packaged installation, the supported Windows TUI surface, and the release artifact build/verification path.
 
-Ordinary development and pull-request validation must not require real provider credentials or paid compute resources. Live Vast.ai/Intelion.cloud acceptance is a maintainer release activity, not a normal contributor prerequisite.
+Ordinary development and pull-request validation must not require real provider credentials or paid resources. Live first-party provider acceptance is a maintainer release activity, not a normal contributor prerequisite.
 
-## Proposing changes
+## Propose a change
 
-- Open an issue first when the change needs product or architectural discussion, or when you have found a reproducible defect that is not already tracked.
-- Keep pull requests focused on one coherent change.
-- Add or update tests at public behavior seams when behavior changes. Avoid tests coupled only to private helpers or removed implementation details.
-- Keep Provider-specific acquisition and behavior inside the owning Provider Plugin rather than adding Provider branches to core.
-- Never commit API keys, passwords, private SSH keys, secret-store contents, real-account acceptance state or local machine-specific developer files.
-- Run `npm run release:check` before submitting a pull request.
+- Search existing issues before creating a duplicate.
+- Open an issue first when the change needs product/architecture discussion or represents a non-trivial new capability.
+- Keep a pull request focused on one coherent outcome.
+- Add/update tests at public behavior seams when runtime behavior changes.
+- Avoid tests coupled only to private helpers or implementation details that can change without changing the contract.
+- Keep provider-specific acquisition/product semantics inside the owning Provider Plugin.
+- Do not add provider-specific fields/branches to core when the Provider Feature/SDK seam already owns the variation.
+- Keep public documentation current when behavior, compatibility, setup, security, or user workflows change.
 
-For product scope and architecture boundaries, start with the [README](README.md). Provider Plugin authors should also read [`docs/plugin-authoring-and-operational-safety.md`](docs/plugin-authoring-and-operational-safety.md). Compatibility-sensitive changes must follow [`docs/versioning-and-compatibility.md`](docs/versioning-and-compatibility.md).
+Never commit API keys, passwords, private SSH keys, Secret Store contents, real-account acceptance state, or local machine-specific developer files.
+
+## Provider Plugin contributions
+
+Start with:
+
+- [Build a Provider Plugin](docs/plugin-authoring.md)
+- [Provider Plugin contracts and operational safety](docs/plugin-reference.md)
+- [Minimal Provider Plugin example](examples/minimal-provider-plugin/README.md)
+
+Plugins should depend on the public `@easyai101/easyserver-plugin-sdk` package, not EasyServer core source/deep imports.
+
+Compatibility-sensitive changes must follow [Versioning and compatibility](docs/versioning-and-compatibility.md).
+
+## Documentation contributions
+
+Public documentation is organized by reader task and complexity:
+
+`README → Getting Started → task guides → reference/policy → contributor/plugin docs → release history`
+
+Keep introductory documents focused on the reader's immediate goal. Put dense contracts in reference surfaces rather than duplicating them across README/how-to pages.
+
+Start at the [documentation index](docs/README.md).
 
 ## Security issues
 
-Do not report suspected vulnerabilities in a public issue. Follow [`SECURITY.md`](SECURITY.md) instead.
+Do not report suspected vulnerabilities in a public issue or pull request. Follow [SECURITY.md](SECURITY.md) instead.

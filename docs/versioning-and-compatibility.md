@@ -1,48 +1,74 @@
 # Versioning and compatibility
 
-EasyServer packages use Semantic Versioning. While the project is in the `0.x` series, EasyServer deliberately provides a stronger compatibility promise than SemVer requires for patch releases.
+EasyServer packages use Semantic Versioning. Because the project is still pre-1.0, a minor version defines a compatibility line and patch releases inside that line carry a stronger stability promise than bare SemVer would require.
 
-## 0.x release lines
+## Pre-1.0 compatibility lines
 
-A `0.y` minor version is a compatibility line.
+For a line such as `0.2.x`:
 
-- Patch releases within a `0.y.x` line are backward-compatible maintenance releases. They may contain bug and security fixes, documentation corrections, dependency maintenance and other changes that do not require an existing user, script or compatible Provider Plugin on that line to change.
-- A breaking change to a supported public contract requires at least the next minor line. For example, a `0.2.x` release must not knowingly break a `0.2.0` public contract; such a change belongs in `0.3.0` or later.
-- New functionality that materially expands or changes the public contract normally waits for the next `0.y.0` line. Small additive changes may ship in a patch only when they do not change the meaning or requirements of existing public behavior.
-- A `0.y.0` release may make compatibility-breaking changes because EasyServer is still pre-1.0, but every such change must be called out explicitly in the release notes with migration guidance where applicable.
+- patch releases are backward-compatible maintenance releases;
+- a patch must not knowingly require existing users, scripts, valid Local State, or compatible Provider Plugins on that line to change;
+- breaking changes to supported public contracts require at least the next minor line (`0.3.0` after `0.2.x`);
+- material new contracts normally wait for the next minor line, while small additive changes can ship in a patch when existing behavior keeps the same meaning;
+- a new `0.y.0` may make breaking changes, but release notes must call them out and provide migration guidance when users need to act.
 
-At `1.0.0`, EasyServer moves to the normal stable SemVer contract: breaking public changes require a major version, backward-compatible features use a minor version, and backward-compatible fixes use a patch version.
+At `1.0.0`, EasyServer will follow the normal stable SemVer model: breaking changes require a major release, backward-compatible features a minor release, and backward-compatible fixes a patch release.
 
 ## Supported public contracts
 
-Within each released `0.y.x` compatibility line, the compatibility promise covers only surfaces that are intentionally public and documented:
+Compatibility applies only to surfaces the project intentionally documents as public.
 
-1. **Documented CLI behavior** — command names, documented options/arguments, exit-success/failure meaning and documented machine-consumable output where such output is explicitly promised. The versioned `easyserver --json <command> ...` envelope and documented core JSON fields are covered by this promise; see [Machine-readable CLI output](cli-json.md). Human-oriented wording and formatting are not a byte-for-byte stable API unless documented otherwise.
-2. **`@easyai101/easyserver-plugin-sdk` public exports** — the package root export and the Provider Plugin contracts/types reachable from it. A Provider Plugin should need no EasyServer source import or `dist/` deep import.
-3. **Provider Plugin manifests and compatibility checks** — manifest fields, contribution contracts and the `compatibility.easyserver` / `compatibility.pluginSdk` SemVer ranges described in the plugin-authoring guide.
-4. **Persisted Local State owned by EasyServer** — a later patch release must continue to accept valid state created earlier in the same compatibility line. A minor-line transition may add migration work, but must never silently discard supported configuration. Raw credentials are never part of this compatibility contract because they must not be stored in Local State at all.
-5. **First-party Provider Plugin behavior documented for the release** — normalized lifecycle/access behavior and the provider-specific public commands documented for Vast.ai and Intelion.cloud.
-6. **Package identities and installation model** — `@easyai101/easyserver` remains the core CLI package, `@easyai101/easyserver-plugin-sdk` remains the public extension dependency, and first-party Provider Plugins remain separately installed opt-in packages.
+### CLI behavior
 
-## What is not a stable API
+Documented command names, options/arguments, success/failure semantics, and explicitly documented machine-readable output are public contracts.
 
-The following are internal or otherwise unstable unless a public document explicitly promotes them to a supported contract:
+Human-oriented prose, spacing, and presentation are not byte-for-byte APIs unless a document explicitly says otherwise.
 
-- source-file paths and implementation modules inside the monorepo;
-- deep imports into a package's `dist/` directory;
-- private classes, helpers, registries and host implementation details used only by EasyServer itself;
-- test fixtures, internal test utilities and repository layout;
-- exact human-facing diagnostic prose, log formatting and debug information;
-- undocumented fields in provider-originated opaque diagnostic data;
-- maintainer workflows, internal release evidence and private development documents.
+The versioned `--json` contract is documented in [Machine-readable CLI output](cli-json.md).
 
-The fact that JavaScript module resolution can technically reach an implementation file does not make that file a supported API.
+### Provider Plugin SDK
 
-`@easyai101/easyserver` is supported as a command-line product; it is not advertised as a general-purpose programmatic dependency. `@easyai101/easyserver-plugin-sdk` is the supported reusable package for third-party Provider Plugin development. Any additional programmatic API must be documented explicitly before it gains a compatibility promise.
+Public exports from the package root of `@easyai101/easyserver-plugin-sdk` are the supported programmatic extension API.
 
-## Provider Plugin compatibility
+Source-file paths, EasyServer core internals, and `dist/` deep imports are not supported plugin APIs.
 
-Every Provider Plugin manifest declares both host and SDK compatibility using SemVer ranges:
+See [Build a Provider Plugin](plugin-authoring.md) and [Provider Plugin contracts and operational safety](plugin-reference.md).
+
+### Provider Plugin manifests and contributions
+
+Documented manifest fields, compatibility ranges, Provider/Feature/Access Adapter contracts, and the side-effect-free provider-help contribution are part of the plugin contract.
+
+First-party plugins follow the same compatibility rules as third-party plugins.
+
+### EasyServer Local State
+
+A later patch in the same compatibility line must continue to accept valid state created earlier in that line.
+
+Patch-level state changes must therefore be additive or transparently backward-compatible. A breaking state transition in a future minor line requires an explicit migration/safe transition; silently deleting user state is not a migration strategy.
+
+EasyServer `0.2.0` also accepts valid `0.1.x` Local State.
+
+See [Package lifecycle](package-lifecycle.md) for upgrade/reinstall/uninstall behavior.
+
+### First-party provider behavior
+
+Provider-specific public commands and provider integration behavior documented for the compatibility line are covered by the same patch-stability expectation, subject to upstream provider APIs/policies remaining viable.
+
+Provider-owned raw API shapes or undocumented raw transcript contents are not promoted to core EasyServer compatibility merely because they can be observed.
+
+### Package identities and installation model
+
+The documented package roles are part of the public distribution model:
+
+- `@easyai101/easyserver` — CLI/TUI product;
+- `@easyai101/easyserver-plugin-sdk` — reusable public Provider Plugin API;
+- first-party Provider Plugins — separately installed opt-in packages.
+
+`@easyai101/easyserver` is not advertised as a general-purpose programmatic library. The Plugin SDK is the supported reusable dependency for provider extensions.
+
+## Provider Plugin compatibility ranges
+
+A `0.2.x` plugin normally declares both host and SDK compatibility:
 
 ```ts
 compatibility: {
@@ -51,43 +77,43 @@ compatibility: {
 }
 ```
 
-For a `0.2.0` plugin, `^0.2.0` means the `0.2.x` compatibility line and excludes `0.3.0`. That matches the policy above: a plugin may rely on patch compatibility, while the next pre-1.0 minor line must be opted into deliberately after validation.
+For pre-1.0 SemVer, `^0.2.0` accepts compatible `0.2.x` releases and excludes `0.3.0`.
 
-First-party Provider Plugins follow the same rule as third-party plugins. They are not exempt from host compatibility validation merely because they live in the same repository.
+Package dependency ranges and runtime manifest ranges are separate checks:
 
-Package dependency ranges and manifest compatibility ranges serve different purposes: npm dependency ranges control module installation/resolution; manifest ranges are checked by EasyServer at runtime before a plugin is admitted. Both must agree with the supported compatibility line.
+- npm dependency ranges control package resolution/installation;
+- manifest compatibility ranges are validated by EasyServer before a plugin is admitted.
 
-## Local State changes
+A published plugin should widen either range only after being validated against the newly accepted line.
 
-Within a `0.y.x` line, state-format changes must be additive or transparently backward-compatible. A patch release must preserve existing valid state and secret references. The `0.2.0` transition also preserves valid `0.1.x` Local State; the compatibility-relevant change is the interactive entrypoint and Plugin SDK line, not a destructive state migration.
+## What is not stable by default
 
-If a future `0.y.0` needs a breaking state change, the release must provide an explicit migration or a clearly documented safe transition. A release must never present deletion of user state as an invisible migration strategy. The concrete install/upgrade/uninstall expectations are defined in [Package lifecycle](package-lifecycle.md).
+Unless another public document explicitly promotes it, do not rely on:
+
+- monorepo source-file paths or repository layout;
+- private classes/helpers/registries;
+- package `dist/` deep imports;
+- test fixtures/internal test utilities;
+- exact human-facing diagnostic wording or debug log formatting;
+- undocumented provider-originated payload fields;
+- maintainer release procedures or private development state.
+
+Technical reachability is not the same as public API status.
 
 ## Deprecation and release notes
 
-Before `1.0`, long deprecation windows are not guaranteed across different `0.y` lines, but avoidable breakage should still be announced before removal when practical.
+Before 1.0, different minor lines do not promise long deprecation windows, but avoidable breakage should still be announced before removal when practical.
 
-Every release note must identify compatibility-relevant changes, including:
+Release notes must identify compatibility-relevant changes such as:
 
-- CLI changes that can affect scripts or documented workflows;
-- Plugin SDK or manifest changes;
-- changes to Provider Plugin compatibility ranges;
-- Local State migrations or compatibility implications;
-- installation/package identity changes;
+- CLI changes that affect documented scripts/workflows;
+- Plugin SDK/manifest changes;
+- Provider Plugin compatibility-range changes;
+- Local State migrations/compatibility implications;
+- package/distribution changes;
 - platform/runtime support changes;
-- security fixes that alter externally visible behavior.
+- security fixes that materially change public behavior.
 
-A release with no compatibility-relevant changes should say so rather than leaving the question ambiguous.
+If a release has no compatibility-relevant change, its release notes should say so rather than leaving the status ambiguous.
 
-## Current 0.2.0 package set
-
-The `0.2.0` compatibility line is built from:
-
-- `@easyai101/easyserver-plugin-sdk@0.2.0`;
-- `@easyai101/easyserver@0.2.0`;
-- `@easyai101/easyserver-plugin-vastai@0.2.0`;
-- `@easyai101/easyserver-plugin-intelion@0.2.0`.
-
-The CLI and both first-party Provider Plugins depend on the SDK through `^0.2.0`, and their runtime manifests require EasyServer and the Plugin SDK through `^0.2.0`. Those ranges intentionally accept the `0.2.x` line and reject `0.3.0`.
-
-The original `0.1.0` package set remains documented in the historical [0.1.0 release notes](releases/v0.1.0.md).
+For shipped package/version snapshots and migration notes, use the documents under [Release history](README.md#release-history) rather than treating this policy page as a changelog.

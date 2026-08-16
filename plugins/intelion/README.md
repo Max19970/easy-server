@@ -1,18 +1,29 @@
 # @easyai101/easyserver-plugin-intelion
 
-Opt-in EasyServer Provider Plugin for Intelion.cloud compute.
+First-party Intelion.cloud Provider Plugin for EasyServer: server catalog/configuration and creation plus shared EasyServer lifecycle and SSH-backed local connections.
 
-## Install and register
+## Install
 
-Install EasyServer separately, then install only the provider you want:
+Install it into the same npm environment as the EasyServer CLI:
 
-```sh
+```powershell
 npm install --global @easyai101/easyserver-plugin-intelion
+```
+
+Then run:
+
+```powershell
+easyserver
+```
+
+Open **Settings & Support → Providers → Add installed provider**, choose **Intelion.cloud**, and configure the declared API-token credential.
+
+For automation/advanced setup, the installed package can also be registered explicitly:
+
+```powershell
 easyserver plugins add @easyai101/easyserver-plugin-intelion
 ```
 
-This package does not install Vast.ai or any other Provider Plugin.
+EasyServer uses the API token for Intelion API access; its normal SSH connection path resolves the server-specific provider password only after host trust succeeds.
 
-After registration, configure the plugin credential through EasyServer rather than placing provider API tokens in repository files or command arguments.
-
-Documentation and source: https://github.com/Max19970/easy-server
+Full provider guide: https://github.com/Max19970/easy-server/blob/main/docs/providers/intelion.md
