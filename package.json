@@ -15,7 +15,7 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run build && npm run test --workspaces --if-present",
+    "test": "npm run build && npm run test --workspaces --if-present && node --test scripts/*.test.mjs",
     "prepublishOnly": "node -e \"console.error('Workspace root is private and must not be published.'); process.exit(1)\"",
     "verify:packaged-install": "node scripts/verify-packaged-install.mjs",
     "verify:tui-windows": "npm run build --workspace=@easyai101/easyserver && node scripts/verify-tui-windows.mjs",
@@ -28,6 +28,8 @@
   "devDependencies": {
     "@types/node": "24.13.3",
     "@types/semver": "7.7.1",
+    "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-to-markdown": "^2.1.2",
     "typescript": "6.0.2"
   }
 }

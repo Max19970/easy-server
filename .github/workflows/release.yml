@@ -87,5 +87,10 @@ jobs:
           if (-not (Test-Path -LiteralPath $notes)) {
             throw "Release notes must exist at $notes before the release tag is created"
           }
+          $renderedNotes = Join-Path $env:RUNNER_TEMP "$tag-release-notes.md"
+          node scripts/render-release-notes.mjs $notes $renderedNotes $env:GITHUB_REPOSITORY $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release notes could not be rendered for GitHub"
+          }
 
-          gh release create $tag $zip $checksums --verify-tag --title "EasyServer $tag" --notes-file $notes
+          gh release create $tag $zip $checksums --verify-tag --title "EasyServer $tag" --notes-file $renderedNotes
