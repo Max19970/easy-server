@@ -18,6 +18,7 @@ import {
   type PersistentConnectionSession,
 } from "./local-daemon.js";
 import type { EndpointIntentStatus } from "./endpoint-intent-service.js";
+import type { SshHostTrustEvidence } from "./host-trust.js";
 import type { PluginStatus } from "./plugin-host.js";
 import {
   discoverInstalledProviderPlugins,
@@ -145,7 +146,11 @@ export interface TuiEndpointIntentReadItem {
     readonly kind: string;
     readonly mode: Extract<EndpointIntentStatus, { readonly state: "live" }>["accessMethod"]["mode"];
   };
-  readonly failure?: { readonly code: string; readonly message: string };
+  readonly failure?: {
+    readonly code: string;
+    readonly message: string;
+    readonly hostTrust?: SshHostTrustEvidence;
+  };
 }
 
 export interface TuiEndpointIntentSummary {
@@ -624,6 +629,22 @@ function projectEndpointIntent(intent: EndpointIntentStatus): TuiEndpointIntentR
           failure: {
             code: escapeTerminalText(intent.failure.code),
             message: escapeTerminalText(intent.failure.message),
+            ...(intent.failure.hostTrust === undefined
+              ? {}
+              : {
+                  hostTrust: {
+                    target: {
+                      host: escapeTerminalText(intent.failure.hostTrust.target.host),
+                      port: intent.failure.hostTrust.target.port,
+                    },
+                    key: {
+                      type: escapeTerminalText(intent.failure.hostTrust.key.type),
+                      fingerprint: escapeTerminalText(
+                        intent.failure.hostTrust.key.fingerprint,
+                      ),
+                    },
+                  },
+                }),
           },
         }
       : {}),

@@ -102,6 +102,10 @@ const intents = [
     failure: {
       code: "host-trust-required",
       message: "SSH host trust required; fingerprint SHA256:fixture",
+      hostTrust: {
+        target: { host: "ssh.example.test", port: 2222 },
+        key: { type: "ssh-ed25519", fingerprint: "SHA256:fixture" },
+      },
     },
   },
   {
@@ -146,6 +150,7 @@ test("Connections keeps persisted Endpoint intents distinct from runtime Session
   const enabledCalls = [];
   const retryCalls = [];
   const removeCalls = [];
+  const trustReviewCalls = [];
   const view = render(
     React.createElement(TuiShell, {
       colorEnabled: false,
@@ -170,6 +175,9 @@ test("Connections keeps persisted Endpoint intents distinct from runtime Session
       async onRetryEndpointIntent(name) {
         retryCalls.push(name);
         return true;
+      },
+      onReviewEndpointIntentHostTrust(intent) {
+        trustReviewCalls.push(intent.operationName);
       },
       onRemoveEndpointIntent(intent) {
         removeCalls.push(intent.operationName);
@@ -211,7 +219,10 @@ test("Connections keeps persisted Endpoint intents distinct from runtime Session
 
   view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /exact SSH host fingerprint/);
+  assert.match(view.lastFrame(), /SSH fingerprint awaiting review: ssh-ed25519 · SHA256:fixture/);
+  assert.match(view.lastFrame(), /review this exact SSH fingerprint/i);
+  await chooseVisibleAction(view, "Review SSH fingerprint");
+  assert.deepEqual(trustReviewCalls, ["trust"]);
   view.stdin.write("\u001b[B");
   await tick();
   assert.match(view.lastFrame(), /configure or rotate the required provider credential/);
@@ -226,6 +237,153 @@ test("Connections keeps persisted Endpoint intents distinct from runtime Session
   assert.deepEqual(enabledCalls, [["disabled\u001b[2J", true]]);
   await chooseVisibleAction(view, "Remove selected saved connection");
   assert.deepEqual(removeCalls, ["disabled\u001b[2J"]);
+});
+
+test("saved-connection SSH authentication remediation never blames provider credentials", async () => {
+  const assertRemediation = async (failure, expected, forbidden) => {
+    const intent = {
+      operationName: "ssh-auth",
+      name: "ssh-auth",
+      enabled: true,
+      state: "error",
+      instanceId: "instance:ssh-auth",
+      remoteHost: "127.0.0.1",
+      remotePort: 8188,
+      failure,
+    };
+    const view = render(
+      React.createElement(TuiShell, {
+        colorEnabled: false,
+        width: 120,
+        readSnapshot: snapshot([intent]),
+        readStatus: "ready",
+      }),
+    );
+    await openConnections(view);
+    await chooseVisibleAction(view, "Show technical details");
+    view.stdin.write("\u001b[B");
+    await tick();
+    assert.match(view.lastFrame(), expected);
+    assert.doesNotMatch(view.lastFrame(), forbidden);
+  };
+
+  await assertRemediation(
+    {
+      code: "authentication",
+      message: "SSH public-key authentication was rejected by the server.",
+    },
+    /matching SSH private key/,
+    /configure or rotate the required provider credential/i,
+  );
+  await assertRemediation(
+    {
+      code: "authentication",
+      message: "SSH host key mismatch for ssh.example.test:2222",
+    },
+    /server was replaced or reinstalled/i,
+    /configure or rotate the required provider credential/i,
+  );
+});
+
+test("saved-connection SSH trust recovery stays reachable at 60x20 and in screen-reader mode", async () => {
+  const trustIntent = intents.find((intent) => intent.name === "trust");
+  assert.ok(trustIntent);
+
+  for (const screenReader of [false, true]) {
+    const reviewed = [];
+    const view = render(
+      React.createElement(TuiShell, {
+        colorEnabled: false,
+        width: 60,
+        height: 20,
+        screenReader,
+        readSnapshot: snapshot([trustIntent]),
+        readStatus: "ready",
+        onReviewEndpointIntentHostTrust(intent) {
+          reviewed.push(intent.operationName);
+        },
+        async onSetEndpointIntentEnabled() {
+          return true;
+        },
+        async onRetryEndpointIntent() {
+          return true;
+        },
+      }),
+    );
+
+    await openConnections(view);
+    await chooseVisibleAction(view, "Show technical details");
+    view.stdin.write("\u001b[B");
+    await tick();
+    assert.match(view.lastFrame(), /(?:Saved connection: trust|trust · enabled · error)/);
+    await chooseVisibleAction(view, "Review SSH fingerprint");
+    assert.deepEqual(reviewed, ["trust"]);
+    if (!screenReader) {
+      assert.ok(view.lastFrame().split("\n").length <= 20, view.lastFrame());
+    } else {
+      assert.match(view.lastFrame(), /SSH fingerprint awaiting review/);
+    }
+  }
+});
+
+test("TuiApp reviews exact saved-connection SSH trust and retries the same intent", async () => {
+  const trustIntent = intents.find((intent) => intent.name === "trust");
+  assert.ok(trustIntent);
+  let enrolled = 0;
+  let retried = 0;
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      async readLoader() {
+        return snapshot([trustIntent]);
+      },
+      daemonOperations: {
+        async enrollHostKey(trust) {
+          enrolled += 1;
+          assert.equal(trust.host, "ssh.example.test");
+          assert.equal(trust.port, 2222);
+          assert.equal(trust.keyType, "ssh-ed25519");
+          assert.equal(trust.fingerprint, "SHA256:fixture");
+        },
+        async retryEndpointIntent(name) {
+          assert.equal(enrolled, 1);
+          assert.equal(name, "trust");
+          retried += 1;
+          return trustIntent;
+        },
+        async setEndpointIntentEnabled() {
+          assert.fail("trust review must not toggle desired state");
+        },
+        async removeEndpointIntent() {
+          assert.fail("trust review must not remove the saved connection");
+        },
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openConnections(view);
+  await chooseVisibleAction(view, "Show technical details");
+  view.stdin.write("\u001b[B");
+  await tick();
+  assert.match(view.lastFrame(), /Name: trust/);
+  await chooseVisibleAction(view, "Review SSH fingerprint");
+  assert.match(view.lastFrame(), /SSH host trust required/);
+  assert.match(view.lastFrame(), /Host: ssh\.example\.test:2222/);
+  assert.match(view.lastFrame(), /Fingerprint: SHA256:fixture/);
+  assert.match(view.lastFrame(), /> Decline/);
+
+  view.stdin.write("\u001b[A");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  await tick();
+
+  assert.equal(enrolled, 1);
+  assert.equal(retried, 1);
+  assert.match(view.lastFrame(), /SSH host trusted; saved connection retry requested/);
 });
 
 test("TuiApp confirms live persisted intent removal and delegates cleanup to the daemon", async () => {

@@ -77,6 +77,7 @@ import {
   type TuiDiagnosticsOperations,
 } from "./tui-diagnostics.js";
 import {
+  hostTrustRequiredError,
   isNormalizedError,
   normalizedError,
   PROVIDER_CAPABILITIES,
@@ -332,7 +333,11 @@ export interface TuiShellProps {
   readonly onOpenForegroundConnection?: (
     request: TuiForegroundConnectionRequest,
   ) => Promise<TuiForegroundConnection | undefined>;
+  readonly onRetryForegroundConnection?: (
+    id: string,
+  ) => Promise<TuiForegroundConnection | undefined>;
   readonly onCloseForegroundConnection?: (id: string) => Promise<boolean>;
+  readonly foregroundConnectionRecoveryId?: string;
   readonly onQuitWithForegroundConnections?: () => Promise<boolean>;
   readonly onStartDaemon?: () => Promise<boolean>;
   readonly onStopDaemon?: () => Promise<boolean>;
@@ -342,6 +347,7 @@ export interface TuiShellProps {
   readonly onClosePersistentSession?: (id: string) => Promise<boolean>;
   readonly onSetEndpointIntentEnabled?: (name: string, enabled: boolean) => Promise<boolean>;
   readonly onRetryEndpointIntent?: (name: string) => Promise<boolean>;
+  readonly onReviewEndpointIntentHostTrust?: (intent: TuiEndpointIntentReadItem) => void;
   readonly onRemoveEndpointIntent?: (intent: TuiEndpointIntentReadItem) => void;
   readonly onProviderMutation?: (mutation: TuiProviderMutation) => void;
   readonly providerInteractiveScreen?: ProviderInteractiveScreen;
@@ -370,7 +376,9 @@ export function TuiShell({
   foregroundConnections = [],
   onListForegroundAccessMethods,
   onOpenForegroundConnection,
+  onRetryForegroundConnection,
   onCloseForegroundConnection,
+  foregroundConnectionRecoveryId,
   onQuitWithForegroundConnections,
   onStartDaemon,
   onStopDaemon,
@@ -378,6 +386,7 @@ export function TuiShell({
   onClosePersistentSession,
   onSetEndpointIntentEnabled,
   onRetryEndpointIntent,
+  onReviewEndpointIntentHostTrust,
   onRemoveEndpointIntent,
   onProviderMutation,
   providerInteractiveScreen,
@@ -495,7 +504,8 @@ export function TuiShell({
     activeRoute.id === "sessions" &&
     foregroundConnectionFlow?.mode === "foreground" &&
     operation?.phase === "failed";
-  const operationOwnsViewport = operationInteractionOpen || connectionFailureOpen;
+  const operationOwnsViewport =
+    operationInteractionOpen || operation?.ownsViewport === true || connectionFailureOpen;
   const providerItems =
     readSnapshot?.providers.status === "ready"
       ? readSnapshot.providers.items
@@ -833,6 +843,12 @@ export function TuiShell({
           (connection) => connection.id === selectedConnectionTarget.id,
         )
       : undefined;
+  const recoveryForegroundConnection =
+    foregroundConnectionRecoveryId === undefined
+      ? undefined
+      : foregroundConnections.find(
+          (connection) => connection.id === foregroundConnectionRecoveryId,
+        );
   const selectedTargetIntent =
     selectedConnectionTarget?.kind === "intent"
       ? endpointIntents.find((intent) => intent.operationName === selectedConnectionTarget.id)
@@ -945,14 +961,33 @@ export function TuiShell({
       }
       if (
         selectedConnectionTarget?.kind === "foreground" &&
+        selectedForegroundConnection?.state === "failed"
+      ) {
+        if (
+          foregroundConnectionCanRetry(selectedForegroundConnection) &&
+          onRetryForegroundConnection !== undefined
+        ) {
+          actions.push({ id: "connection-retry-foreground", label: "Retry connection" });
+        }
+        if (
+          foregroundConnectionNeedsServicePortEdit(selectedForegroundConnection) &&
+          onCloseForegroundConnection !== undefined
+        ) {
+          actions.push({ id: "connection-edit-service-port", label: "Edit service port" });
+        }
+        if (onCloseForegroundConnection !== undefined) {
+          actions.push({
+            id: "connection-close-foreground",
+            label: "Dismiss failed connection",
+          });
+        }
+      } else if (
+        selectedConnectionTarget?.kind === "foreground" &&
         onCloseForegroundConnection !== undefined
       ) {
         actions.push({
           id: "connection-close-foreground",
-          label:
-            selectedForegroundConnection?.state === "failed"
-              ? "Dismiss failed connection"
-              : "Close local connection",
+          label: "Close local connection",
         });
       } else if (
         selectedConnectionTarget?.kind === "persistent" &&
@@ -980,6 +1015,13 @@ export function TuiShell({
             id: "intent-toggle",
             label: selectedTargetIntent.enabled ? "Disable selected saved connection" : "Enable selected saved connection",
           });
+          if (
+            selectedTargetIntent.state === "error" &&
+            selectedTargetIntent.failure?.hostTrust !== undefined &&
+            onReviewEndpointIntentHostTrust !== undefined
+          ) {
+            actions.push({ id: "intent-host-trust", label: "Review SSH fingerprint" });
+          }
           if (selectedTargetIntent.state === "error" && onRetryEndpointIntent !== undefined) {
             actions.push({ id: "intent-retry", label: "Retry selected saved connection" });
           }
@@ -1127,17 +1169,58 @@ export function TuiShell({
       return;
     }
     if (
+      id === "connection-retry-foreground" &&
+      selectedForegroundConnection?.state === "failed" &&
+      onRetryForegroundConnection !== undefined
+    ) {
+      const failedId = selectedForegroundConnection.id;
+      setForegroundConnectionBusy(true);
+      void onRetryForegroundConnection(failedId).then((connection) => {
+        setForegroundConnectionBusy(false);
+        if (connection !== undefined) {
+          setSelectedForegroundConnectionId(connection.id);
+          setStatus(
+            `Local address ready at ${connection.endpoint.host}:${connection.endpoint.port}. The remote service is verified when this address is first used.`,
+          );
+        }
+      });
+      return;
+    }
+    if (
+      id === "connection-edit-service-port" &&
+      selectedForegroundConnection?.state === "failed" &&
+      onCloseForegroundConnection !== undefined
+    ) {
+      const failed = selectedForegroundConnection;
+      setForegroundConnectionBusy(true);
+      void onCloseForegroundConnection(failed.id).then((closed) => {
+        setForegroundConnectionBusy(false);
+        if (!closed) {
+          return;
+        }
+        setSelectedForegroundConnectionId(undefined);
+        setForegroundConnectionFlow(
+          foregroundConnectionFlowFromFailedConnection(failed, "remote-port"),
+        );
+        setStatus("Edit the app/service port, then review the connection again.");
+      });
+      return;
+    }
+    if (
       id === "connection-close-foreground" &&
       selectedConnectionTarget?.kind === "foreground" &&
       onCloseForegroundConnection !== undefined
     ) {
       const connectionId = selectedConnectionTarget.id;
+      const wasFailed = selectedForegroundConnection?.state === "failed";
       setForegroundConnectionBusy(true);
       void onCloseForegroundConnection(connectionId).then((closed) => {
         setForegroundConnectionBusy(false);
         if (closed) {
           setSelectedForegroundConnectionId(undefined);
-          setStatus("Local connection closed.");
+          setStatus(
+            wasFailed ? "Failed local connection dismissed." : "Local connection closed.",
+          );
         }
       });
       return;
@@ -1164,6 +1247,10 @@ export function TuiShell({
         selectedTargetIntent.operationName,
         !selectedTargetIntent.enabled,
       ).then(() => setForegroundConnectionBusy(false));
+      return;
+    }
+    if (id === "intent-host-trust" && selectedTargetIntent !== undefined) {
+      onReviewEndpointIntentHostTrust?.(selectedTargetIntent);
       return;
     }
     if (id === "intent-retry" && selectedTargetIntent !== undefined) {
@@ -1209,7 +1296,7 @@ export function TuiShell({
       setForegroundConnectionFlow(undefined);
       setSelectedForegroundConnectionId(connection.id);
       setStatus(
-        `Local connection ready at ${connection.endpoint.host}:${connection.endpoint.port}.`,
+        `Local address ready at ${connection.endpoint.host}:${connection.endpoint.port}. The remote service is verified when this address is first used.`,
       );
     });
   };
@@ -1220,6 +1307,31 @@ export function TuiShell({
       openRoute(
         "diagnostics",
         "Opened privacy-safe Diagnostics from the connection failure.",
+      );
+      return;
+    }
+    const recoveryEditAction = operation?.actions.find(
+      (candidate) => candidate.kind === "edit",
+    );
+    if (
+      action === "edit" &&
+      recoveryForegroundConnection?.state === "failed" &&
+      (recoveryEditAction?.label === "Edit service port" ||
+        recoveryEditAction?.label === "Edit local port")
+    ) {
+      onOperationAction?.("dismiss");
+      void onCloseForegroundConnection?.(recoveryForegroundConnection.id);
+      const editingServicePort = recoveryEditAction.label === "Edit service port";
+      setForegroundConnectionFlow(
+        foregroundConnectionFlowFromFailedConnection(
+          recoveryForegroundConnection,
+          editingServicePort ? "remote-port" : "local-port",
+        ),
+      );
+      setStatus(
+        editingServicePort
+          ? "Edit the app/service port, then review the connection again."
+          : "Edit the local port on this computer, then review the connection again.",
       );
       return;
     }
@@ -2812,6 +2924,7 @@ function RouteSurface({
       <ConnectionsSurface
         snapshot={snapshot}
         height={height}
+        screenReader={screenReader}
         flow={foregroundConnectionFlow}
         busy={foregroundConnectionBusy}
         connections={foregroundConnections}
@@ -3197,6 +3310,7 @@ function InstancesSurface({
 function ConnectionsSurface({
   snapshot,
   height,
+  screenReader,
   flow,
   busy,
   connections,
@@ -3212,6 +3326,7 @@ function ConnectionsSurface({
 }: {
   readonly snapshot: TuiReadSnapshot;
   readonly height: number;
+  readonly screenReader: boolean;
   readonly flow?: ForegroundConnectionFlow;
   readonly busy: boolean;
   readonly connections: readonly TuiForegroundConnection[];
@@ -3373,6 +3488,53 @@ function ConnectionsSurface({
       : selectedConnectionTarget.kind === "intent"
         ? endpointIntents.find((intent) => intent.operationName === selectedConnectionTarget.id)
         : undefined;
+  if (showDetails && !screenReader && height < 12) {
+    return (
+      <Box flexDirection="column">
+        <Text bold>Technical details</Text>
+        <Text>Background service: {snapshot.daemon.status}</Text>
+        {selected !== undefined ? (
+          <>
+            <Text bold>Selected local connection</Text>
+            <Text wrap="truncate">
+              {serverDisplayName(snapshot, selected.instanceId)} · {escapeTerminalText(selected.remoteHost)}:{selected.remotePort}
+            </Text>
+            <Text wrap="truncate">
+              Method: {escapeTerminalText(selected.accessMethod.id)} · {escapeTerminalText(selected.accessMethod.kind)}
+            </Text>
+          </>
+        ) : selectedPersistent !== undefined ? (
+          <>
+            <Text bold>Selected background connection</Text>
+            <Text wrap="truncate">
+              {serverDisplayName(snapshot, selectedPersistent.instanceId)} · {escapeTerminalText(selectedPersistent.remoteHost)}:{selectedPersistent.remotePort}
+            </Text>
+            <Text wrap="truncate">State: {selectedPersistent.state}</Text>
+          </>
+        ) : selectedIntent !== undefined ? (
+          <>
+            <Text bold>Saved connection: {selectedIntent.name}</Text>
+            <Text wrap="truncate">
+              {selectedIntent.enabled ? "enabled" : "disabled"} · {selectedIntent.state} · target {selectedIntent.remoteHost}:{selectedIntent.remotePort}
+            </Text>
+            {selectedIntent.failure === undefined ? null : (
+              <Text wrap="truncate">
+                Error: {selectedIntent.failure.code} · {selectedIntent.failure.message}
+              </Text>
+            )}
+            {selectedIntent.failure?.hostTrust === undefined ? null : (
+              <Text wrap="truncate">
+                SSH fingerprint: {selectedIntent.failure.hostTrust.key.type} · {selectedIntent.failure.hostTrust.key.fingerprint}
+              </Text>
+            )}
+            <Text>Use Actions for recovery.</Text>
+          </>
+        ) : (
+          <Text>Use ↑/↓ to select a connection or saved definition.</Text>
+        )}
+      </Box>
+    );
+  }
   const localConnectionRows = [
     ...connections.map((connection) => ({
       kind: "foreground" as const,
@@ -3709,6 +3871,11 @@ function EndpointIntentDetail({
       ) : intent.state === "error" ? (
         <>
           <Text>Error: {intent.failure?.code}: {intent.failure?.message}</Text>
+          {intent.failure?.hostTrust === undefined ? null : (
+            <Text>
+              SSH fingerprint awaiting review: {intent.failure.hostTrust.key.type} · {intent.failure.hostTrust.key.fingerprint}
+            </Text>
+          )}
           <Text>Remediation: {endpointIntentRemediation(intent)}</Text>
         </>
       ) : intent.state === "disabled" ? (
@@ -3724,12 +3891,29 @@ function endpointIntentRemediation(intent: TuiEndpointIntentReadItem): string {
   const code = intent.failure?.code;
   const message = intent.failure?.message ?? "";
   if (code === "host-trust-required") {
-    return "review and enroll the exact SSH host fingerprint through a normal TUI connection flow, then use Actions to retry this intent";
+    return intent.failure?.hostTrust === undefined
+      ? "refresh the saved connection to obtain structured SSH trust evidence, then review the fingerprint before retrying"
+      : "use Actions to review this exact SSH fingerprint; after approval EasyServer retries the same saved connection";
   }
   if (code === "authentication") {
+    if (/SSH public-key authentication/iu.test(message)) {
+      return "make the matching SSH private key available on this computer or authorize its public key on the server, then retry";
+    }
+    if (/SSH host key mismatch|SSH host identity/iu.test(message)) {
+      return "verify whether the server was replaced or reinstalled; changed trusted host identity remains blocked until you deliberately correct EasyServer host trust";
+    }
+    if (/SSH authentication/iu.test(message)) {
+      return "check the SSH login or key expected by the server, then retry";
+    }
     return "configure or rotate the required provider credential in Providers, then use Actions to retry";
   }
   if (code === "provider-unavailable") {
+    if (/requested service port is not accepting|requested service could not be reached/iu.test(message)) {
+      return "SSH works; start the app/service or correct its configured port, then retry the saved connection";
+    }
+    if (/could not obtain the SSH host fingerprint/iu.test(message)) {
+      return "EasyServer could not safely obtain a fingerprint yet; retry, and check local SSH tools in Diagnostics if direct SSH works repeatedly";
+    }
     return "restore provider or instance availability, refresh state, then use Actions to retry";
   }
   if (code === "conflict" && /port/i.test(message)) {
@@ -4080,16 +4264,28 @@ function humanizeTuiServerError(
     return error;
   }
   if (connectionVocabulary && error.code === "provider-unavailable") {
-    if (error.message.includes("SSH host key could not be read")) {
+    if (error.message.includes("could not obtain the SSH host fingerprint")) {
       return normalizedError(
         error.code,
-        `SSH for ${serverLabel} is not ready yet, or this computer cannot scan its host key. Wait a moment and retry. If it keeps failing, install or enable OpenSSH Client and check Diagnostics.`,
+        `EasyServer could not obtain an SSH host fingerprint for ${serverLabel}, so it cannot safely ask you to trust a key yet. Retry connection; if direct SSH works but this keeps failing, check the local SSH tools in Diagnostics.`,
       );
     }
     if (error.message.includes("SSH connected, but the requested service port is not accepting connections yet")) {
       return normalizedError(
         error.code,
-        `SSH to ${serverLabel} works, but the requested service port is not accepting connections yet. Start or wait for that service, verify its port, then retry.`,
+        `SSH to ${serverLabel} works, but the requested app/service port is not accepting connections yet. Start or wait for that service, or edit the service port, then retry.`,
+      );
+    }
+    if (error.message.includes("SSH connected, but the requested service could not be reached from the server")) {
+      return normalizedError(
+        error.code,
+        `SSH to ${serverLabel} works, but the requested app/service port could not be reached from the server. Verify the service is running and the port is correct, then retry.`,
+      );
+    }
+    if (error.message.includes("The SSH route closed before TCP forwarding was established")) {
+      return normalizedError(
+        error.code,
+        `The SSH route to ${serverLabel} closed before app/service forwarding was established. Retry the connection; if direct SSH keeps working while forwarding fails, check Diagnostics or try another available connection method.`,
       );
     }
     if (error.message.includes("SSH on the server is not ready or reachable yet")) {
@@ -4110,6 +4306,12 @@ function humanizeTuiServerError(
     );
   }
   if (connectionVocabulary && error.code === "authentication") {
+    if (error.message.includes("changed before trust confirmation")) {
+      return normalizedError(
+        error.code,
+        `The SSH fingerprint for ${serverLabel} changed since you reviewed it. Nothing was trusted. Retry connection to review the current fingerprint before continuing.`,
+      );
+    }
     if (
       /SSH host key (?:mismatch|changed)|SSH host identity/iu.test(error.message)
     ) {
@@ -4137,6 +4339,16 @@ function humanizeTuiServerError(
   }
   if (
     connectionVocabulary &&
+    error.code === "unsupported-operation" &&
+    error.message.includes("does not permit TCP forwarding")
+  ) {
+    return normalizedError(
+      error.code,
+      `SSH to ${serverLabel} works, but this SSH route does not allow TCP forwarding. Choose another connection method if one is available, or use a server/SSH route that permits forwarding.`,
+    );
+  }
+  if (
+    connectionVocabulary &&
     error.code === "plugin-failure" &&
     error.message.includes("Local OpenSSH client could not be started")
   ) {
@@ -4145,10 +4357,20 @@ function humanizeTuiServerError(
       "This computer could not start OpenSSH. Install or enable OpenSSH Client, make sure ssh is available, then retry. Open Diagnostics to check local SSH tools.",
     );
   }
+  if (
+    connectionVocabulary &&
+    error.code === "plugin-failure" &&
+    error.message === "OpenSSH connection failed unexpectedly."
+  ) {
+    return normalizedError(
+      error.code,
+      `The SSH transport to ${serverLabel} ended unexpectedly. Retry connection. Diagnostics can check local SSH and provider readiness, but raw SSH output is intentionally not retained.`,
+    );
+  }
   if (error.code === "plugin-failure" || error.code === "unknown-provider-error") {
     return normalizedError(
       error.code,
-      `EasyServer could not complete this operation for ${serverLabel}. Open Diagnostics for details.`,
+      `EasyServer could not complete this operation for ${serverLabel}. Open Diagnostics to check current EasyServer and provider readiness.`,
     );
   }
   if (connectionVocabulary && error.code === "unsupported-operation") {
@@ -4188,6 +4410,59 @@ function parseConnectionPort(value: string): number | undefined {
   return Number.isInteger(port) && port >= 1 && port <= 65_535
     ? port
     : undefined;
+}
+
+function foregroundConnectionNeedsServicePortEdit(
+  connection: TuiForegroundConnection,
+): boolean {
+  return (
+    connection.state === "failed" &&
+    connection.failure?.code === "provider-unavailable" &&
+    (connection.failure.message.includes(
+      "requested service port is not accepting connections",
+    ) ||
+      connection.failure.message.includes(
+        "requested service could not be reached from the server",
+      ))
+  );
+}
+
+function foregroundConnectionCanRetry(
+  connection: TuiForegroundConnection,
+): boolean {
+  if (connection.state !== "failed" || connection.failure === undefined) {
+    return false;
+  }
+  return (
+    connection.failure.code !== "unsupported-operation" &&
+    !(
+      connection.failure.code === "authentication" &&
+      /SSH host identity no longer matches|SSH host key mismatch/iu.test(
+        connection.failure.message,
+      )
+    )
+  );
+}
+
+function foregroundConnectionFlowFromFailedConnection(
+  connection: TuiForegroundConnection,
+  step: ForegroundConnectionStep,
+): ForegroundConnectionFlow {
+  return {
+    mode: "foreground",
+    advanced: false,
+    serverScoped: true,
+    step,
+    instanceId: connection.instanceId,
+    remoteHost: connection.remoteHost,
+    remotePort: String(connection.remotePort),
+    accessMethods: [connection.accessMethod],
+    accessMethodId: connection.accessMethod.id,
+    localPort:
+      connection.requestedLocalPort === undefined
+        ? ""
+        : String(connection.requestedLocalPort),
+  };
 }
 
 function foregroundConnectionRequest(
@@ -4585,6 +4860,8 @@ export function TuiApp({
   const [foregroundConnections, setForegroundConnections] = useState<
     readonly TuiForegroundConnection[]
   >(() => foregroundConnectionOperations?.list() ?? []);
+  const [foregroundConnectionRecoveryId, setForegroundConnectionRecoveryId] =
+    useState<string | undefined>();
   const [pendingHostTrustConfirmation, setPendingHostTrustConfirmation] =
     useState<PendingHostTrustConfirmation | undefined>();
   const [pendingDaemonStopConfirmation, setPendingDaemonStopConfirmation] =
@@ -4752,8 +5029,10 @@ export function TuiApp({
       return;
     }
     reportedForegroundFailuresRef.current.add(failed.id);
+    setForegroundConnectionRecoveryId(failed.id);
     const serverLabel =
       snapshot === undefined ? "server" : serverDisplayName(snapshot, failed.instanceId);
+    const servicePortFailure = foregroundConnectionNeedsServicePortEdit(failed);
     setOperation(
       presentOperationError({
         title: "Local connection failed",
@@ -4764,8 +5043,11 @@ export function TuiApp({
           accessMethodId: failed.accessMethod.id,
           connectionVocabulary: true,
         }),
-        allowRetry: false,
+        allowRetry: foregroundConnectionCanRetry(failed),
+        retryLabel: "Retry connection",
         allowDiagnostics: true,
+        ...(servicePortFailure ? { editLabel: "Edit service port" } : {}),
+        ownsViewport: true,
       }),
     );
   }, [foregroundConnections, operation, snapshot]);
@@ -4884,12 +5166,107 @@ export function TuiApp({
     [foregroundConnectionOperations, snapshot],
   );
 
+  const retryForegroundConnection = useCallback(
+    async (id: string): Promise<TuiForegroundConnection | undefined> => {
+      if (foregroundConnectionOperations === undefined) {
+        return undefined;
+      }
+      const failed = foregroundConnectionOperations.list().find((item) => item.id === id);
+      if (failed === undefined || failed.state !== "failed") {
+        return undefined;
+      }
+      const serverLabel =
+        snapshot === undefined ? "server" : serverDisplayName(snapshot, failed.instanceId);
+      setOperation(
+        presentWorkingOperation({
+          title: "Retry local connection",
+          detail: `${serverLabel} · app/service port ${failed.remotePort}`,
+          activity: "waiting-provider",
+        }),
+      );
+      try {
+        const connection = await foregroundConnectionOperations.retry(
+          id,
+          { signal: new AbortController().signal },
+          {
+            confirmHostTrust(trust, signal) {
+              if (signal.aborted) {
+                return Promise.resolve(false);
+              }
+              return new Promise<boolean>((resolve) => {
+                setPendingHostTrustConfirmation({ resolve });
+                setOperation(presentHostTrustRequest(trust));
+              });
+            },
+          },
+        );
+        setPendingHostTrustConfirmation(undefined);
+        setForegroundConnections([...foregroundConnectionOperations.list()]);
+        setForegroundConnectionRecoveryId(undefined);
+        setOperation(undefined);
+        return connection;
+      } catch (error) {
+        setPendingHostTrustConfirmation(undefined);
+        setForegroundConnections([...foregroundConnectionOperations.list()]);
+        const servicePortFailure =
+          isNormalizedError(error) &&
+          error.code === "provider-unavailable" &&
+          (error.message.includes("requested service port is not accepting connections") ||
+            error.message.includes("requested service could not be reached from the server"));
+        const localPortConflict =
+          isNormalizedError(error) &&
+          error.code === "conflict" &&
+          error.message.startsWith("Local Endpoint port is already in use:");
+        setOperation(
+          presentOperationError({
+            title: "Retry local connection",
+            operation: "read",
+            error: humanizeTuiServerError(error, {
+              instanceId: failed.instanceId,
+              serverLabel,
+              accessMethodId: failed.accessMethod.id,
+              connectionVocabulary: true,
+            }),
+            allowRetry:
+              !localPortConflict &&
+              (!isNormalizedError(error) ||
+                (error.code !== "not-found" &&
+                  error.code !== "unsupported-operation" &&
+                  error.code !== "cancelled" &&
+                  error.code !== "outcome-unknown" &&
+                  !(
+                    error.code === "authentication" &&
+                    /SSH host key mismatch|SSH host identity no longer matches/iu.test(
+                      error.message,
+                    )
+                  ))),
+            retryLabel: "Retry connection",
+            allowDiagnostics: !localPortConflict,
+            ...(localPortConflict
+              ? { editLabel: "Edit local port" }
+              : servicePortFailure
+                ? { editLabel: "Edit service port" }
+                : {}),
+            ownsViewport: true,
+          }),
+        );
+        return undefined;
+      }
+    },
+    [foregroundConnectionOperations, snapshot],
+  );
+
   const closeForegroundConnection = useCallback(
     async (id: string): Promise<boolean> => {
       if (foregroundConnectionOperations === undefined) {
         return false;
       }
       const connection = foregroundConnectionOperations.list().find((item) => item.id === id);
+      if (connection?.state === "failed") {
+        await foregroundConnectionOperations.close(id);
+        setForegroundConnections([...foregroundConnectionOperations.list()]);
+        return true;
+      }
       const serverLabel =
         connection === undefined || snapshot === undefined
           ? "server"
@@ -5224,6 +5601,70 @@ export function TuiApp({
       }
     },
     [daemonOperations, refresh],
+  );
+
+  const reviewEndpointIntentHostTrust = useCallback(
+    (intent: TuiEndpointIntentReadItem): void => {
+      const evidence = intent.failure?.hostTrust;
+      if (daemonOperations === undefined || evidence === undefined) {
+        return;
+      }
+      const trust = hostTrustRequiredError(
+        evidence.target.host,
+        evidence.target.port,
+        evidence.key.type,
+        evidence.key.fingerprint,
+      );
+      const serverLabel =
+        snapshot === undefined
+          ? "server"
+          : serverDisplayName(snapshot, intent.instanceId);
+      void (async () => {
+        const accepted = await new Promise<boolean>((resolve) => {
+          setPendingHostTrustConfirmation({ resolve });
+          setOperation(presentHostTrustRequest(trust));
+        });
+        if (!accepted) {
+          return;
+        }
+        setOperation(
+          presentWorkingOperation({
+            title: "Trust SSH host and retry saved connection",
+            detail: `${serverLabel} · verifying the reviewed fingerprint before updating EasyServer host trust.`,
+            activity: "verifying-state",
+          }),
+        );
+        try {
+          await daemonOperations.enrollHostKey(trust);
+          await daemonOperations.retryEndpointIntent(intent.operationName);
+          await refresh();
+          setOperation(
+            presentCompletedOperation({
+              title: "SSH host trusted; saved connection retry requested",
+              detail: `${intent.name} keeps the same saved definition while the daemon realizes a fresh transport.`,
+            }),
+          );
+        } catch (error) {
+          await refresh({ quiet: true });
+          setOperation(
+            presentOperationError({
+              title: "Trust SSH host for saved connection",
+              operation: "read",
+              error: humanizeTuiServerError(error, {
+                instanceId: intent.instanceId,
+                serverLabel,
+                accessMethodId: intent.requestedAccessMethodId,
+                connectionVocabulary: true,
+              }),
+              allowRetry: false,
+              allowDiagnostics: true,
+              ownsViewport: true,
+            }),
+          );
+        }
+      })();
+    },
+    [daemonOperations, refresh, snapshot],
   );
 
   const requestRemoveEndpointIntent = useCallback(
@@ -5891,6 +6332,10 @@ export function TuiApp({
         void removeEndpointIntent(pendingEndpointIntentRemovalRetry.intent);
         return;
       }
+      if (action === "retry" && foregroundConnectionRecoveryId !== undefined) {
+        void retryForegroundConnection(foregroundConnectionRecoveryId);
+        return;
+      }
       if (action === "retry" || action === "observe" || action === "refresh") {
         void refresh();
         return;
@@ -5902,6 +6347,7 @@ export function TuiApp({
         setPendingEndpointIntentRemovalRetry(undefined);
         setPendingInstanceConfirmation(undefined);
         setPendingProviderMutation(undefined);
+        setForegroundConnectionRecoveryId(undefined);
         setOperation(undefined);
       }
     },
@@ -5915,8 +6361,10 @@ export function TuiApp({
       pendingInstanceConfirmation,
       pendingProviderFlowConfirmation,
       pendingProviderMutation,
+      foregroundConnectionRecoveryId,
       refresh,
       removeEndpointIntent,
+      retryForegroundConnection,
     ],
   );
 
@@ -5951,6 +6399,7 @@ export function TuiApp({
         diagnosticsOperations === undefined ? undefined : copyDiagnostics
       }
       foregroundConnections={foregroundConnections}
+      foregroundConnectionRecoveryId={foregroundConnectionRecoveryId}
       onListForegroundAccessMethods={
         foregroundConnectionOperations === undefined
           ? undefined
@@ -5960,6 +6409,11 @@ export function TuiApp({
         foregroundConnectionOperations === undefined
           ? undefined
           : openForegroundConnection
+      }
+      onRetryForegroundConnection={
+        foregroundConnectionOperations === undefined
+          ? undefined
+          : retryForegroundConnection
       }
       onCloseForegroundConnection={
         foregroundConnectionOperations === undefined
@@ -5988,6 +6442,11 @@ export function TuiApp({
         daemonOperations === undefined || operation?.phase === "working"
           ? undefined
           : retryEndpointIntent
+      }
+      onReviewEndpointIntentHostTrust={
+        daemonOperations === undefined || operation?.phase === "working"
+          ? undefined
+          : reviewEndpointIntentHostTrust
       }
       onRemoveEndpointIntent={
         daemonOperations === undefined || operation?.phase === "working"

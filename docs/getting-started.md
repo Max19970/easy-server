@@ -222,7 +222,7 @@ Non-interactive automation stays fail-closed but has a separate explicit JSON wo
 
 A changed key for an already trusted host remains an authentication failure and cannot be approved through this first-use path. Verify that the server really was replaced or reinstalled before manually removing its old entry from `~/.easyserver/known_hosts`; never treat an unexpected changed-key error as a fresh trust prompt.
 
-If host-key scanning fails just after a server starts, wait briefly and retry because SSH may not be ready yet. If it keeps failing, verify that the local OpenSSH Client provides `ssh` and `ssh-keyscan`; Diagnostics reports whether those commands are available.
+EasyServer normally discovers the first-use key with `ssh-keyscan`. If every configured scanner fails but the configured OpenSSH client can still complete key exchange, EasyServer performs one bounded handshake against an isolated temporary `known_hosts` file to obtain the public host-key fingerprint for review. That temporary observation is deleted and never becomes permanent trust by itself; enrollment still requires explicit approval and a fresh exact revalidation. If neither path can obtain a fingerprint, EasyServer says so explicitly instead of presenting an unsafe trust action. Retry if the server may still be starting, and use Diagnostics to check the local SSH tools when direct SSH works but EasyServer still cannot discover the fingerprint.
 
 A public-key authentication rejection is separate from provider API authentication. For an SSH method that relies on local OpenSSH identities, make sure the matching private key is available through a standard identity file or `ssh-agent` and that its public key is authorized on the server. Provider-specific requirements can add further constraints; for example, see the [Vast.ai guide](providers/vastai.md).
 
@@ -289,7 +289,7 @@ easyserver sessions list
 easyserver sessions close <session-id>
 ```
 
-The daemon's connection setup is non-interactive and never auto-trusts an unknown SSH host. For a new SSH host, first use foreground `easyserver connect ...` to review/enroll the fingerprint, stop that foreground connection, then create the persistent session.
+The daemon's connection setup itself is non-interactive and never auto-trusts an unknown SSH host. Interactive `sessions create` and the TUI can review the exact fingerprint caller-side, enroll it through the same hardened trust path, and retry the same daemon-owned request. Saved Endpoint intents that stop at `host-trust-required` expose the same structured evidence; the TUI can review and approve that fingerprint directly, then retry the same saved definition without creating a throwaway foreground connection.
 
 Connection Sessions are daemon-owned resources with explicit `live`, `closing` and `failed` states. A failed terminal record keeps the same Session ID and a normalized cleanup reason, but no longer advertises its old Endpoint as reachable. Running `easyserver sessions close <session-id>` again retries cleanup and removes the record on success. Failed records are intentionally ephemeral and bounded to the 100 most recent failures; older failures are pruned with one final best-effort cleanup attempt. Restarting the daemon does not pretend old dead sessions are still active.
 

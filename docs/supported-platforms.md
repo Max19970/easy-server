@@ -8,7 +8,7 @@ The codebase and native dependencies may run on additional operating systems, bu
 
 | Platform | Architecture | Status | Secret Store | SSH access prerequisite |
 | --- | --- | --- | --- | --- |
-| Windows 11 | x64 | Supported | Windows Credential Manager through the OS keyring integration | Windows OpenSSH Client: `ssh` and `ssh-keyscan` on `PATH` |
+| Windows 11 | x64 | Supported | Windows Credential Manager through the OS keyring integration | Windows OpenSSH Client: `ssh` on `PATH`; `ssh-keyscan` is preferred for first-use discovery but has a bounded `ssh` handshake fallback |
 
 Runtime line:
 
@@ -41,16 +41,15 @@ Real provider acceptance is a maintainer release check and intentionally does no
 
 EasyServer `0.2.0` uses the production OpenSSH command-line tools for its generic SSH access path rather than embedding an SSH implementation.
 
-Before using an SSH-backed Provider Access Method, verify:
+Before using an SSH-backed Provider Access Method, verify the OpenSSH client:
 
 ```powershell
 ssh -V
-Get-Command ssh-keyscan
 ```
 
-If either command is unavailable, install/enable the Windows OpenSSH Client feature and make sure the executables are reachable through `PATH`.
+`ssh-keyscan` is also used when available and can be checked with `Get-Command ssh-keyscan`. If keyscan is missing or cannot negotiate with a particular server, EasyServer can obtain first-use public host-key evidence through one bounded `ssh` handshake against an isolated temporary known-hosts file. That fallback is discovery only: the temporary file is removed, permanent EasyServer trust still requires explicit fingerprint approval, and changed previously trusted keys still fail closed. If `ssh` itself is unavailable, install/enable the Windows OpenSSH Client feature and make sure it is reachable through `PATH`.
 
-EasyServer manages its own known-host trust file and fails closed on a changed trusted key. On first foreground access it can show the discovered fingerprint and ask for explicit confirmation; non-interactive daemon setup never auto-trusts an unknown host.
+EasyServer manages its own permanent known-host trust file. On first interactive access it can show the discovered fingerprint and ask for explicit confirmation; non-interactive daemon setup never auto-trusts an unknown host.
 
 ## Not supported by the 0.2.0 contract
 

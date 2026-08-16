@@ -144,6 +144,43 @@ test("late foreground transport failure stays visible until dismissed without re
   unsubscribe();
 });
 
+test("late foreground failure preserves the privacy-safe SSH transport category", async () => {
+  const session = deferredSession();
+  const operations = new TuiForegroundConnectionOperations({
+    async listAccessMethods() {
+      return [METHOD];
+    },
+    async openEndpoint() {
+      return {
+        endpoint: { host: "127.0.0.1", port: 40123 },
+        accessMethod: METHOD,
+        session: session.session,
+      };
+    },
+    async enrollHostKey() {
+      assert.fail("host trust enrollment is not expected");
+    },
+  });
+
+  await operations.open(
+    {
+      instanceId: INSTANCE_ID,
+      remotePort: 8188,
+      accessMethodId: "ssh",
+    },
+    { signal: new AbortController().signal },
+  );
+  session.fail(
+    normalizedError("plugin-failure", "OpenSSH connection failed unexpectedly."),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const failed = operations.list()[0];
+  assert.equal(failed?.state, "failed");
+  assert.equal(failed?.failure?.message, "OpenSSH connection failed unexpectedly.");
+  await operations.close(failed.id);
+});
+
 test("late foreground failure storage does not retain unrecognized raw transport output", async () => {
   const session = deferredSession();
   const operations = new TuiForegroundConnectionOperations({
@@ -183,6 +220,61 @@ test("late foreground failure storage does not retain unrecognized raw transport
   assert.equal(failed?.failure?.message, "The local connection ended unexpectedly.");
   assert.doesNotMatch(JSON.stringify(failed), /secret-token-123/);
   await operations.close(failed.id);
+});
+
+test("late failed foreground connection retries the exact retained request and replaces only after success", async () => {
+  const firstSession = deferredSession();
+  const secondSession = deferredSession();
+  const requests = [];
+  let opens = 0;
+  const operations = new TuiForegroundConnectionOperations({
+    async listAccessMethods() {
+      return [METHOD];
+    },
+    async openEndpoint(request) {
+      requests.push(request);
+      opens += 1;
+      return {
+        endpoint: { host: "127.0.0.1", port: opens === 1 ? 40123 : 40124 },
+        accessMethod: METHOD,
+        session: opens === 1 ? firstSession.session : secondSession.session,
+      };
+    },
+    async enrollHostKey() {
+      assert.fail("host trust enrollment is not expected");
+    },
+  });
+  const request = {
+    instanceId: INSTANCE_ID,
+    remoteHost: "service.internal",
+    remotePort: 8188,
+    localPort: 48188,
+    accessMethodId: "ssh",
+  };
+  const first = await operations.open(
+    request,
+    { signal: new AbortController().signal },
+  );
+  firstSession.fail(
+    normalizedError(
+      "provider-unavailable",
+      "SSH connected, but the requested service port is not accepting connections yet.",
+    ),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(operations.list()[0]?.state, "failed");
+
+  const replacement = await operations.retry(
+    first.id,
+    { signal: new AbortController().signal },
+  );
+  assert.deepEqual(requests, [request, request]);
+  assert.equal(replacement.endpoint.port, 40124);
+  assert.equal(operations.list().length, 1);
+  assert.equal(operations.list()[0]?.id, replacement.id);
+  assert.notEqual(replacement.id, first.id);
+
+  await operations.close(replacement.id);
 });
 
 test("TUI foreground connection operations reuse first-use SSH trust enrollment exactly once", async () => {

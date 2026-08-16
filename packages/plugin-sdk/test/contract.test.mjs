@@ -967,6 +967,22 @@ test("validates SSH access descriptors and typed host-trust errors", () => {
     () =>
       parseAccessMethods([
         {
+          id: "option-like-host",
+          kind: "ssh",
+          mode: "tcp-forward",
+          ssh: {
+            host: "-oProxyCommand=attacker",
+            port: 22,
+            username: "ubuntu",
+          },
+        },
+      ]),
+    /must not begin with a hyphen/,
+  );
+  assert.throws(
+    () =>
+      parseAccessMethods([
+        {
           id: "raw-password",
           kind: "ssh",
           mode: "tcp-forward",

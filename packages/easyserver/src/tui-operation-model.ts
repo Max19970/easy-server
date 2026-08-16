@@ -95,6 +95,7 @@ export interface TuiOperationPresentation {
   readonly title: string;
   readonly detail?: string;
   readonly actions: readonly TuiOperationAction[];
+  readonly ownsViewport?: boolean;
   readonly interaction?: TuiOperationInteraction;
   readonly instanceResults?: readonly TuiOperationInstanceResult[];
   readonly providerOutput?: readonly TuiProviderTranscriptLine[];
@@ -121,6 +122,7 @@ export interface PresentOperationErrorInput {
   readonly retryLabel?: string;
   readonly allowDiagnostics?: boolean;
   readonly editLabel?: string;
+  readonly ownsViewport?: boolean;
 }
 
 export interface PresentCompletedOperationInput {
@@ -307,6 +309,7 @@ export function presentOperationError(
       : `${input.title}: failed`,
     detail: message,
     actions,
+    ...(input.ownsViewport === true ? { ownsViewport: true } : {}),
   });
 }
 
@@ -392,7 +395,7 @@ export function presentHostTrustRequest(
     phase: "awaiting-confirmation",
     tone: "warning",
     title: "SSH host trust required",
-    detail: `Verify the exact fingerprint before trusting ${trust.host}:${trust.port}.`,
+    detail: `EasyServer keeps its own SSH trust store. Verify this exact fingerprint before trusting ${trust.host}:${trust.port}; trust accepted by a separate direct ssh command is not imported automatically.`,
     interaction: {
       kind: "host-trust",
       host: trust.host,
@@ -520,6 +523,7 @@ function createPresentation(
       ? {}
       : { detail: safeText(data.detail, MAX_PRESENTATION_TEXT_CHARACTERS) }),
     actions,
+    ...(data.ownsViewport === true ? { ownsViewport: true } : {}),
     ...(interaction === undefined ? {} : { interaction }),
     ...(instanceResults === undefined ? {} : { instanceResults }),
     ...(providerOutput === undefined ? {} : { providerOutput }),

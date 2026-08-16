@@ -23,6 +23,9 @@ const fakeSsh = fileURLToPath(
 const fakeSshExit = fileURLToPath(
   new URL("./fixtures/fake-ssh-exit.mjs", import.meta.url),
 );
+const fakeSshHostKeyHandshake = fileURLToPath(
+  new URL("./fixtures/fake-ssh-hostkey-handshake.mjs", import.meta.url),
+);
 const noopCommand = fileURLToPath(
   new URL("./fixtures/noop-command.mjs", import.meta.url),
 );
@@ -204,6 +207,52 @@ async function captureTrustError(run) {
   assert.fail("expected host-trust-required");
 }
 
+test("OpenSSH adapter rejects option-like SSH hosts before launching local tools", async () => {
+  await withTempDirectory(async (directory) => {
+    const access = new OpenSshAccessAdapter({
+      knownHostsPath: join(directory, "known_hosts"),
+      keyscanCommand: { executable: join(directory, "must-not-run-keyscan") },
+      sshCommand: { executable: join(directory, "must-not-run-ssh") },
+      icaclsCommand: {
+        executable: process.execPath,
+        prefixArgs: [noopCommand],
+      },
+    });
+    const safe = sshMethod();
+    const unsafe = {
+      ...safe,
+      ssh: { ...safe.ssh, host: "-oProxyCommand=malicious" },
+    };
+    const setup = setupContext();
+
+    await assert.rejects(
+      access.openTcpForward(
+        unsafe,
+        "remote-1",
+        { host: "service.internal", port: 443 },
+        setup.context,
+      ),
+      (error) =>
+        error?.code === "unsupported-operation" &&
+        error.message === "SSH host must not begin with a hyphen.",
+    );
+    await assert.rejects(
+      access.enrollHostKey(
+        hostTrustRequiredError(
+          "-oProxyCommand=malicious",
+          22,
+          "ssh-ed25519",
+          "SHA256:fixture",
+        ),
+        context.signal,
+      ),
+      (error) =>
+        error?.code === "unsupported-operation" &&
+        error.message === "SSH host must not begin with a hyphen.",
+    );
+  });
+});
+
 test("SSH host trust falls back when the preferred key scanner is incompatible", async () => {
   await withTempDirectory(async (directory) => {
     const keySpecPath = join(directory, "host-key.json");
@@ -256,7 +305,7 @@ test("SSH host trust falls back when the preferred key scanner is incompatible",
   });
 });
 
-test("missing local SSH key scanner reports a retryable local-or-readiness cause", async () => {
+test("missing local SSH discovery tools report that no fingerprint could be obtained", async () => {
   await withTempDirectory(async (directory) => {
     const access = new OpenSshAccessAdapter({
       knownHostsPath: join(directory, "known_hosts"),
@@ -264,8 +313,7 @@ test("missing local SSH key scanner reports a retryable local-or-readiness cause
         executable: join(directory, "missing-ssh-keyscan"),
       },
       sshCommand: {
-        executable: process.execPath,
-        prefixArgs: [fakeSsh, join(directory, "ssh-args.json")],
+        executable: join(directory, "missing-ssh"),
       },
       icaclsCommand: {
         executable: process.execPath,
@@ -284,8 +332,52 @@ test("missing local SSH key scanner reports a retryable local-or-readiness cause
       (error) =>
         error?.code === "provider-unavailable" &&
         error.message ===
-          "SSH host key could not be read. The server may still be starting, or the local OpenSSH key scanner may be unavailable.",
+          "EasyServer could not obtain the SSH host fingerprint. The SSH endpoint may not be ready, or the local SSH tools could not complete host-key discovery.",
     );
+  });
+});
+
+test("OpenSSH handshake can recover first-use trust evidence when key scanners fail", async () => {
+  await withTempDirectory(async (directory) => {
+    const keySpecPath = join(directory, "host-key.json");
+    const firstKey = key("handshake-host-key");
+    await writeFile(keySpecPath, JSON.stringify(firstKey), "utf8");
+    const access = new OpenSshAccessAdapter({
+      knownHostsPath: join(directory, "known_hosts"),
+      keyscanCommand: {
+        executable: join(directory, "missing-ssh-keyscan"),
+      },
+      sshCommand: {
+        executable: process.execPath,
+        prefixArgs: [fakeSshHostKeyHandshake, keySpecPath],
+      },
+      icaclsCommand: {
+        executable: process.execPath,
+        prefixArgs: [noopCommand],
+      },
+    });
+    const setup = setupContext();
+
+    const trust = await captureTrustError(() =>
+      access.openTcpForward(
+        sshMethod(),
+        "remote-1",
+        { host: "service.internal", port: 443 },
+        setup.context,
+      ),
+    );
+    assert.equal(trust.host, "ssh.example.test");
+    assert.equal(trust.port, 2222);
+    assert.equal(trust.keyType, firstKey.keyType);
+    assert.match(trust.fingerprint, /^SHA256:/);
+
+    await access.enrollHostKey(trust, context.signal);
+    const knownHosts = await readFile(join(directory, "known_hosts"), "utf8");
+    assert.equal(
+      knownHosts,
+      `[ssh.example.test]:2222 ${firstKey.keyType} ${firstKey.key}\n`,
+    );
+    await setup.cleanup();
   });
 });
 
@@ -835,6 +927,120 @@ test("OpenSSH remote service refusal is distinct from SSH readiness failure", as
       );
     } finally {
       await transport.close();
+      await setup.cleanup();
+    }
+  });
+});
+
+test("OpenSSH forwarding policy rejection is distinct from SSH login failure", async () => {
+  await withTempDirectory(async (directory) => {
+    const keySpecPath = join(directory, "host-key.json");
+    await writeFile(keySpecPath, JSON.stringify(key("host-key-one")), "utf8");
+    const access = new OpenSshAccessAdapter({
+      knownHostsPath: join(directory, "known_hosts"),
+      keyscanCommand: {
+        executable: process.execPath,
+        prefixArgs: [fakeKeyscan, keySpecPath],
+      },
+      sshCommand: {
+        executable: process.execPath,
+        prefixArgs: [
+          "-e",
+          "process.stderr.write('channel 0: open failed: administratively prohibited: open failed\\nstdio forwarding failed\\n'); setTimeout(() => process.exit(255), 25);",
+          "--",
+        ],
+      },
+      icaclsCommand: {
+        executable: process.execPath,
+        prefixArgs: [noopCommand],
+      },
+    });
+    const setup = setupContext();
+    const trust = await captureTrustError(() =>
+      access.openTcpForward(
+        sshMethod(),
+        "remote-1",
+        { host: "service.internal", port: 8188 },
+        setup.context,
+      ),
+    );
+    await access.enrollHostKey(trust, context.signal);
+    const transport = await access.openTcpForward(
+      sshMethod(),
+      "remote-1",
+      { host: "service.internal", port: 8188 },
+      setup.context,
+    );
+    const channel = await transport.openChannel(context);
+
+    try {
+      const [error] = await once(channel.stream, "error");
+      assert.equal(error.code, "unsupported-operation");
+      assert.equal(
+        error.message,
+        "SSH connected, but this server does not permit TCP forwarding.",
+      );
+      assert.doesNotMatch(error.message, /administratively prohibited|channel 0|stdio/);
+    } finally {
+      await channel.close().catch(() => undefined);
+      await transport.close().catch(() => undefined);
+      await setup.cleanup();
+    }
+  });
+});
+
+test("OpenSSH remote target timeout is distinct from SSH readiness failure", async () => {
+  await withTempDirectory(async (directory) => {
+    const keySpecPath = join(directory, "host-key.json");
+    await writeFile(keySpecPath, JSON.stringify(key("host-key-one")), "utf8");
+    const access = new OpenSshAccessAdapter({
+      knownHostsPath: join(directory, "known_hosts"),
+      keyscanCommand: {
+        executable: process.execPath,
+        prefixArgs: [fakeKeyscan, keySpecPath],
+      },
+      sshCommand: {
+        executable: process.execPath,
+        prefixArgs: [
+          "-e",
+          "process.stderr.write('channel 0: open failed: connect failed: Connection timed out\\nstdio forwarding failed\\n'); setTimeout(() => process.exit(255), 25);",
+          "--",
+        ],
+      },
+      icaclsCommand: {
+        executable: process.execPath,
+        prefixArgs: [noopCommand],
+      },
+    });
+    const setup = setupContext();
+    const trust = await captureTrustError(() =>
+      access.openTcpForward(
+        sshMethod(),
+        "remote-1",
+        { host: "service.internal", port: 8188 },
+        setup.context,
+      ),
+    );
+    await access.enrollHostKey(trust, context.signal);
+    const transport = await access.openTcpForward(
+      sshMethod(),
+      "remote-1",
+      { host: "service.internal", port: 8188 },
+      setup.context,
+    );
+    const channel = await transport.openChannel(context);
+
+    try {
+      const [error] = await once(channel.stream, "error");
+      assert.equal(error.code, "provider-unavailable");
+      assert.equal(
+        error.message,
+        "SSH connected, but the requested service could not be reached from the server.",
+      );
+      assert.doesNotMatch(error.message, /Connection timed out|channel 0|stdio/);
+    } finally {
+      await channel.close().catch(() => undefined);
+      await transport.close().catch(() => undefined);
       await setup.cleanup();
     }
   });

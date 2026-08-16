@@ -671,6 +671,26 @@ test("host-trust approve is an explicit structured command with strict evidence 
   assert.equal(genericYes.status, 1);
   assert.equal(genericYes.stdout, "");
   assert.match(JSON.parse(genericYes.stderr).error.message, /Unknown host-trust approve option: --yes/);
+
+  const optionLikeHost = run(
+    "--json",
+    "host-trust",
+    "approve",
+    "--host",
+    "-oProxyCommand=attacker",
+    "--port",
+    "2222",
+    "--key-type",
+    "ssh-ed25519",
+    "--fingerprint",
+    "SHA256:fixture",
+  );
+  assert.equal(optionLikeHost.status, 1);
+  assert.equal(optionLikeHost.stdout, "");
+  assert.match(
+    JSON.parse(optionLikeHost.stderr).error.message,
+    /host-trust approve --host must not begin with a hyphen/,
+  );
 });
 
 test("bare --json fails as structured command-mode usage instead of launching the TUI", () => {

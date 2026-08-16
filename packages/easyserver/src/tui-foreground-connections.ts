@@ -128,6 +128,31 @@ export class TuiForegroundConnectionOperations {
     return descriptor;
   }
 
+  async retry(
+    id: string,
+    context: OperationContext,
+    interaction: TuiForegroundConnectionInteraction = {},
+  ): Promise<TuiForegroundConnection> {
+    const record = this.#records.get(id);
+    if (record === undefined || record.descriptor.state !== "failed") {
+      throw normalizedError("not-found", "Failed local connection is no longer available");
+    }
+    const request: TuiForegroundConnectionRequest = {
+      instanceId: record.descriptor.instanceId,
+      remoteHost: record.descriptor.remoteHost,
+      remotePort: record.descriptor.remotePort,
+      ...(record.descriptor.requestedLocalPort === undefined
+        ? {}
+        : { localPort: record.descriptor.requestedLocalPort }),
+      accessMethodId: record.descriptor.accessMethod.id,
+    };
+    const replacement = await this.open(request, context, interaction);
+    if (this.#records.get(id) === record && this.#records.delete(id)) {
+      this.#emit();
+    }
+    return replacement;
+  }
+
   async close(id: string): Promise<void> {
     const record = this.#records.get(id);
     if (record === undefined) {
@@ -210,6 +235,10 @@ function foregroundConnectionFailure(error: unknown): NormalizedError {
     "SSH host identity no longer matches the trusted host key.",
     "SSH on the server is not ready or reachable yet.",
     "SSH connected, but the requested service port is not accepting connections yet.",
+    "SSH connected, but the requested service could not be reached from the server.",
+    "SSH connected, but this server does not permit TCP forwarding.",
+    "The SSH route closed before TCP forwarding was established.",
+    "OpenSSH connection failed unexpectedly.",
     "Local OpenSSH client could not be started. Install or enable OpenSSH Client and retry.",
   ].includes(error.message)
     ? error.message

@@ -2,8 +2,8 @@ import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, open, readFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { chmod, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Duplex } from "node:stream";
 import {
@@ -108,6 +108,7 @@ export class OpenSshAccessAdapter implements AccessAdapter {
     context: AccessSetupContext,
   ): Promise<AccessTransportSession> {
     assertSshMethod(method);
+    assertSafeSshHost(method.ssh.host);
     await this.#assertHostTrusted(method, context.signal);
 
     const needsCredentialMaterial =
@@ -149,10 +150,12 @@ export class OpenSshAccessAdapter implements AccessAdapter {
     trust: HostTrustRequiredError,
     signal?: AbortSignal,
   ): Promise<void> {
+    assertSafeSshHost(trust.host);
     const scanned = await scanHostKeys(
       trust.host,
       trust.port,
       this.#keyscanCommands,
+      this.#sshCommand,
       signal,
     );
     const selected = preferredHostKey(scanned);
@@ -198,6 +201,7 @@ export class OpenSshAccessAdapter implements AccessAdapter {
       method.ssh.host,
       method.ssh.port,
       this.#keyscanCommands,
+      this.#sshCommand,
       signal,
     );
     const known = await readKnownHostKeys(
@@ -427,6 +431,15 @@ function assertSshMethod(
   }
 }
 
+function assertSafeSshHost(host: string): void {
+  if (host.startsWith("-")) {
+    throw normalizedError(
+      "unsupported-operation",
+      "SSH host must not begin with a hyphen.",
+    );
+  }
+}
+
 function passwordEnvironment(auth: PasswordAuth): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -496,6 +509,7 @@ async function scanHostKeys(
   host: string,
   port: number,
   commands: readonly CommandSpec[],
+  sshCommand: CommandSpec,
   signal?: AbortSignal,
 ): Promise<readonly HostKey[]> {
   const failures: unknown[] = [];
@@ -528,18 +542,91 @@ async function scanHostKeys(
     }
   }
 
+  try {
+    const keys = await scanHostKeysViaOpenSsh(host, port, sshCommand, signal);
+    if (keys.length > 0) {
+      return keys;
+    }
+    failures.push(new Error("OpenSSH handshake returned no host key"));
+  } catch (error) {
+    if (signal?.aborted) {
+      throw normalizedError("cancelled", "SSH host-key scan was cancelled", error);
+    }
+    failures.push(error);
+  }
+
   const cause =
     failures.length === 1
       ? failures[0]
       : new AggregateError(
           failures,
-          "No configured SSH key scanner could read a host key",
+          "No configured SSH key discovery path could read a host key",
         );
   throw normalizedError(
     "provider-unavailable",
-    "SSH host key could not be read. The server may still be starting, or the local OpenSSH key scanner may be unavailable.",
+    "EasyServer could not obtain the SSH host fingerprint. The SSH endpoint may not be ready, or the local SSH tools could not complete host-key discovery.",
     cause,
   );
+}
+
+async function scanHostKeysViaOpenSsh(
+  host: string,
+  port: number,
+  command: CommandSpec,
+  signal?: AbortSignal,
+): Promise<readonly HostKey[]> {
+  const directory = await mkdtemp(join(tmpdir(), "easyserver-ssh-hostkey-"));
+  const knownHostsPath = join(directory, "known_hosts");
+  try {
+    try {
+      await runCommand(
+        command,
+        [
+          "-F",
+          "none",
+          "-T",
+          "-N",
+          "-p",
+          String(port),
+          "-o",
+          "BatchMode=yes",
+          "-o",
+          "StrictHostKeyChecking=accept-new",
+          "-o",
+          `UserKnownHostsFile=${knownHostsPath}`,
+          "-o",
+          `GlobalKnownHostsFile=${nullDevice()}`,
+          "-o",
+          "HashKnownHosts=no",
+          "-o",
+          "CheckHostIP=no",
+          "-o",
+          "UpdateHostKeys=no",
+          "-o",
+          "PasswordAuthentication=no",
+          "-o",
+          "KbdInteractiveAuthentication=no",
+          "-o",
+          "PubkeyAuthentication=no",
+          "-o",
+          "HostbasedAuthentication=no",
+          "-o",
+          "GSSAPIAuthentication=no",
+          host,
+        ],
+        signal,
+        8_000,
+      );
+    } catch (error) {
+      if (signal?.aborted) {
+        throw error;
+      }
+      // Authentication is expected to fail: the isolated file is the handshake result.
+    }
+    return readKnownHostKeys(knownHostsPath, knownHostsLabel(host, port));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 function parseKeyscanOutput(output: string): readonly HostKey[] {
@@ -835,6 +922,13 @@ function openSshExitFailure(code: number | null, stderr: string): Error {
       cause,
     );
   }
+  if (/open failed: administratively prohibited|administratively prohibited: open failed/iu.test(diagnostic)) {
+    return normalizedSshError(
+      "unsupported-operation",
+      "SSH connected, but this server does not permit TCP forwarding.",
+      cause,
+    );
+  }
   if (/open failed: connect failed: Connection refused/iu.test(diagnostic)) {
     return normalizedSshError(
       "provider-unavailable",
@@ -842,10 +936,24 @@ function openSshExitFailure(code: number | null, stderr: string): Error {
       cause,
     );
   }
+  if (/open failed: connect failed:/iu.test(diagnostic)) {
+    return normalizedSshError(
+      "provider-unavailable",
+      "SSH connected, but the requested service could not be reached from the server.",
+      cause,
+    );
+  }
   if (/Permission denied/iu.test(diagnostic)) {
     return normalizedSshError(
       "authentication",
       "SSH authentication was rejected by the server.",
+      cause,
+    );
+  }
+  if (/Connection closed by [^\s]+ port \d+/iu.test(diagnostic)) {
+    return normalizedSshError(
+      "provider-unavailable",
+      "The SSH route closed before TCP forwarding was established.",
       cause,
     );
   }

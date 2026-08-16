@@ -1030,7 +1030,7 @@ function parseSshAccessDescriptor(
     );
   }
   const parsed: SshAccessDescriptor = {
-    host: expectSshToken(ssh.host, `${path}.host`),
+    host: expectSshHost(ssh.host, `${path}.host`),
     port: expectTcpPort(ssh.port, `${path}.port`),
     username: expectSshToken(ssh.username, `${path}.username`),
   };
@@ -1729,6 +1729,14 @@ function expectNonEmptyString(value: unknown, path: string): string {
   }
 
   return value;
+}
+
+function expectSshHost(value: unknown, path: string): string {
+  const host = expectSshToken(value, path);
+  if (host.startsWith("-")) {
+    throw new PluginContractError(`${path} must not begin with a hyphen`);
+  }
+  return host;
 }
 
 function expectSshToken(value: unknown, path: string): string {

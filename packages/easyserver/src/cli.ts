@@ -741,6 +741,11 @@ function parseHostTrustApprovalArgs(
       if (value.trim().length === 0) {
         throw new CliUsageError("host-trust approve --host must be non-empty");
       }
+      if (value.startsWith("-")) {
+        throw new CliUsageError(
+          "host-trust approve --host must not begin with a hyphen",
+        );
+      }
       host = value;
       continue;
     }

@@ -35,6 +35,7 @@ export interface TuiDaemonOperations {
     interaction?: TuiDaemonInteraction,
   ): Promise<LivePersistentConnectionSession>;
   closeSession(id: string): Promise<void>;
+  enrollHostKey(trust: HostTrustRequiredError): Promise<void>;
   setEndpointIntentEnabled(name: string, enabled: boolean): Promise<EndpointIntentStatus>;
   retryEndpointIntent(name: string): Promise<EndpointIntentStatus>;
   removeEndpointIntent(name: string): Promise<void>;
@@ -66,6 +67,9 @@ export function createTuiDaemonOperations(
     },
     async closeSession(id) {
       await (await managed.requireClient()).closeSession(id);
+    },
+    async enrollHostKey(trust) {
+      await sshAdapter.enrollHostKey(trust);
     },
     async setEndpointIntentEnabled(name, enabled) {
       return (await managed.requireClient()).setEndpointIntentEnabled(name, enabled);
