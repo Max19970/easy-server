@@ -60,4 +60,4 @@ Historical documents describe what shipped or was verified at a particular relea
 
 - [EasyServer 0.2.0 release notes](releases/v0.2.0.md)
 - [EasyServer 0.1.0 release notes](releases/v0.1.0.md)
-- [EasyServer 0.1.0 dependency and supply-chain audit](dependency-audit-0.1.0.md)
+- [EasyServer 0.1.0 dependency and supply-chain audit](releases/v0.1.0-dependency-audit.md)
