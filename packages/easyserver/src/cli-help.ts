@@ -318,7 +318,7 @@ const coreCommands: readonly CliHelpNode[] = [
         purpose:
           "Close the current transport and remove the Session record after cleanup succeeds. Repeating close on a cleanup-failed Session retries cleanup for the same identity.",
         usage: ["<session-id>"],
-        example: "easyserver sessions close session:01234567-89ab-cdef-0123-456789abcdef",
+        example: "easyserver sessions close 01234567-89ab-cdef-0123-456789abcdef",
       },
       {
         name: "intents",

@@ -481,6 +481,16 @@ test("core help is hierarchical, descriptive and available before Local State or
   assert.match(withoutNativeAddons.stdout, /EasyServer/);
 });
 
+test("sessions close help uses the bare UUID shape returned by daemon Sessions", () => {
+  const result = run("sessions", "close", "--help");
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(
+    result.stdout,
+    /Example:\n  easyserver sessions close 01234567-89ab-cdef-0123-456789abcdef/,
+  );
+  assert.doesNotMatch(result.stdout, /sessions close session:/);
+});
+
 test("usage errors point to the deepest relevant contextual help page", () => {
   const destroy = run("instances", "destroy");
   assert.equal(destroy.status, 1);
