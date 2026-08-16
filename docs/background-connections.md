@@ -52,9 +52,9 @@ easyserver sessions create <instance-id> --port 8188
 The same connection options used by foreground `connect` are available when relevant:
 
 ```powershell
-easyserver sessions create <instance-id> \
-  --port 8188 \
-  --local-port 54321 \
+easyserver sessions create <instance-id> `
+  --port 8188 `
+  --local-port 54321 `
   --access-method <method-id>
 ```
 
@@ -77,8 +77,8 @@ A failed Session keeps a bounded failure record so cleanup/recovery remains visi
 Automation can attach a stable idempotency key:
 
 ```powershell
-easyserver sessions create <instance-id> \
-  --port 8188 \
+easyserver sessions create <instance-id> `
+  --port 8188 `
   --idempotency-key comfyui-main
 ```
 
@@ -91,8 +91,8 @@ Session idempotency is daemon-local. Closing the Session releases the key, and d
 Persist desired connection state with a named Endpoint intent:
 
 ```powershell
-easyserver sessions intents create comfyui-main <instance-id> \
-  --port 8188 \
+easyserver sessions intents create comfyui-main <instance-id> `
+  --port 8188 `
   --local-port 54321
 ```
 
