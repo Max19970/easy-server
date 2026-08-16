@@ -1,29 +1,33 @@
 # Install from GitHub Releases
 
-EasyServer `0.2.0` provides a portable **Windows 11 x64** ZIP on the GitHub Releases page. This is a supported way to obtain and run the CLI without installing `@easyai101/easyserver` from npm.
+EasyServer publishes a portable Windows x64 ZIP alongside the npm packages. Use it when you want a versioned EasyServer core directory without installing the core package into npm's global prefix.
 
-The ZIP is not a self-contained native executable. It contains EasyServer core and its runtime dependencies, but **does not bundle Node.js or any Provider Plugin**.
+The ZIP is **not** a standalone native executable. It contains the core CLI and runtime dependencies, but it intentionally contains neither Node.js nor Provider Plugins.
 
 ## Requirements
 
-Install the qualified release runtime first:
+For EasyServer `0.2.0` you need:
 
-- Node.js `24.18.1` available as `node` on `PATH`;
 - Windows 11 x64;
-- Windows OpenSSH Client (`ssh` and `ssh-keyscan` on `PATH`) when using SSH-backed access.
+- Node.js `24.18.1` available as `node` on `PATH`;
+- Windows OpenSSH Client when you use SSH-backed connections.
 
-npm is not required just to run the downloaded core CLI. npm `11.16.0` is needed only if you later choose to install npm-distributed Provider Plugins into the portable bundle.
+npm is not required just to run the extracted core bundle. It is needed only when you add npm-distributed Provider Plugins to that extracted prefix.
 
-## Download and verify
+The authoritative current platform boundary is [Supported platforms](supported-platforms.md).
 
-Download these two assets from the `v0.2.0` GitHub Release:
+## Download the release assets
+
+From GitHub Release `v0.2.0`, download:
 
 ```text
 easyserver-0.2.0-windows-x64.zip
 easyserver-0.2.0-SHA256SUMS.txt
 ```
 
-Verify the ZIP before extracting it. This uses the .NET SHA-256 implementation available to Windows PowerShell and does not depend on an optional hashing cmdlet:
+## Verify the checksum
+
+Run this in Windows PowerShell from the directory containing both downloads:
 
 ```powershell
 $expected = ((Get-Content .\easyserver-0.2.0-SHA256SUMS.txt) -split '\s+')[0]
@@ -38,64 +42,87 @@ try {
 if ($actual -ne $expected) { throw 'EasyServer release checksum mismatch' }
 ```
 
-## Extract and run
+Do not continue with an artifact whose checksum does not match the published file.
 
-Choose a directory for this version and extract the ZIP into it:
+## Extract and run EasyServer
+
+Choose a directory for this version:
 
 ```powershell
 $easyserver = Join-Path $PWD 'easyserver-0.2.0-windows-x64'
 New-Item -ItemType Directory -Force $easyserver | Out-Null
 Expand-Archive .\easyserver-0.2.0-windows-x64.zip -DestinationPath $easyserver -Force
+```
+
+Check the extracted CLI:
+
+```powershell
 & "$easyserver\easyserver.cmd" --version
 & "$easyserver\easyserver.cmd" plugins list
 ```
 
-The expected version is `0.2.0`, and a fresh bundle reports:
+A fresh `0.2.0` bundle reports version `0.2.0` and:
 
 ```text
 No provider plugins configured.
 ```
 
-You can keep the bundle anywhere convenient and invoke `easyserver.cmd` by path, or add that directory to your own `PATH` if desired.
+Run the TUI with:
+
+```powershell
+& "$easyserver\easyserver.cmd"
+```
+
+You can keep the bundle anywhere convenient and invoke it by path or add that directory to your own `PATH`.
 
 ## Add a Provider Plugin later
 
-Provider Plugins remain explicit opt-in components. Install a selected plugin into the **same extracted prefix**, then register it with that bundle's CLI. Release-specific instructions pin the compatible `0.2.0` plugin version so a future npm `latest` cannot silently select an incompatible line:
+Provider Plugins are opt-in packages. Install them into the **same extracted EasyServer prefix** so that this portable CLI can discover them.
+
+Vast.ai:
 
 ```powershell
 npm install --global --prefix $easyserver @easyai101/easyserver-plugin-vastai@0.2.0
 & "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-vastai
 ```
 
-Intelion.cloud is equivalent:
+Intelion.cloud:
 
 ```powershell
 npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion@0.2.0
 & "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-intelion
 ```
 
-Installing a Provider Plugin this way does not turn it into part of the default GitHub Release artifact; it modifies only your extracted local bundle.
+Then run the portable TUI and configure the provider normally.
 
-## Update the portable bundle
+Installing a plugin into your ordinary global npm prefix does not make it part of a separate portable EasyServer directory. Likewise, installing a plugin into this prefix changes only this extracted copy; it does not change the original release artifact.
 
-For a future release, download and verify the new versioned ZIP, extract it into a new versioned directory, and reinstall only the Provider Plugins you want into that new prefix. Do not copy `node_modules` from an older bundle over the new one.
+## Update to a newer portable release
 
-By default, EasyServer Local State lives under your user profile and credentials live in the OS-backed Secret Store, so they are not stored inside the portable bundle. Custom `EASYSERVER_STATE_FILE` or daemon paths remain the caller's responsibility.
+Treat each versioned ZIP as its own installation directory:
 
-## What is inside the ZIP
+1. Download the new release ZIP and checksum.
+2. Verify the new checksum.
+3. Extract into a new versioned directory.
+4. Reinstall only the Provider Plugins you want into the new prefix.
+5. Start the new version and confirm the configured provider/state behavior you expect.
+
+Do not copy `node_modules` from an older bundle over a newer one.
+
+EasyServer Local State and Secret Store data are normally outside the bundle under your user profile, so extracting a new version does not itself reset them. The [Package lifecycle](package-lifecycle.md) and [Versioning and compatibility](versioning-and-compatibility.md) documents define the supported state-preservation contract.
+
+## What the ZIP contains
 
 The portable artifact contains:
 
-- the `easyserver.cmd` and PowerShell launch shims;
+- `easyserver.cmd` and the PowerShell launch shim;
 - packed `@easyai101/easyserver` and `@easyai101/easyserver-plugin-sdk` packages;
 - the CLI's production runtime dependencies, including the qualified Windows keyring binary;
 - a short bundle README and the MIT license.
 
-It intentionally does **not** contain:
+It intentionally does not contain:
 
 - Node.js;
 - Vast.ai or Intelion.cloud Provider Plugins;
-- repository source files, workspace symlinks or development dependencies;
+- repository source files, workspace symlinks, or development dependencies;
 - maintainer/private release state.
-
-Release preparation builds the ZIP from npm-packed release packages, computes SHA-256, extracts the resulting ZIP into a clean directory outside the repository and verifies `easyserver.cmd --version`, `--help`, `plugins list` and a real no-argument TUI launch/clean exit from that extracted copy before the artifact is eligible for attachment to a GitHub Release.

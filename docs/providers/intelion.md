@@ -1,38 +1,44 @@
-# Intelion.cloud quick start
+# Use EasyServer with Intelion.cloud
 
-The Intelion.cloud Provider Plugin keeps Intelion's catalog/configurator model provider-specific, then exposes created cloud servers through the shared EasyServer inventory, lifecycle and Endpoint surfaces.
+The Intelion.cloud Provider Plugin keeps Intelion's server catalog/configuration model provider-specific, then exposes created servers through EasyServer's shared lifecycle and local connection workflows.
 
-## 1. Prepare the Intelion.cloud account
+This guide owns Intelion-specific account preparation, configuration fields, connection credentials, and cleanup semantics.
+
+## Prepare your Intelion.cloud account
 
 You need:
 
-- an Intelion.cloud account with permission/quota to create the cloud-server configuration you select;
+- an Intelion.cloud account with permission/quota for the server configuration you plan to create;
 - an Intelion API token.
 
-Registered Intelion SSH public keys remain an optional provider-side server-creation setting. EasyServer's `0.2.0` normalized SSH tunnel does not use the API token or an Intelion public-key record as the SSH login credential: after host trust succeeds, it resolves the provider-issued password for that specific server through Intelion's authenticated API when opening the connection.
+Registered Intelion SSH public keys are optional provider-side creation inputs. They are **not** the credential EasyServer's normal Intelion SSH tunnel uses in `0.2.x`.
 
-EasyServer imports the API token into its OS-backed Secret Store. The token authorizes Intelion API requests, including that deferred password lookup; it is not itself sent to OpenSSH and is not stored in ordinary command arguments or Local State.
+For EasyServer-managed SSH access, the plugin resolves the provider-issued password for that specific server through Intelion's authenticated API **after** SSH host trust succeeds. The configured API token authorizes that lookup but is never sent to OpenSSH as the SSH password itself.
 
-## 2. Install and register the plugin
+## Install and add the plugin
 
-If EasyServer itself was installed globally from npm, install the Intelion.cloud plugin into that same global npm environment:
+For a global npm installation:
 
-```sh
+```powershell
 npm install --global @easyai101/easyserver-plugin-intelion
+easyserver
+```
+
+Then open **Settings & Support → Providers → Add installed provider** and choose **Intelion.cloud**.
+
+If you use the portable GitHub Release ZIP, install the plugin into that extracted EasyServer prefix instead. Follow [Install from GitHub Releases](../github-release-install.md#add-a-provider-plugin-later).
+
+For CLI/automation setup:
+
+```powershell
 easyserver plugins add @easyai101/easyserver-plugin-intelion
 ```
 
-If you use the portable GitHub Release ZIP, install the plugin into the extracted EasyServer prefix instead. Follow the prefix-aware commands in [Install from GitHub Releases](../github-release-install.md#add-a-provider-plugin-later).
+## Configure the API token
 
-Configure the API token:
+The TUI exposes the provider's declared `api-token` credential under its Actions menu and stores the value through EasyServer's OS-backed Secret Store.
 
-```sh
-export INTELION_API_TOKEN='<your-api-token>'
-easyserver plugins credential set @easyai101/easyserver-plugin-intelion api-token --env INTELION_API_TOKEN
-unset INTELION_API_TOKEN
-```
-
-PowerShell:
+For automation, import the token through an environment variable:
 
 ```powershell
 $env:INTELION_API_TOKEN = '<your-api-token>'
@@ -40,54 +46,60 @@ easyserver plugins credential set @easyai101/easyserver-plugin-intelion api-toke
 Remove-Item Env:INTELION_API_TOKEN
 ```
 
-Confirm the plugin is loaded and credential-ready:
+Check readiness with:
 
-```sh
+```powershell
 easyserver plugins list
 ```
 
-The Intelion.cloud plugin declares `api-token` as its required credential name. Before configuration, the status reports `credentials=missing:api-token`; after the opaque Secret Reference is bound, it reports `credentials=ready` without reading or printing the API token.
+Before configuration the provider reports `credentials=missing:api-token`; afterward it reports `credentials=ready` without printing the token.
 
-## 3. Discover the provider catalog
+## Create a server
 
-Intelion acquisition is exposed as the `server-configurator` Provider Feature.
+In the TUI, choose **Rent a server** and select Intelion.cloud.
 
-Every first-party configurator command publishes its own argument help. For example:
+The provider-owned configurator guides you through Intelion's available server choices instead of forcing them into a generic cross-provider create form. Billable creation goes through EasyServer's host-owned confirmation screen.
 
-```sh
+### Explore the catalog from the CLI
+
+Every configurator command exposes its own help:
+
+```powershell
+easyserver provider intelion server-configurator flavors --help
 easyserver provider intelion server-configurator os-images --help
+easyserver provider intelion server-configurator ssh-keys --help
 easyserver provider intelion server-configurator create --help
 ```
 
-List available flavors:
+List flavors:
 
-```sh
+```powershell
 easyserver provider intelion server-configurator flavors
 ```
 
 List OS images:
 
-```sh
+```powershell
 easyserver provider intelion server-configurator os-images
 ```
 
-Limit images to one flavor when useful:
+Filter images by flavor when useful:
 
-```sh
+```powershell
 easyserver provider intelion server-configurator os-images --flavor <flavor-id>
 ```
 
-List SSH keys already registered with Intelion:
+List SSH public-key records already registered with Intelion:
 
-```sh
+```powershell
 easyserver provider intelion server-configurator ssh-keys
 ```
 
-These commands print provider-owned JSON records. Use IDs returned by the same provider catalog when validating/creating a server.
+Use IDs returned by the provider catalog when validating or creating a server.
 
-## 4. Validate a server configuration
+### Validate before creation
 
-Required configuration fields are:
+The `0.2.x` configurator requires:
 
 ```text
 --name <name>
@@ -96,7 +108,7 @@ Required configuration fields are:
 --os <id>
 ```
 
-Optional fields are:
+Optional fields include:
 
 ```text
 --price-plan <id>
@@ -106,111 +118,102 @@ Optional fields are:
 --ssh-key <id>     # repeatable
 ```
 
-Network disk size must be at least 30 GB in the `0.2.0` plugin contract.
+Network disk size must be at least 30 GB in the current plugin contract.
 
-Validate before creating:
+Validate a configuration without creating a paid server:
 
-```sh
-easyserver provider intelion server-configurator validate \
-  --name easyserver-demo \
-  --flavor <flavor-id> \
-  --disk 30 \
-  --os <os-image-id> \
-  --ssh-key <ssh-key-id>
-```
-
-Validation is local/provider-contract validation and does not create a paid server.
-
-## 5. Create the server
-
-Use the same configuration with `create`:
-
-```sh
-easyserver provider intelion server-configurator create \
-  --name easyserver-demo \
-  --flavor <flavor-id> \
-  --disk 30 \
-  --os <os-image-id> \
-  --ssh-key <ssh-key-id>
-```
-
-The create command is billable and therefore uses EasyServer's host-owned safety gate. In an interactive terminal confirm the displayed provider/consequence prompt. Non-interactive automation must put `--yes` immediately after `create`, before the provider-owned configuration arguments:
-
-```sh
-easyserver provider intelion server-configurator create --yes \
-  --name easyserver-demo \
-  --flavor <flavor-id> \
-  --disk 30 \
+```powershell
+easyserver provider intelion server-configurator validate `
+  --name easyserver-demo `
+  --flavor <flavor-id> `
+  --disk 30 `
   --os <os-image-id>
 ```
 
-If the request may have reached Intelion but the final response becomes uncertain, EasyServer reports `outcome-unknown`. Do not blindly issue another create; reconcile first:
+### Create from the CLI
 
-```sh
+Use the same fields with `create`:
+
+```powershell
+easyserver provider intelion server-configurator create `
+  --name easyserver-demo `
+  --flavor <flavor-id> `
+  --disk 30 `
+  --os <os-image-id>
+```
+
+Interactive command mode asks for billable-operation confirmation. Non-interactive automation must opt in explicitly:
+
+```powershell
+easyserver provider intelion server-configurator create --yes `
+  --name easyserver-demo `
+  --flavor <flavor-id> `
+  --disk 30 `
+  --os <os-image-id>
+```
+
+If EasyServer reports `outcome-unknown`, the create request may already have reached Intelion. Do **not** blindly create another server; reconcile inventory first:
+
+```powershell
 easyserver instances list
 ```
 
-A successful create is refreshed into the shared EasyServer inventory. Some provider-side transitions are asynchronous, so use the inventory rather than assuming the server is immediately ready for every action/access path.
+Provider transitions can be asynchronous, so do not assume a newly created server is immediately ready for every lifecycle or connection action.
 
-## 6. Inspect and manage the server
+## Manage the server
 
-```sh
+After provider refresh observes the server, it appears in **Servers** and in the shared CLI inventory:
+
+```powershell
 easyserver instances list
 easyserver instances inspect <instance-id>
 ```
 
-Use lifecycle operations only when the current snapshot lists them as available:
+Only use lifecycle actions the current snapshot exposes:
 
-```sh
+```powershell
 easyserver instances start <instance-id>
 easyserver instances stop <instance-id>
 easyserver instances restart <instance-id>
 easyserver instances destroy <instance-id>
 ```
 
-Provider lifecycle state and billing state are deliberately separate concepts. Do not assume `stopped` means the resource has no remaining charges.
+Provider lifecycle state and billing state are separate. Do not assume `stopped` means the Intelion resource has no remaining charges.
 
-## 7. Connect to a workload
+## Connect to a service
 
-When an SSH-enabled image has active connection metadata, EasyServer can expose remote TCP services through its generic SSH Access Adapter. The provider-issued SSH password is resolved on demand through Intelion after host trust and is neither printed nor persisted as ordinary EasyServer Local State. A failure to retrieve or use that server-specific access credential is distinct from the configured Intelion API token being absent or rejected.
+When your workload is listening on the server, choose **Connect** from the server in the TUI and enter the workload's application/service port.
 
-For a workload on the server's `127.0.0.1:8188`:
+CLI example for remote port `8188`:
 
-```sh
+```powershell
 easyserver connect <instance-id> --port 8188
 ```
 
-EasyServer prints a dynamically allocated local loopback Endpoint such as `127.0.0.1:54321`. Use that local address while the foreground command remains open.
+EasyServer publishes a local loopback address such as `127.0.0.1:54321` while the connection is active.
 
-On first access, inspect and explicitly confirm the SSH host fingerprint. EasyServer never silently replaces a changed trusted key.
+### Intelion connection credential behavior
 
-For a persistent daemon-owned Endpoint, first establish trust interactively if needed, then:
+On first SSH-backed access, EasyServer first obtains/reviews the server's SSH host-key fingerprint. Only after host trust succeeds does the plugin request the server-specific password through Intelion's authenticated API.
 
-```sh
-easyserver daemon run
-# in another terminal:
-easyserver sessions create <instance-id> --port 8188
-easyserver sessions list
-```
+A failure to retrieve/use that password is therefore distinct from “the API token is missing or rejected”. EasyServer keeps those failure layers separate in connection remediation.
 
-Close it with:
+The provider-issued SSH password is not printed and is not persisted as ordinary EasyServer Local State.
 
-```sh
-easyserver sessions close <session-id>
-```
+See [Connect to a remote service](../connections.md) for the full connection model and [Background connections](../background-connections.md) for daemon-managed access.
 
-## 8. Clean up paid resources
+## Clean up the server
 
-When the server is no longer needed:
+When you no longer need the paid resource:
 
-1. close EasyServer Connection Sessions using it;
-2. destroy the Compute Instance if you intend to remove the Intelion cloud server;
-3. refresh inventory and verify the provider has converged to the expected terminal/absent state;
-4. only then remove/disable local plugin configuration if desired.
+1. Close any EasyServer foreground/background connections you no longer need.
+2. Destroy the server if your intent is to remove the Intelion cloud resource.
+3. Refresh inventory and verify that the provider has converged to the expected terminal/absent state.
+4. Only then remove or disable local provider configuration if desired.
 
-```sh
+```powershell
 easyserver instances destroy <instance-id>
 easyserver instances list
 ```
 
-Removing the local API-token reference or disabling the plugin does **not** destroy a paid Intelion resource.
+Disabling the plugin, removing the API-token reference, stopping the EasyServer daemon, or merely closing the TUI does **not** destroy the Intelion server.

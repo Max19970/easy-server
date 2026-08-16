@@ -1,55 +1,93 @@
-# Package lifecycle: upgrades, reinstalls and uninstall
+# Upgrade, reinstall, or uninstall EasyServer
 
-EasyServer keeps user state separate from the installed npm package. Ordinary package-manager operations must therefore change installed code without silently changing the remote resources or supported Local State that belong to the user.
+EasyServer keeps user state and provider resources separate from installed package files. Package-manager operations therefore change local code; they do not silently destroy remote servers or reset supported EasyServer state.
 
-This document defines the package-lifecycle contract for the current `0.2.x` compatibility line. The general compatibility rules remain defined in [Versioning and compatibility](versioning-and-compatibility.md).
+The compatibility rules behind these operations are defined in [Versioning and compatibility](versioning-and-compatibility.md).
 
-## Compatible upgrades and reinstalls
+## Upgrade or reinstall within `0.2.x`
 
-A compatible `0.2.x` upgrade or reinstall must preserve valid state created by an earlier `0.2.x` release. The `0.2.0` transition also accepts valid `0.1.x` Local State; users do not need to delete or recreate state to adopt the new TUI entrypoint or Plugin SDK line.
+A compatible `0.2.x` upgrade/reinstall preserves valid supported state from the same compatibility line. EasyServer `0.2.0` also accepts valid `0.1.x` Local State.
 
-- Local State remains in the configured `EASYSERVER_STATE_FILE` or, by default, `~/.easyserver/state.json`; it is not stored inside the npm package directory.
-- Canonical `instance:<uuid>` identities, Provider Plugin registrations and opaque credential Secret References remain unchanged unless the user performs an operation that intentionally changes them.
-- Secret values remain in the operating-system Secret Store. EasyServer stores only their opaque `secret:<uuid>` references in Local State, and the `0.2.x` line keeps the same EasyServer keyring service identity so those references continue to address the same credentials.
-- A package reinstall must not be treated as a state reset. Deleting Local State to make an upgrade work is not an acceptable migration.
-- State-format changes within `0.2.x` must be additive or transparently backward-compatible. Add a migration only when an actual format change requires one.
+In normal configuration:
 
-Provider Plugins are separately installed packages. Reinstalling or upgrading the core CLI does not implicitly install, upgrade or remove them.
+- Local State lives at `~/.easyserver/state.json` (or the configured `EASYSERVER_STATE_FILE`), outside the npm package directory;
+- canonical EasyServer instance identities and configured provider registrations stay in Local State;
+- credential values stay in the operating-system Secret Store;
+- Local State keeps opaque Secret References rather than raw credential values;
+- reinstalling the package is not a state reset.
 
-## Missing, removed or incompatible Provider Plugins
+Deleting Local State to make a compatible upgrade work is not an acceptable migration strategy.
 
-A configured Provider Plugin may temporarily be unavailable because its package was removed, its module cannot be loaded, or its declared compatibility range does not accept the installed EasyServer/Plugin SDK version.
+Provider Plugins are separate packages. Updating the core CLI does not automatically install, upgrade, or remove them.
 
-EasyServer treats that as a plugin availability failure, not as permission to rewrite user state:
+## If a configured Provider Plugin is missing or incompatible
 
-- `easyserver plugins list` reports the configured plugin as `failed` with the load/compatibility reason when the plugin cannot be admitted.
-- Other healthy configured plugins remain independently loadable.
-- The persisted plugin registration, its credential Secret References and canonical instance bindings are retained.
-- Removing and later reinstalling a compatible plugin therefore restores the same configured relationship instead of requiring the user to recreate it.
-- EasyServer does not interpret an unavailable plugin as evidence that its provider resources disappeared.
+A registered provider package can temporarily fail to load because it was removed, its module is broken, or its declared EasyServer/Plugin SDK compatibility does not accept the installed versions.
 
-When intentionally replacing a plugin with a version from a different compatibility line, follow that release's migration guidance rather than forcing the old plugin into the host.
+EasyServer treats this as provider availability failure, not as evidence that the user's provider resources or configuration disappeared.
 
-## Uninstall
+- `easyserver plugins list` reports the configured plugin as failed with a privacy-safe load/compatibility reason.
+- Other healthy providers remain independently usable.
+- The plugin registration, credential Secret References, and canonical instance bindings remain persisted.
+- Reinstalling a compatible plugin can restore the same configured relationship.
+
+Do not delete state or recreate provider resources simply because the local plugin package is temporarily unavailable.
+
+## Reinstall one provider package
+
+For an npm-global installation, reinstall the matching compatible plugin in the same global package environment as EasyServer:
+
+```powershell
+npm install --global @easyai101/easyserver-plugin-vastai@^0.2.0
+# or
+npm install --global @easyai101/easyserver-plugin-intelion@^0.2.0
+```
+
+For a portable ZIP installation, install the provider into that extracted prefix instead. See [Install from GitHub Releases](github-release-install.md#add-a-provider-plugin-later).
+
+The provider remains configured in EasyServer Local State unless you explicitly remove its registration.
+
+## Uninstalling packages does not clean up provider resources
 
 Uninstalling `@easyai101/easyserver` or a Provider Plugin removes installed package code only.
 
-EasyServer has no package-manager uninstall hook that destroys provider resources, deletes Local State or removes OS-keyring credentials. In particular:
+EasyServer intentionally has no package-manager uninstall hook that destroys provider resources, removes Local State, or deletes Secret Store entries.
 
-- uninstalling the CLI never issues provider `stop`, `destroy`, release or equivalent remote mutations;
-- uninstalling a Provider Plugin never destroys resources belonging to that provider;
+In particular:
+
+- uninstalling the core CLI never issues provider stop/destroy/release operations;
+- uninstalling a Provider Plugin never destroys that provider's servers;
 - Local State remains available for a later compatible reinstall;
-- credentials remain in the OS Secret Store unless the user explicitly removes them through EasyServer before uninstalling or removes them through the operating system afterward.
+- credentials remain in the OS Secret Store unless you explicitly remove them.
 
-Remote compute can continue to exist and incur provider charges after EasyServer is uninstalled. Users must explicitly destroy or otherwise release billable provider resources before uninstalling if that is their intent.
+Remote compute can continue to exist and incur charges after the local package is gone.
 
-## Clean removal when desired
+## Remove a credential before uninstalling
 
-If the goal is to stop using EasyServer completely rather than merely uninstall its package:
+When you deliberately want the credential removed from EasyServer's Secret Store relationship, do it while the CLI is still installed:
 
-1. Inspect and explicitly stop/destroy/release any remote resources that should no longer exist, following the provider's billing semantics.
-2. Remove configured credentials that should be deleted from the OS Secret Store while EasyServer is still installed.
-3. Uninstall separately installed Provider Plugin packages and the EasyServer CLI.
-4. Delete `~/.easyserver` only when the remaining Local State, canonical identities and recovery information are no longer needed.
+```powershell
+easyserver plugins credential remove @easyai101/easyserver-plugin-vastai api-key
+easyserver plugins credential remove @easyai101/easyserver-plugin-intelion api-token
+```
 
-Never use deletion of Local State as a substitute for remote resource cleanup: deleting a local record does not delete the provider resource it describes.
+Removing a local credential still does not destroy a provider resource.
+
+## Clean removal
+
+If your goal is to stop using EasyServer completely:
+
+1. Inspect the provider resources you still own.
+2. Destroy/release every paid resource you no longer want, following the provider guide's billing semantics.
+3. Verify provider convergence to the intended terminal/absent state.
+4. Close/disable any background connections you no longer need.
+5. Remove provider credentials from EasyServer if you want them deleted from the OS Secret Store relationship.
+6. Uninstall Provider Plugin packages and the core CLI.
+7. Delete `~/.easyserver` only when you no longer need its Local State, identities, trust data, or recovery information.
+
+Provider-specific cleanup:
+
+- [Vast.ai](providers/vastai.md#clean-up-the-rental)
+- [Intelion.cloud](providers/intelion.md#clean-up-the-server)
+
+Never use deletion of Local State as a substitute for provider cleanup. Deleting a local record cannot delete the remote resource it described.

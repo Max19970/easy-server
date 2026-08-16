@@ -1,41 +1,49 @@
-# Vast.ai quick start
+# Use EasyServer with Vast.ai
 
-The Vast.ai Provider Plugin keeps marketplace-specific search/rental behavior outside EasyServer core, then exposes rented instances through the shared EasyServer inventory, lifecycle and Endpoint surfaces.
+The Vast.ai Provider Plugin keeps marketplace-specific search and rental inside the provider, then exposes rented machines through EasyServer's shared server lifecycle and local connection workflows.
 
-## 1. Prepare the Vast.ai account
+This guide owns Vast.ai-specific account preparation, rental options, SSH requirements, and cleanup semantics.
+
+## Prepare your Vast.ai account
 
 You need:
 
-- a Vast.ai account able to rent instances;
+- a Vast.ai account that can rent instances;
 - a Vast.ai API key with the permissions required for the operations you plan to use;
-- an SSH public key registered at the **account** level before renting SSH-backed instances you want EasyServer to access.
+- an SSH public key registered at the **account level** before renting SSH-backed instances that EasyServer should access.
 
-Vast.ai account SSH keys are the normal one-time account preparation path for new instances. EasyServer does not require you to manually attach a key to every newly rented instance after that account-level key is prepared. Keep the corresponding private key only on the client machine; never paste it into repository files.
+Account-level SSH key setup is the normal one-time preparation path. You should not need to manually attach the same key to every new instance after rental.
 
-For Vast.ai in EasyServer `0.2.0`, that private key must also be discoverable by the system OpenSSH client through a standard identity file such as `~/.ssh/id_ed25519` or through `ssh-agent`. EasyServer's managed SSH path does not read your user `~/.ssh/config`, so an `IdentityFile` configured only there is not sufficient by itself.
+Keep the corresponding private key on your client machine. EasyServer's Vast.ai SSH route relies on the system OpenSSH client finding that identity through a standard identity file (for example `~/.ssh/id_ed25519`) or `ssh-agent`.
 
-If you add/change an account SSH key after an instance already exists, Vast.ai may require provider-side handling for that existing instance. The EasyServer workflow below assumes account preparation happens before rental.
+EasyServer's managed SSH path does not read your user `~/.ssh/config`, so an `IdentityFile` configured only there is not sufficient by itself.
 
-## 2. Install and register the plugin
+If you change the account SSH key after an instance already exists, provider-side handling may be needed for that existing instance. The normal EasyServer flow assumes account preparation happens before rental.
 
-If EasyServer itself was installed globally from npm, install the Vast.ai plugin into that same global npm environment:
+## Install and add the plugin
 
-```sh
+For a global npm installation:
+
+```powershell
 npm install --global @easyai101/easyserver-plugin-vastai
+easyserver
+```
+
+Then open **Settings & Support → Providers → Add installed provider** and choose **Vast.ai**.
+
+If you use the portable GitHub Release ZIP, install the plugin into that extracted EasyServer prefix instead. Follow [Install from GitHub Releases](../github-release-install.md#add-a-provider-plugin-later).
+
+For CLI/automation setup, register the installed package explicitly:
+
+```powershell
 easyserver plugins add @easyai101/easyserver-plugin-vastai
 ```
 
-If you use the portable GitHub Release ZIP, install the plugin into the extracted EasyServer prefix instead. Follow the prefix-aware commands in [Install from GitHub Releases](../github-release-install.md#add-a-provider-plugin-later).
+## Configure the API key
 
-Configure the Provider API key through the OS-backed Secret Store:
+The TUI exposes the provider's declared `api-key` credential under its Actions menu and stores the value through EasyServer's OS-backed Secret Store.
 
-```sh
-export VAST_API_KEY='<your-api-key>'
-easyserver plugins credential set @easyai101/easyserver-plugin-vastai api-key --env VAST_API_KEY
-unset VAST_API_KEY
-```
-
-PowerShell:
+For automation, import the key from an environment variable instead of placing it in ordinary command arguments:
 
 ```powershell
 $env:VAST_API_KEY = '<your-api-key>'
@@ -43,142 +51,146 @@ easyserver plugins credential set @easyai101/easyserver-plugin-vastai api-key --
 Remove-Item Env:VAST_API_KEY
 ```
 
-Confirm the plugin is loaded and credential-ready:
+Check readiness with:
 
-```sh
+```powershell
 easyserver plugins list
 ```
 
-The Vast.ai plugin declares `api-key` as its required credential name. Before configuration, the status reports `credentials=missing:api-key`; after the opaque Secret Reference is bound, it reports `credentials=ready` without reading or printing the API key.
+Before configuration the provider reports `credentials=missing:api-key`; afterward it reports `credentials=ready` without printing the secret value.
 
-## 3. Search the marketplace
+## Rent from the marketplace
 
-Vast.ai acquisition is a Provider Feature named `marketplace`. In the TUI, choose **Rent a server** from Home and open the Vast.ai rental flow. The first search step keeps GPU model, maximum hourly price and minimum reliability visible. **Choose GPU model** loads current rentable GPU names from Vast.ai so ordinary use does not depend on memorized spelling; exact manual entry remains available when a model is not present in that live sample or the suggestion read is temporarily unavailable.
+In the TUI, choose **Rent a server** and select Vast.ai.
 
-**More filters** keeps the remaining Vast controls in the same guided flow: minimum GPU count, verified-only hosts and result limit. Searching applies all six filters together. Large offer lists remain a bounded terminal list; select an offer and continue to rental options without switching to command mode.
+The guided marketplace flow supports:
 
-After selecting an offer, the TUI uses `ubuntu:22.04` as a usable default container image. Keep it for a normal Ubuntu server or edit the field to another Docker/OCI image reference when the workload needs a custom environment. Disk size, runtype and label remain available in the same TUI flow.
+- GPU model;
+- minimum GPU count;
+- maximum total hourly price;
+- minimum reliability;
+- verified-only hosts;
+- result limit.
 
-The command-specific arguments are discoverable directly from the CLI:
+**Choose GPU model** can load current rentable GPU names so ordinary use does not depend on memorized spelling. Manual entry remains available if the live suggestions are unavailable or do not include the model you want.
 
-```sh
+After you choose an offer, the rental flow exposes image, disk size, runtype, and label. The TUI uses `ubuntu:22.04` as a practical default image; change it when your workload needs another Docker/OCI image.
+
+Billable rental always goes through EasyServer's host-owned confirmation screen.
+
+### CLI marketplace search
+
+Discover the current command contract with:
+
+```powershell
 easyserver provider vastai marketplace search --help
 easyserver provider vastai marketplace rent --help
 ```
 
-For example, search the marketplace with:
+Example search:
 
-```sh
-easyserver provider vastai marketplace search \
-  --gpu 'RTX 4090' \
-  --min-gpus 1 \
-  --max-hourly 0.50 \
-  --min-reliability 0.95 \
-  --verified \
+```powershell
+easyserver provider vastai marketplace search `
+  --gpu 'RTX 4090' `
+  --min-gpus 1 `
+  --max-hourly 0.50 `
+  --min-reliability 0.95 `
+  --verified `
   --limit 10
 ```
 
-All filters are Vast-specific. Omit the ones you do not need. `--min-reliability` is a value from `0` to `1`; `--max-hourly` is the maximum total hourly price accepted by the plugin.
+All of these filters are Vast.ai-specific. `--min-reliability` uses a value from `0` to `1`; `--max-hourly` is the maximum total hourly price accepted by the plugin.
 
-The command prints JSON offers. Select a returned offer ID; do not invent an ID from a different marketplace view because the rental mutation is intentionally tied to Vast.ai's own offer model.
+### CLI rental
 
-## 4. Rent an offer
+Rent an offer returned by the Vast.ai marketplace:
 
-At minimum rental requires an offer ID and provider-compatible image:
-
-```sh
-easyserver provider vastai marketplace rent <offer-id> --image <image>
-```
-
-Optional rental arguments are:
-
-```text
---disk <gb>
---runtype <ssh|jupyter|args|ssh_proxy|ssh_direct|jupyter_proxy|jupyter_direct>
---label <label>
-```
-
-Example SSH-oriented rental:
-
-```sh
-easyserver provider vastai marketplace rent <offer-id> \
-  --image <image> \
-  --disk 40 \
-  --runtype ssh \
+```powershell
+easyserver provider vastai marketplace rent <offer-id> `
+  --image ubuntu:22.04 `
+  --disk 40 `
+  --runtype ssh `
   --label easyserver-demo
 ```
 
-The rental command is billable and therefore uses EasyServer's host-owned safety gate. In an interactive terminal confirm the displayed provider/consequence prompt. Non-interactive automation must put `--yes` immediately after `rent`, before the provider-owned arguments:
+Supported runtype values in the `0.2.x` plugin include:
 
-```sh
-easyserver provider vastai marketplace rent --yes <offer-id> --image <image>
+```text
+ssh
+jupyter
+args
+ssh_proxy
+ssh_direct
+jupyter_proxy
+jupyter_direct
 ```
 
-If transport/cancellation happens after the request may have been dispatched, EasyServer can report `outcome-unknown` rather than pretending the rental definitely failed. In that case **do not blindly retry**; refresh inventory first:
+Interactive command mode asks for confirmation. Non-interactive automation must opt in explicitly:
 
-```sh
+```powershell
+easyserver provider vastai marketplace rent --yes <offer-id> --image ubuntu:22.04
+```
+
+If EasyServer reports `outcome-unknown`, the request may have reached Vast.ai even though the final response was lost. Do **not** blindly repeat the billable rental; refresh inventory first:
+
+```powershell
 easyserver instances list
 ```
 
-A successful rental is reconciled into the shared EasyServer inventory.
+## Manage the rented server
 
-## 5. Inspect and manage the instance
+After the provider refresh observes the rental, it appears in **Servers** and in the shared CLI inventory:
 
-```sh
+```powershell
 easyserver instances list
 easyserver instances inspect <instance-id>
 ```
 
-Use only lifecycle actions shown as available for the current instance. Depending on the Vast.ai state, these may include:
+Only use lifecycle actions that the current server snapshot exposes. Depending on provider state, these can include:
 
-```sh
+```powershell
 easyserver instances start <instance-id>
 easyserver instances stop <instance-id>
 easyserver instances restart <instance-id>
 easyserver instances destroy <instance-id>
 ```
 
-A stopped allocation can still have provider billing/resource implications. Treat `destroy` as the cleanup operation when you intend to release the rented resource, and verify the resource disappears or reaches the provider's terminal state before assuming billing has ended.
+A stopped Vast.ai allocation can still have billing/resource implications. Treat provider state and billing state as separate concepts.
 
-## 6. Connect to a workload
+## Connect to a service
 
-For a workload listening on remote loopback port `8188`:
+When your workload is listening on the rented machine, choose **Connect** from the server in the TUI and enter the workload's application/service port.
 
-```sh
+CLI example for remote port `8188`:
+
+```powershell
 easyserver connect <instance-id> --port 8188
 ```
 
-EasyServer prints a dynamically allocated local loopback Endpoint such as `127.0.0.1:54321`. Use that local address while the foreground command stays open.
+EasyServer publishes a local loopback address such as `127.0.0.1:54321` while the connection is active.
 
-On first SSH-backed access, review the exact host fingerprint EasyServer shows. Explicit confirmation enrolls it; decline leaves it untrusted; a later changed key fails closed.
+### Vast.ai SSH identity requirement
 
-For daemon-owned persistent forwarding, first establish host trust interactively if needed, then:
+A successful Vast.ai API key does not prove the SSH login identity is available locally. The account-level public key must correspond to a private key that the system OpenSSH client can actually use through a standard identity location or `ssh-agent`.
 
-```sh
-easyserver daemon run
-# in another terminal:
-easyserver sessions create <instance-id> --port 8188
-easyserver sessions list
-```
+On first use EasyServer shows the provider route's exact SSH host-key fingerprint and requires explicit trust. EasyServer's trust store is separate from a fingerprint accepted in an independent `ssh` command.
 
-Close the session when finished:
+If SSH works but the application port does not, EasyServer reports the service-layer failure separately and lets you edit the service port or retry the retained request.
 
-```sh
-easyserver sessions close <session-id>
-```
+See [Connect to a remote service](../connections.md) for the full connection model and [Background connections](../background-connections.md) for daemon-managed access.
 
-## 7. Clean up paid resources
+## Clean up the rental
 
-When the rental is no longer needed:
+When you no longer need the paid resource:
 
-1. close EasyServer Connection Sessions using it;
-2. destroy the Compute Instance if you intend to release the Vast.ai rental;
-3. refresh `easyserver instances list` and verify the resource no longer appears as a live allocation;
-4. only then remove/disable local plugin configuration if desired.
+1. Close any EasyServer foreground/background connections you no longer need.
+2. Destroy the server if your intent is to release the Vast.ai rental.
+3. Refresh inventory and verify that the provider has converged to the expected terminal/absent state.
+4. Only then remove or disable local provider configuration if desired.
 
-```sh
+```powershell
 easyserver instances destroy <instance-id>
 easyserver instances list
 ```
 
-Removing the local API-key reference or disabling the plugin is **not** a substitute for provider-side resource destruction.
+Disabling the plugin, removing the API-key reference, stopping the EasyServer daemon, or merely closing the TUI does **not** destroy the Vast.ai rental.
