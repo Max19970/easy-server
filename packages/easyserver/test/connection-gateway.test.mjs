@@ -977,9 +977,11 @@ test("client disconnect during pending channel open closes the late channel", as
 
     let enteredResolve;
     let releaseChannel;
+    let channelClosedResolve;
     let channelCloses = 0;
     const entered = new Promise((resolve) => (enteredResolve = resolve));
     const channel = new Promise((resolve) => (releaseChannel = resolve));
+    const channelClosed = new Promise((resolve) => (channelClosedResolve = resolve));
     access.registerBuiltIn({
       kind: "loopback",
       async openTcpForward() {
@@ -1009,10 +1011,11 @@ test("client disconnect during pending channel open closes the late channel", as
       stream: new PassThrough(),
       async close() {
         channelCloses += 1;
+        channelClosedResolve();
       },
     });
-    await new Promise((resolve) => setImmediate(resolve));
 
+    assert.equal(await settlesWithin(channelClosed), true);
     assert.equal(channelCloses, 1);
     await result.session.close();
   });
