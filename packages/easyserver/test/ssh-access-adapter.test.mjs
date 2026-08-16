@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  hostTrustRequiredError,
   isHostTrustRequiredError,
   parseAccessMethods,
 } from "@easyai101/easyserver-plugin-sdk";
@@ -38,11 +40,22 @@ async function withTempDirectory(run) {
   }
 }
 
-function key(value) {
+function typedKey(keyType, value) {
   return {
-    keyType: "ssh-ed25519",
+    keyType,
     key: Buffer.from(value).toString("base64"),
   };
+}
+
+function key(value) {
+  return typedKey("ssh-ed25519", value);
+}
+
+function keyFingerprint(spec) {
+  return `SHA256:${createHash("sha256")
+    .update(Buffer.from(spec.key, "base64"))
+    .digest("base64")
+    .replace(/=+$/u, "")}`;
 }
 
 function sshMethod(privateKeySecretRef) {
@@ -399,6 +412,59 @@ test("unknown SSH host requires explicit fingerprint enrollment and changed keys
       ),
       (error) => error?.code === "authentication" && /mismatch/.test(error.message),
     );
+  });
+});
+
+test("host-key approval accepts only the reported preferred key and is idempotent", async () => {
+  await withTempDirectory(async (directory) => {
+    const keySpecPath = join(directory, "host-keys.json");
+    const recordPath = join(directory, "ssh-args.json");
+    const alternate = typedKey("ssh-rsa", "alternate-rsa-host-key");
+    const preferred = key("preferred-ed25519-host-key");
+    await writeFile(
+      keySpecPath,
+      JSON.stringify([alternate, preferred]),
+      "utf8",
+    );
+    const access = adapter(directory, keySpecPath, recordPath);
+    const setup = setupContext();
+
+    const observed = await captureTrustError(() =>
+      access.openTcpForward(
+        sshMethod(),
+        "remote-1",
+        { host: "service.internal", port: 443 },
+        setup.context,
+      ),
+    );
+    assert.equal(observed.keyType, preferred.keyType);
+    assert.equal(observed.fingerprint, keyFingerprint(preferred));
+
+    const fabricatedAlternate = hostTrustRequiredError(
+      observed.host,
+      observed.port,
+      alternate.keyType,
+      keyFingerprint(alternate),
+    );
+    await assert.rejects(
+      () => access.enrollHostKey(fabricatedAlternate, context.signal),
+      (error) =>
+        error?.code === "authentication" &&
+        /changed before trust confirmation/.test(error.message),
+    );
+    await assert.rejects(
+      () => readFile(join(directory, "known_hosts"), "utf8"),
+      (error) => error?.code === "ENOENT",
+    );
+
+    await access.enrollHostKey(observed, context.signal);
+    await access.enrollHostKey(observed, context.signal);
+    const knownHosts = await readFile(join(directory, "known_hosts"), "utf8");
+    assert.deepEqual(
+      knownHosts.trim().split(/\r?\n/u),
+      [`[ssh.example.test]:2222 ${preferred.keyType} ${preferred.key}`],
+    );
+    await setup.cleanup();
   });
 });
 

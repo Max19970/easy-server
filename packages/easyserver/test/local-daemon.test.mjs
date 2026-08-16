@@ -898,6 +898,58 @@ test("failed Endpoint intent restoration is actionable and can recover on retry"
   }
 });
 
+test("Endpoint intent host-trust failure preserves structured evidence and recovers on retry", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "easyserver-intent-host-trust-"));
+  const store = new JsonStateStore(join(directory, "state.json"));
+  const baseGateway = await createFakeGateway();
+  let trusted = false;
+  const daemon = await startLocalConnectionDaemon({
+    gateway: {
+      async openEndpoint(...args) {
+        if (!trusted) {
+          throw hostTrustRequiredError(
+            "ssh.example.test",
+            2222,
+            "ssh-ed25519",
+            "SHA256:fixture",
+          );
+        }
+        return baseGateway.openEndpoint(...args);
+      },
+    },
+    authToken: "fixture-token",
+    stateStore: store,
+  });
+  const client = new LocalDaemonClient(daemon.address, "fixture-token");
+
+  try {
+    await client.createEndpointIntent({
+      name: "ssh-trust",
+      instanceId: "instance:550e8400-e29b-41d4-a716-446655440000",
+      remotePort: 8188,
+    });
+    const failed = await waitForIntentState(client, "ssh-trust", "error");
+    assert.deepEqual(failed.failure, {
+      code: "host-trust-required",
+      message:
+        "SSH host trust required for ssh.example.test:2222; fingerprint SHA256:fixture",
+      hostTrust: {
+        target: { host: "ssh.example.test", port: 2222 },
+        key: { type: "ssh-ed25519", fingerprint: "SHA256:fixture" },
+      },
+    });
+
+    trusted = true;
+    const retrying = await client.retryEndpointIntent("ssh-trust");
+    assert.equal(retrying.state, "starting");
+    const recovered = await waitForIntentState(client, "ssh-trust", "live");
+    assert.ok(recovered.endpoint.port > 0);
+  } finally {
+    await daemon.close().catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("disabling and removing an Endpoint intent changes desired state without touching unrelated state", async () => {
   const directory = await mkdtemp(join(tmpdir(), "easyserver-intent-remove-"));
   const store = new JsonStateStore(join(directory, "state.json"));

@@ -2,7 +2,9 @@
 import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import {
+  hostTrustRequiredError,
   INSTANCE_STATES,
+  isHostTrustRequiredError,
   isNormalizedError,
   isProviderCliUsageError,
   normalizedError,
@@ -42,6 +44,7 @@ import {
   createHostRuntime,
   resolveHostRuntimePaths,
 } from "./host-runtime.js";
+import { sshHostTrustEvidence } from "./host-trust.js";
 import { ReloadingEndpointOpener } from "./reloading-endpoint-opener.js";
 import { ManagedDaemonOperations } from "./managed-daemon-operations.js";
 import { OsKeyringSecretStore } from "./secret-store.js";
@@ -184,6 +187,15 @@ async function run(args: readonly string[]): Promise<void> {
   if (command === "connect") {
     try {
       await runConnect(args.slice(1));
+    } catch (error) {
+      reportCliError(error, args);
+    }
+    return;
+  }
+
+  if (command === "host-trust") {
+    try {
+      await runHostTrust(args.slice(1));
     } catch (error) {
       reportCliError(error, args);
     }
@@ -628,6 +640,21 @@ async function runConnect(args: readonly string[]): Promise<void> {
   }
 }
 
+async function runHostTrust(args: readonly string[]): Promise<void> {
+  const [command, ...options] = args;
+  if (command !== "approve") {
+    throw new CliUsageError("host-trust expects approve");
+  }
+
+  const trust = parseHostTrustApprovalArgs(options);
+  await new OpenSshAccessAdapter().enrollHostKey(trust);
+  const evidence = sshHostTrustEvidence(trust);
+  writeCliSuccess(
+    { hostTrust: evidence, approved: true },
+    `Approved SSH host trust for ${escapeTerminalText(trust.host)}:${trust.port} ${escapeTerminalText(trust.keyType)} ${escapeTerminalText(trust.fingerprint)}\n`,
+  );
+}
+
 function isInteractiveTerminal(): boolean {
   return Boolean(
     cliOutputMode === "human" && process.stdin.isTTY && process.stdout.isTTY,
@@ -690,6 +717,85 @@ async function confirmHostTrustInteractively(
   } finally {
     readline.close();
   }
+}
+
+function parseHostTrustApprovalArgs(
+  args: readonly string[],
+): HostTrustRequiredError {
+  let host: string | undefined;
+  let port: number | undefined;
+  let keyType: string | undefined;
+  let fingerprint: string | undefined;
+
+  for (let index = 0; index < args.length; index += 2) {
+    const option = args[index];
+    const value = args[index + 1];
+    if (value === undefined) {
+      throw new CliUsageError(`host-trust approve option requires a value: ${option}`);
+    }
+
+    if (option === "--host") {
+      if (host !== undefined) {
+        throw new CliUsageError("host-trust approve accepts --host only once");
+      }
+      if (value.trim().length === 0) {
+        throw new CliUsageError("host-trust approve --host must be non-empty");
+      }
+      host = value;
+      continue;
+    }
+
+    if (option === "--port") {
+      if (port !== undefined) {
+        throw new CliUsageError("host-trust approve accepts --port only once");
+      }
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) {
+        throw new CliUsageError(
+          "host-trust approve --port must be an integer between 1 and 65535",
+        );
+      }
+      port = parsed;
+      continue;
+    }
+
+    if (option === "--key-type") {
+      if (keyType !== undefined) {
+        throw new CliUsageError("host-trust approve accepts --key-type only once");
+      }
+      if (value.trim().length === 0) {
+        throw new CliUsageError("host-trust approve --key-type must be non-empty");
+      }
+      keyType = value;
+      continue;
+    }
+
+    if (option === "--fingerprint") {
+      if (fingerprint !== undefined) {
+        throw new CliUsageError("host-trust approve accepts --fingerprint only once");
+      }
+      if (value.trim().length === 0) {
+        throw new CliUsageError("host-trust approve --fingerprint must be non-empty");
+      }
+      fingerprint = value;
+      continue;
+    }
+
+    throw new CliUsageError(`Unknown host-trust approve option: ${option}`);
+  }
+
+  if (
+    host === undefined ||
+    port === undefined ||
+    keyType === undefined ||
+    fingerprint === undefined
+  ) {
+    throw new CliUsageError(
+      "host-trust approve requires --host, --port, --key-type and --fingerprint",
+    );
+  }
+
+  return hostTrustRequiredError(host, port, keyType, fingerprint);
 }
 
 function parseConnectArgs(
@@ -1718,6 +1824,9 @@ function reportCliError(error: unknown, args: readonly string[]): void {
               ? "usage-error"
               : "command-failed",
           message: isNormalizedError(error) ? error.message : errorMessage(error),
+          ...(isHostTrustRequiredError(error)
+            ? { hostTrust: sshHostTrustEvidence(error) }
+            : {}),
           ...(helpCommand === undefined ? {} : { helpCommand }),
         },
       })}\n`,

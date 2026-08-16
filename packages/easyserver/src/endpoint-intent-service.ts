@@ -11,6 +11,10 @@ import type {
   Endpoint,
   OpenEndpointResult,
 } from "./connection-gateway.js";
+import {
+  sshHostTrustEvidence,
+  type SshHostTrustEvidence,
+} from "./host-trust.js";
 import { JsonStateStore, type EndpointIntent } from "./state-store.js";
 
 interface EndpointOpener {
@@ -37,6 +41,7 @@ export interface CreateEndpointIntentRequest {
 export interface EndpointIntentFailure {
   readonly code: string;
   readonly message: string;
+  readonly hostTrust?: SshHostTrustEvidence;
 }
 
 export type EndpointIntentStatus =
@@ -557,6 +562,7 @@ function intentFailure(error: unknown): EndpointIntentFailure {
     return {
       code: error.code,
       message: `SSH host trust required for ${error.host}:${error.port}; fingerprint ${error.fingerprint}`,
+      hostTrust: sshHostTrustEvidence(error),
     };
   }
   if (isNormalizedError(error)) {

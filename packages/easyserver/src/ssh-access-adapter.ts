@@ -155,12 +155,11 @@ export class OpenSshAccessAdapter implements AccessAdapter {
       this.#keyscanCommands,
       signal,
     );
-    const selected = scanned.find(
-      (candidate) =>
-        candidate.keyType === trust.keyType &&
-        candidate.fingerprint === trust.fingerprint,
-    );
-    if (selected === undefined) {
+    const selected = preferredHostKey(scanned);
+    if (
+      selected.keyType !== trust.keyType ||
+      selected.fingerprint !== trust.fingerprint
+    ) {
       throw normalizedError(
         "authentication",
         `SSH host key changed before trust confirmation for ${trust.host}:${trust.port}`,

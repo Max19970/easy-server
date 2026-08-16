@@ -207,6 +207,47 @@ const coreCommands: readonly CliHelpNode[] = [
       "easyserver connect instance:01234567-89ab-cdef-0123-456789abcdef --port 8188 --local-port 54321",
   },
   {
+    name: "host-trust",
+    summary: "Review and explicitly approve first-use SSH host identity.",
+    purpose:
+      "Provide a separate fail-closed SSH host-trust action for automation that has already received exact first-use trust evidence from EasyServer.",
+    children: [
+      {
+        name: "approve",
+        summary: "Approve the exact first-use SSH key reported by EasyServer.",
+        purpose:
+          "Freshly rescan the SSH host and enroll trust only when the currently preferred key exactly matches the supplied host, port, key type and fingerprint.",
+        usage: [
+          "--host <host> --port <ssh-port> --key-type <key-type> --fingerprint <fingerprint>",
+        ],
+        options: [
+          {
+            syntax: "--host <host>",
+            description: "Exact SSH host from structured host-trust-required evidence.",
+          },
+          {
+            syntax: "--port <ssh-port>",
+            description: "Exact SSH port from structured host-trust-required evidence.",
+          },
+          {
+            syntax: "--key-type <key-type>",
+            description: "Exact public host-key type reported by EasyServer.",
+          },
+          {
+            syntax: "--fingerprint <fingerprint>",
+            description: "Exact SHA256 host-key fingerprint reported by EasyServer.",
+          },
+        ],
+        notes: [
+          "This command is the explicit authorization action; there is no --yes or automatic trust-on-first-use mode.",
+          "EasyServer rescans the host before writing known_hosts. Stale evidence, a different currently preferred key, or an already-trusted different key is rejected.",
+        ],
+        example:
+          "easyserver --json host-trust approve --host ssh.example.test --port 22 --key-type ssh-ed25519 --fingerprint SHA256:example",
+      },
+    ],
+  },
+  {
     name: "daemon",
     summary: "Run and control the local daemon that owns persistent Connection Sessions.",
     purpose:
@@ -259,7 +300,7 @@ const coreCommands: readonly CliHelpNode[] = [
         ],
         options: connectionOptions(true),
         notes: [
-          "Unknown SSH hosts are not auto-trusted by daemon-owned setup. Enroll trust explicitly through a foreground connection first.",
+          "Unknown SSH hosts are never auto-trusted. Interactive callers can review and confirm the fingerprint in place; JSON automation can use the structured host-trust-required evidence with `easyserver --json host-trust approve` and then retry the same session request.",
         ],
         example:
           "easyserver sessions create instance:01234567-89ab-cdef-0123-456789abcdef --port 8188 --idempotency-key comfyui-main",

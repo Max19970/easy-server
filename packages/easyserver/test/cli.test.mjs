@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -559,6 +560,117 @@ test("global --json emits one structured usage error without human help text", (
       helpCommand: "easyserver instances --help",
     },
   });
+});
+
+test("JSON sessions create preserves structured first-use SSH trust evidence", async () => {
+  const stateFile = join(testDirectory, "json-host-trust-state.json");
+  const daemonFile = join(testDirectory, "json-host-trust-daemon.json");
+  const server = createHttpServer((request, response) => {
+    request.resume();
+    response.writeHead(409, { "content-type": "application/json" });
+    response.end(
+      JSON.stringify({
+        kind: "easyserver-error",
+        code: "host-trust-required",
+        message: "SSH host trust is required for ssh.example.test:2222",
+        host: "ssh.example.test",
+        port: 2222,
+        keyType: "ssh-ed25519",
+        fingerprint: "SHA256:fixture",
+      }),
+    );
+  });
+  server.listen({ host: "127.0.0.1", port: 0, exclusive: true });
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  await writeFile(
+    daemonFile,
+    `${JSON.stringify({
+      version: 1,
+      address: { host: "127.0.0.1", port: address.port },
+      authToken: "fixture-token",
+    })}\n`,
+    "utf8",
+  );
+
+  try {
+    const command = startWithDaemon(
+      stateFile,
+      daemonFile,
+      {},
+      "--json",
+      "sessions",
+      "create",
+      "instance:fixture",
+      "--port",
+      "8188",
+    );
+    const result = await finishCommand(command);
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, "");
+    assert.deepEqual(JSON.parse(result.stderr), {
+      schemaVersion: 1,
+      ok: false,
+      error: {
+        code: "host-trust-required",
+        message: "SSH host trust is required for ssh.example.test:2222",
+        hostTrust: {
+          target: { host: "ssh.example.test", port: 2222 },
+          key: { type: "ssh-ed25519", fingerprint: "SHA256:fixture" },
+        },
+      },
+    });
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test("host-trust approve is an explicit structured command with strict evidence arguments", () => {
+  const missingEvidence = run(
+    "--json",
+    "host-trust",
+    "approve",
+    "--host",
+    "ssh.example.test",
+    "--port",
+    "2222",
+    "--key-type",
+    "ssh-ed25519",
+  );
+  assert.equal(missingEvidence.status, 1);
+  assert.equal(missingEvidence.stdout, "");
+  assert.deepEqual(JSON.parse(missingEvidence.stderr), {
+    schemaVersion: 1,
+    ok: false,
+    error: {
+      code: "usage-error",
+      message:
+        "host-trust approve requires --host, --port, --key-type and --fingerprint",
+      helpCommand: "easyserver host-trust approve --help",
+    },
+  });
+
+  const genericYes = run(
+    "--json",
+    "host-trust",
+    "approve",
+    "--host",
+    "ssh.example.test",
+    "--port",
+    "2222",
+    "--key-type",
+    "ssh-ed25519",
+    "--fingerprint",
+    "SHA256:fixture",
+    "--yes",
+    "true",
+  );
+  assert.equal(genericYes.status, 1);
+  assert.equal(genericYes.stdout, "");
+  assert.match(JSON.parse(genericYes.stderr).error.message, /Unknown host-trust approve option: --yes/);
 });
 
 test("bare --json fails as structured command-mode usage instead of launching the TUI", () => {

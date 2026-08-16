@@ -216,9 +216,13 @@ The foreground output includes the selected Access Method ID and kind. The foreg
 
 ### First SSH connection and host trust
 
-If the selected access path uses SSH and the host key is unknown, foreground `connect` displays the exact host-key fingerprint and asks for explicit confirmation. Only explicit confirmation enrolls that key, then EasyServer retries once. Declining leaves it untrusted. A changed key fails closed rather than being silently replaced.
+If the selected access path uses SSH and the host key is unknown, foreground `connect` and interactive `sessions create` display the exact host-key fingerprint and ask for explicit confirmation. Only explicit confirmation enrolls that key, then EasyServer retries once. Declining leaves it untrusted.
 
-If host-key scanning fails just after a server starts, wait briefly and retry because SSH may not be ready yet. If it keeps failing, verify that the local OpenSSH Client provides `ssh` and `ssh-keyscan`; Diagnostics reports whether those commands are available. If EasyServer reports that the SSH host identity changed, verify that the server really was replaced or reinstalled before removing its old entry from `~/.easyserver/known_hosts` and trusting the new fingerprint.
+Non-interactive automation stays fail-closed but has a separate explicit JSON workflow. If `easyserver --json sessions create ...` returns `error.code: "host-trust-required"`, review the structured `error.hostTrust.target` and `error.hostTrust.key` values outside EasyServer, then pass those exact values to `easyserver --json host-trust approve --host ... --port ... --key-type ... --fingerprint ...`. EasyServer rescans the target before enrollment and accepts only the same currently preferred key it originally reports; replaying approval for that unchanged key is idempotent. Retry the original Session request afterward. Endpoint intents expose the same evidence as `failure.hostTrust` and can be resumed with `sessions intents retry <name>` after approval.
+
+A changed key for an already trusted host remains an authentication failure and cannot be approved through this first-use path. Verify that the server really was replaced or reinstalled before manually removing its old entry from `~/.easyserver/known_hosts`; never treat an unexpected changed-key error as a fresh trust prompt.
+
+If host-key scanning fails just after a server starts, wait briefly and retry because SSH may not be ready yet. If it keeps failing, verify that the local OpenSSH Client provides `ssh` and `ssh-keyscan`; Diagnostics reports whether those commands are available.
 
 A public-key authentication rejection is separate from provider API authentication. For an SSH method that relies on local OpenSSH identities, make sure the matching private key is available through a standard identity file or `ssh-agent` and that its public key is authorized on the server. Provider-specific requirements can add further constraints; for example, see the [Vast.ai guide](providers/vastai.md).
 
