@@ -131,7 +131,8 @@ class VastProviderAdapter implements ProviderAdapter {
     }
 
     const response = expectRecord(body, "Vast.ai instance response");
-    return parseInstance(response.instances);
+    const instance = expectOptionalInstanceRecord(response.instances);
+    return instance === undefined ? undefined : parseInstance(instance);
   }
 
   async getAccessMethods(
@@ -148,7 +149,10 @@ class VastProviderAdapter implements ProviderAdapter {
     }
 
     const response = expectRecord(body, "Vast.ai instance response");
-    const instance = expectRecord(response.instances, "Vast.ai instance");
+    const instance = expectOptionalInstanceRecord(response.instances);
+    if (instance === undefined) {
+      return [];
+    }
     const snapshot = parseInstance(instance);
     if (snapshot.providerExternalId !== providerExternalId) {
       throw normalizedError(
@@ -368,6 +372,15 @@ function normalizeInstanceState(
     default:
       return "unknown";
   }
+}
+
+function expectOptionalInstanceRecord(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  if (value === null || (Array.isArray(value) && value.length === 0)) {
+    return undefined;
+  }
+  return expectRecord(value, "Vast.ai instance");
 }
 
 function expectRecord(value: unknown, path: string): Record<string, unknown> {

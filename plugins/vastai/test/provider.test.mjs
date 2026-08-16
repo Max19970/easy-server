@@ -254,6 +254,37 @@ test("404 instance lookup returns undefined without weakening other HTTP errors"
   assert.equal(await plugin.provider.getInstance("404", context()), undefined);
 });
 
+test("post-destroy empty instance payloads normalize to absence", async () => {
+  for (const instances of [null, []]) {
+    const plugin = createVastProviderPlugin({
+      baseUrl: "https://fixture.vast.test",
+      async fetch() {
+        return json({ instances });
+      },
+    });
+
+    assert.equal(await plugin.provider.getInstance("404", context()), undefined);
+    assert.deepEqual(await plugin.provider.getAccessMethods("404", context()), []);
+  }
+});
+
+test("malformed non-empty instance payload still fails closed", async () => {
+  const plugin = createVastProviderPlugin({
+    baseUrl: "https://fixture.vast.test",
+    async fetch() {
+      return json({ instances: ["unexpected"] });
+    },
+  });
+
+  await assert.rejects(
+    plugin.provider.getInstance("404", context()),
+    (error) =>
+      isNormalizedError(error) &&
+      error.code === "plugin-failure" &&
+      error.message === "Vast.ai instance must be an object",
+  );
+});
+
 test("Vast lifecycle actions follow provider raw-state semantics", async () => {
   const statuses = ["running", "stopped", "loading", "frozen", "offline"];
   const plugin = createVastProviderPlugin({
