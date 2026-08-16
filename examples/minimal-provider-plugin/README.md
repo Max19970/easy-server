@@ -33,5 +33,7 @@ When adapting it for a real provider:
 ## Read the full contracts
 
 - [Build a Provider Plugin](../../docs/plugin-authoring.md)
+- [Создание плагина провайдера — русский перевод](../../docs/ru/plugin-authoring.md)
 - [Provider Plugin contracts and operational safety](../../docs/plugin-reference.md)
+- [Контракты плагина провайдера — русский перевод](../../docs/ru/plugin-reference.md)
 - [`@easyai101/easyserver-plugin-sdk`](../../packages/plugin-sdk/README.md)

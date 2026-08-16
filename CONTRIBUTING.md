@@ -1,5 +1,7 @@
 # Contributing to EasyServer
 
+**Languages:** English · [Русский](CONTRIBUTING.ru.md)
+
 Thanks for helping improve EasyServer. Contributions should preserve the product boundaries that let provider-specific behavior evolve without turning core into a collection of provider branches.
 
 ## Development setup
@@ -55,7 +57,7 @@ Public documentation is organized by reader task and complexity:
 
 Keep introductory documents focused on the reader's immediate goal. Put dense contracts in reference surfaces rather than duplicating them across README/how-to pages.
 
-Start at the [documentation index](docs/README.md).
+Start at the [documentation index](docs/README.md). Translation structure and contribution rules are documented in [Documentation localization](docs/localization.md).
 
 ## Security issues
 

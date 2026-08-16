@@ -1,5 +1,7 @@
 # Security policy
 
+**Languages:** English · [Русский](SECURITY.ru.md)
+
 Please report suspected EasyServer vulnerabilities privately. Do **not** open a public GitHub issue for an undisclosed security problem.
 
 The product's trust boundaries and security assumptions are documented separately in the [EasyServer security model](docs/security-model.md).

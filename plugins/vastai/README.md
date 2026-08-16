@@ -27,3 +27,5 @@ easyserver plugins add @easyai101/easyserver-plugin-vastai
 The provider requires account preparation for SSH-backed rentals; do not assume a valid API key is also an SSH login identity.
 
 Full provider guide: https://github.com/Max19970/easy-server/blob/main/docs/providers/vastai.md
+
+Русская версия: https://github.com/Max19970/easy-server/blob/main/docs/ru/providers/vastai.md

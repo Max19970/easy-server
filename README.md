@@ -1,5 +1,7 @@
 # EasyServer
 
+**Languages:** English · [Русский](README.ru.md)
+
 Rent cloud servers, manage them from one interface, and make remote services available on your own `localhost`.
 
 ```text
@@ -107,6 +109,7 @@ Choose the path that matches what you are trying to do:
 - **Automating the CLI:** [Machine-readable CLI output](docs/cli-json.md)
 - **Writing a Provider Plugin:** [Plugin SDK](packages/plugin-sdk/README.md)
 - **Looking for all guides/reference:** [Documentation index](docs/README.md)
+- **Reading or contributing translations:** [Documentation localization](docs/localization.md)
 
 Security issues should follow [SECURITY.md](SECURITY.md). Ordinary bugs and support questions are covered by the [support and maintenance policy](docs/support-and-maintenance.md).
 

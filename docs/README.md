@@ -1,5 +1,7 @@
 # EasyServer documentation
 
+**Languages:** English · [Русский](ru/README.md)
+
 Start with the task you are trying to complete. The documentation intentionally gets more technical as you move from first use into automation, extension, compatibility, and security details.
 
 ## Start here
@@ -49,6 +51,8 @@ Provider-specific command trees expose their own nested help when the installed 
 - [Minimal Provider Plugin example](../examples/minimal-provider-plugin/README.md) — small executable example package.
 
 ## Security and project policy
+
+- [Documentation localization](localization.md) — canonical language, locale layout, translation rules, and how to add another language.
 
 - [Security model](security-model.md) — trust boundaries, credential handling, SSH host trust, local control-plane protections, and plugin trust assumptions.
 - [Security reporting](../SECURITY.md) — how to report vulnerabilities privately.

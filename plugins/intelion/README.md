@@ -27,3 +27,5 @@ easyserver plugins add @easyai101/easyserver-plugin-intelion
 EasyServer uses the API token for Intelion API access; its normal SSH connection path resolves the server-specific provider password only after host trust succeeds.
 
 Full provider guide: https://github.com/Max19970/easy-server/blob/main/docs/providers/intelion.md
+
+Русская версия: https://github.com/Max19970/easy-server/blob/main/docs/ru/providers/intelion.md

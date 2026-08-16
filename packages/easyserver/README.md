@@ -31,5 +31,6 @@ Then run `easyserver` and use **Settings & Support → Providers → Add install
 Project documentation:
 
 - [README](https://github.com/Max19970/easy-server#readme)
+- [Русская документация](https://github.com/Max19970/easy-server/blob/main/README.ru.md)
 - [Getting started](https://github.com/Max19970/easy-server/blob/main/docs/getting-started.md)
 - [Documentation index](https://github.com/Max19970/easy-server/blob/main/docs/README.md)

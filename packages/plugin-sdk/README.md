@@ -63,5 +63,6 @@ Provider Plugins declare separate EasyServer and Plugin SDK SemVer compatibility
 Read next:
 
 - [Build a Provider Plugin](https://github.com/Max19970/easy-server/blob/main/docs/plugin-authoring.md)
+- [Создание плагина провайдера — русский перевод](https://github.com/Max19970/easy-server/blob/main/docs/ru/plugin-authoring.md)
 - [Provider Plugin contracts and operational safety](https://github.com/Max19970/easy-server/blob/main/docs/plugin-reference.md)
 - [Minimal Provider Plugin example](https://github.com/Max19970/easy-server/tree/main/examples/minimal-provider-plugin)
