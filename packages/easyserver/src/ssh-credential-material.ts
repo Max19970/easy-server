@@ -15,7 +15,9 @@ const OWNER_SCHEMA_VERSION = 1;
 const OWNER_SUFFIX = ".owner.json";
 const ABANDONED_SUFFIX = ".abandoned";
 const CREDENTIAL_PREFIX = "credential-";
-const WINDOWS_PROCESS_QUERY_TIMEOUT_MS = 5_000;
+// PowerShell startup can exceed five seconds on a contended Windows host/CI runner.
+// Keep the identity check bounded, but give the fail-closed query enough time to complete.
+const WINDOWS_PROCESS_QUERY_TIMEOUT_MS = 15_000;
 
 interface CredentialOwnerRecord {
   readonly schemaVersion: 1;
