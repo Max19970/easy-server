@@ -1,193 +1,114 @@
 # EasyServer
 
-EasyServer is a provider-independent control plane for rented compute: an interactive TUI plus an automation-oriented CLI for acquiring provider resources, managing their normalized lifecycle and exposing arbitrary remote TCP services through local loopback Endpoints. It owns the compute resource and connectivity boundary — not the workload running on the machine.
+Rent cloud servers, manage them from one interface, and make remote services available on your own `localhost`.
 
 ```text
-Provider
-  │
-  ├─ provider-specific Acquisition Flow
-  │      Vast.ai marketplace / Intelion.cloud configurator / ...
-  ▼
-Compute Instance
-  │
-  ├─ normalized lifecycle: start / stop / restart / destroy
-  │
-  └─ Provider Access Method → Access Adapter → local EasyServer Endpoint
-                                             127.0.0.1:<dynamic-port>
+Rent a server → start your app on it → Connect → 127.0.0.1:<local-port>
 ```
 
-That separation is intentional. Vast.ai searches/rents marketplace offers; Intelion.cloud configures servers from its own catalogs. EasyServer does not pretend those workflows share one universal provisioning request. Once a resource exists, both converge on the same inventory, lifecycle and local-access model.
+EasyServer keeps the provider-specific parts where they belong — Vast.ai still has a marketplace and Intelion.cloud still has its own server configurator — then gives the resulting servers one shared place for lifecycle and local access.
 
-## What EasyServer is for
-
-Use EasyServer when you want provider-independent lifecycle and connectivity around rented compute while keeping provider-specific product concepts in plugins. GPU/AI machines are one use case, but the model is equally applicable to development boxes, game servers, databases, CI workers and arbitrary remote services.
-
-EasyServer `0.2.0` ships first-party Provider Plugins for:
-
-- **Vast.ai** — marketplace search/rental plus normalized instance lifecycle/access;
-- **Intelion.cloud** — flavor/image/SSH-key catalog discovery, server configuration/creation and normalized lifecycle/access.
-
-Third-party providers can integrate through the public [`@easyai101/easyserver-plugin-sdk`](packages/plugin-sdk/README.md) without adding provider branches to core.
-
-## Supported release environment
-
-EasyServer `0.2.0` is release-qualified for **Windows 11 x64**, using **Node.js 24.18.1** and **npm 11.16.0**. SSH-backed access additionally requires the Windows OpenSSH Client (`ssh` and `ssh-keyscan` on `PATH`).
-
-Linux and macOS are not part of the `0.2.0` support contract yet; that means unqualified, not necessarily known-incompatible. See [Supported platforms](docs/supported-platforms.md) for the exact qualification boundary.
-
-## Install
-
-EasyServer `0.2.0` supports two CLI distribution paths on Windows 11 x64.
-
-**npm** is the primary package/ecosystem path:
-
-```powershell
-npm install --global @easyai101/easyserver
-```
-
-**GitHub Releases** also provide a versioned portable ZIP, so obtaining the core CLI does not require installing `@easyai101/easyserver` from npm. The ZIP requires Node.js `24.18.1` on `PATH`, includes no Provider Plugins and is verified with a published SHA-256 checksum. See [Install from GitHub Releases](docs/github-release-install.md).
-
-Both default installations contain **zero Provider Plugins**.
-
-If you installed the CLI globally from npm, install only the providers you want into that same global npm environment:
-
-```powershell
-npm install --global @easyai101/easyserver-plugin-vastai
-# or
-npm install --global @easyai101/easyserver-plugin-intelion
-```
-
-For ordinary interactive setup, run `easyserver`, open **Settings & Support → Providers → Add installed provider**, and choose the installed provider by name. Explicit `easyserver plugins add <module>` remains available for automation, advanced package/path registration, and plugins that do not advertise TUI discovery metadata.
-
-If you use the portable GitHub Release ZIP, install Provider Plugins into the extracted EasyServer prefix instead of npm's ordinary global prefix. The exact `--prefix` commands are in [Install from GitHub Releases](docs/github-release-install.md#add-a-provider-plugin-later).
-
-Check the active plugin set:
-
-```powershell
-easyserver plugins list
-```
-
-## Interactive TUI
-
-For ordinary interactive use, run EasyServer without arguments:
+The normal human interface is a full-screen terminal UI:
 
 ```powershell
 easyserver
 ```
 
-The TUI starts from four user tasks — **Rent a server**, **My servers**, **Connections**, and **Settings & Support** — over the same host-owned operations as command mode. Provider setup can select discoverable installed plugins by human name, and first-party rental flows stay guided inside the TUI. From **My servers**, ordinary lifecycle and **Connect** actions use server/local-port language; exact daemon, Session, Endpoint-intent and Access-Method state is progressively disclosed under **Technical details / Advanced**. It supports compact terminals, `NO_COLOR` and a linear `INK_SCREEN_READER=true` mode. Local connections owned by the TUI close with it; background connections can survive TUI exit.
-
-Use `easyserver --help` and nested `--help` pages for automation and advanced command-mode workflows. Plain `easyserver` on a non-interactive stdin/stdout fails clearly instead of emitting terminal control output.
-
-Provider package installation/update/uninstall remains a package-manager/CLI concern; the TUI registers and configures Provider Plugins that are already installed in the EasyServer package environment. See [Interactive TUI](docs/tui.md) for keyboard navigation, accessibility, connection lifetime and degraded/recovery behavior.
-
-## Quick start: rent compute and expose a service
-
-The shortest real flow is provider-specific acquisition followed by provider-independent access. This example uses Vast.ai; prepare the account/API key and register an account-level SSH public key first as described in the [Vast.ai guide](docs/providers/vastai.md).
-
-Import the API key into the OS-backed Secret Store:
+Use the CLI when you need scripting, automation, or advanced controls:
 
 ```powershell
-$env:VAST_API_KEY = '<your-api-key>'
-easyserver plugins credential set @easyai101/easyserver-plugin-vastai api-key --env VAST_API_KEY
-Remove-Item Env:VAST_API_KEY
+easyserver --help
 ```
 
-Search rentable offers and rent one:
+## Why EasyServer
+
+- **One workflow after rental.** Start, stop, restart, destroy, inspect, and connect without switching mental models for every provider.
+- **Provider-native acquisition.** Plugins keep provider-specific marketplace, image, flavor, pricing, and creation options instead of forcing them into a lossy universal form.
+- **Local access without opening public app ports.** A remote service such as `127.0.0.1:8188` can appear locally as `127.0.0.1:54321`.
+- **Interactive safety.** Billable/destructive actions and first-use SSH host trust require explicit confirmation.
+- **Opt-in providers.** The core installs without provider plugins; add only the providers you want.
+
+EasyServer manages the compute and connection boundary. It does **not** install or configure workloads on the rented machine.
+
+## Install and try it
+
+EasyServer `0.2.x` is currently qualified for **Windows 11 x64** with **Node.js 24.18.1**. See [Supported platforms](docs/supported-platforms.md) for the exact support boundary.
+
+Install the core CLI and one provider plugin:
 
 ```powershell
-easyserver provider vastai marketplace search --gpu "RTX 4090" --min-gpus 1 --verified --limit 10
-easyserver provider vastai marketplace rent <offer-id> --image <image> --runtype ssh
+npm install --global @easyai101/easyserver
+npm install --global @easyai101/easyserver-plugin-vastai
+# or: npm install --global @easyai101/easyserver-plugin-intelion
 ```
 
-Find the resulting EasyServer instance:
+Then run:
+
+```powershell
+easyserver
+```
+
+From the TUI:
+
+1. Open **Settings & Support → Providers** and add the installed provider.
+2. Configure its credential.
+3. Choose **Rent a server** and complete the provider's guided flow.
+4. Open the server, choose **Connect**, and enter the application/service port running on that server.
+5. Review the SSH fingerprint on first use, then use the local address EasyServer gives you.
+
+For example, if ComfyUI is listening on the server at `127.0.0.1:8188`, EasyServer may expose it as:
+
+```text
+http://127.0.0.1:54321
+```
+
+ComfyUI is only an example: EasyServer forwards arbitrary TCP services and does not manage the application itself.
+
+Want the full first-run walkthrough? Start with [Getting started](docs/getting-started.md).
+
+## Supported providers
+
+EasyServer `0.2.x` ships first-party plugins for:
+
+- **Vast.ai** — marketplace search and rental, lifecycle, and SSH-backed access. [Vast.ai guide](docs/providers/vastai.md)
+- **Intelion.cloud** — server catalog/configuration, creation, lifecycle, and SSH-backed access. [Intelion.cloud guide](docs/providers/intelion.md)
+
+Third-party providers can integrate through the public [`@easyai101/easyserver-plugin-sdk`](packages/plugin-sdk/README.md).
+
+## npm or portable ZIP
+
+The npm packages are the primary ecosystem path. Windows users can also run the core CLI from the versioned GitHub Release ZIP without installing the core package globally.
+
+The portable ZIP still requires Node.js and intentionally contains no provider plugins. Follow [Install from GitHub Releases](docs/github-release-install.md) for checksum verification and prefix-aware plugin installation.
+
+## CLI example
+
+The same basic flow is available without the TUI. Provider acquisition remains provider-specific; server management and connection become shared afterward:
 
 ```powershell
 easyserver instances list
-easyserver instances inspect <instance-id>
-```
-
-Suppose a workload such as ComfyUI is listening on the rented machine at `127.0.0.1:8188`. Expose that remote TCP target locally:
-
-```powershell
 easyserver connect <instance-id> --port 8188
 ```
 
-EasyServer prints a dynamically allocated loopback address such as:
+`connect` prints a local loopback address and owns it until the foreground command exits. See [Connect to a remote service](docs/connections.md) for port semantics, SSH trust, recovery, and advanced method selection.
 
-```text
-127.0.0.1:54321
-```
-
-Open `http://127.0.0.1:54321` locally while the command remains active. **ComfyUI is only an example workload**: EasyServer is forwarding generic TCP bytes and does not know or manage ComfyUI itself. `0.2.0` also does not provide HTTP path routing such as `/comfyui`.
-
-On the first SSH-backed connection, EasyServer shows the discovered host-key fingerprint and requires explicit trust confirmation before enrolling it. Changed trusted keys fail closed.
-
-For daemon-owned persistent forwarding:
-
-```powershell
-easyserver daemon run
-```
-
-Then, from another terminal:
-
-```powershell
-easyserver sessions create <instance-id> --port 8188
-easyserver sessions list
-easyserver sessions close <session-id>
-```
-
-When a paid resource is no longer needed, close its sessions and use the provider-supported destructive lifecycle operation rather than merely disabling the plugin:
-
-```powershell
-easyserver instances destroy <instance-id>
-easyserver instances list
-```
-
-Provider billing semantics remain provider-specific; `stopped` does not universally mean `not billed`.
-
-## Core commands
-
-Plain `easyserver` is the preferred interactive entrypoint. `easyserver --help` opens the descriptive command-mode hierarchy; every core group and command has its own contextual `--help` page.
-
-```text
-easyserver                             interactive TUI
-easyserver --help                      CLI/automation help entrypoint
-easyserver plugins ...                 install-state / credentials / enable-disable
-easyserver provider ...                provider-specific acquisition/features
-easyserver instances list|inspect ...  normalized inventory
-easyserver instances start|stop|restart|destroy ...
-easyserver connect ...                 foreground local Endpoint
-easyserver daemon run                  local session owner
-easyserver sessions create|list|close ...
-```
-
-Run `easyserver --help` for the command groups, then append `--help` to the relevant path (for example `easyserver instances destroy --help`). For automation that needs a stable machine-readable contract, prefix the command with `--json`, for example `easyserver --json instances list`; see [Machine-readable CLI output](docs/cli-json.md). Package-based Provider Plugins may also publish side-effect-free provider-specific help through their dedicated `./easyserver-help` contribution.
-
-## What EasyServer deliberately does not do
-
-EasyServer is **not** a workload orchestrator. It does not install, deploy, schedule or configure applications on the rented machine; it does not define a universal job/workload specification; and it does not turn provider-specific marketplaces/configurators into one lossy provisioning schema.
-
-It also is not a general reverse proxy or VPN product. The `0.2.0` caller-facing connectivity primitive is an EasyServer-owned local TCP Endpoint backed by an applicable provider Access Method and Access Adapter.
-
-Provider Plugins run in-process and are trusted extensions in `0.2.0`; the plugin boundary validates contracts and isolates ordinary failures, but is not a malicious-code sandbox.
+For connections that should survive the current terminal or be restored after daemon restart, see [Background connections](docs/background-connections.md).
 
 ## Documentation
 
-- [Getting started](docs/getting-started.md)
-- [Interactive TUI](docs/tui.md)
-- [Machine-readable CLI output](docs/cli-json.md)
-- [EasyServer 0.2.0 release notes](docs/releases/v0.2.0.md)
-- [Vast.ai quick start](docs/providers/vastai.md)
-- [Intelion.cloud quick start](docs/providers/intelion.md)
-- [Supported platforms](docs/supported-platforms.md)
-- [Security model](docs/security-model.md)
-- [Provider Plugin authoring and operational safety](docs/plugin-authoring-and-operational-safety.md)
-- [Versioning and compatibility](docs/versioning-and-compatibility.md)
-- [Contributing](CONTRIBUTING.md)
-- [Support and maintenance policy](docs/support-and-maintenance.md)
+Choose the path that matches what you are trying to do:
 
-For ordinary bugs and provider regressions, open a public GitHub issue using the guidance in the support policy. Security issues should follow [SECURITY.md](SECURITY.md) rather than a public issue.
+- **New to EasyServer:** [Getting started](docs/getting-started.md)
+- **Using the interactive UI:** [Interactive TUI](docs/tui.md)
+- **Connecting to a remote service:** [Connections](docs/connections.md)
+- **Keeping connections in the background:** [Background connections](docs/background-connections.md)
+- **Using Vast.ai:** [Vast.ai guide](docs/providers/vastai.md)
+- **Using Intelion.cloud:** [Intelion.cloud guide](docs/providers/intelion.md)
+- **Automating the CLI:** [Machine-readable CLI output](docs/cli-json.md)
+- **Writing a Provider Plugin:** [Plugin SDK](packages/plugin-sdk/README.md)
+- **Looking for all guides/reference:** [Documentation index](docs/README.md)
+
+Security issues should follow [SECURITY.md](SECURITY.md). Ordinary bugs and support questions are covered by the [support and maintenance policy](docs/support-and-maintenance.md).
 
 ## License
 

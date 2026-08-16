@@ -1,25 +1,62 @@
 # EasyServer documentation
 
-This directory is part of EasyServer's public product surface.
+Start with the task you are trying to complete. The documentation intentionally gets more technical as you move from first use into automation, extension, compatibility, and security details.
 
-Documentation kept here must be useful to at least one external audience: EasyServer users, Provider Plugin authors, integrators, security reporters or contributors. Maintainer-only plans, continuation notes, internal issue mirrors, account-specific acceptance journals, reconnaissance scratch and agent instructions belong in the private sibling developer workspace instead of this repository.
+## Start here
 
-Current public guides:
+- [Getting started](getting-started.md) — install EasyServer, add a provider, rent a server, and reach the first service on `localhost`.
+- [Interactive TUI](tui.md) — navigate the main interface, manage servers, configure providers, recover connection failures, and use accessibility modes.
+- [Supported platforms](supported-platforms.md) — check the current operating-system, Node.js, npm, OpenSSH, and Secret Store support boundary.
 
-- [Getting started](getting-started.md)
-- [Interactive TUI](tui.md)
-- [Machine-readable CLI output](cli-json.md)
-- [Install from GitHub Releases](github-release-install.md)
-- [Vast.ai quick start](providers/vastai.md)
-- [Intelion.cloud quick start](providers/intelion.md)
-- [Provider Plugin authoring and operational safety](plugin-authoring-and-operational-safety.md)
-- [Versioning and compatibility](versioning-and-compatibility.md)
-- [Package lifecycle: upgrades, reinstalls and uninstall](package-lifecycle.md)
-- [Support and maintenance policy](support-and-maintenance.md)
-- [Supported platforms](supported-platforms.md)
-- [Security model](security-model.md)
+## Connect to your servers
+
+- [Connect to a remote service](connections.md) — foreground local connections, remote vs local ports, first-use SSH trust, common failures, and advanced connection-method selection.
+- [Background connections](background-connections.md) — managed daemon, background Sessions, saved connection intents, idempotency, restart, and recovery.
+
+## Use a provider
+
+- [Vast.ai](providers/vastai.md) — account preparation, marketplace search/rental, lifecycle, connection requirements, and paid-resource cleanup.
+- [Intelion.cloud](providers/intelion.md) — account preparation, server configuration/creation, lifecycle, connection behavior, and paid-resource cleanup.
+
+Provider packages are opt-in. A clean EasyServer installation contains no Provider Plugins until you install and add one.
+
+## Install and operate EasyServer
+
+- [Install from GitHub Releases](github-release-install.md) — verify and run the portable Windows ZIP, then add plugins to that extracted installation when needed.
+- [Package lifecycle](package-lifecycle.md) — compatible upgrades, reinstalls, missing plugins, uninstall, and clean removal.
+- [Support and maintenance](support-and-maintenance.md) — where to report bugs, what information is useful, and what the project currently supports.
+
+## Automate and integrate
+
+- [Machine-readable CLI output](cli-json.md) — the versioned `--json` envelope, exit semantics, provider command data, and non-interactive SSH host-trust flow.
+- [Versioning and compatibility](versioning-and-compatibility.md) — public compatibility promises for the `0.x` release lines, Plugin SDK, Local State, and documented CLI behavior.
+
+The built-in command reference is also available directly from the product:
+
+```powershell
+easyserver --help
+easyserver instances --help
+easyserver connect --help
+```
+
+Provider-specific command trees expose their own nested help when the installed plugin publishes it.
+
+## Build a Provider Plugin
+
+- [Provider Plugin authoring and operational safety](plugin-authoring-and-operational-safety.md) — current full SDK authoring, contract, and safety guide. This will be split into a shorter onboarding path and dense reference as the documentation rewrite continues.
+- [`@easyai101/easyserver-plugin-sdk`](../packages/plugin-sdk/README.md) — package-level SDK entry point.
+- [Minimal Provider Plugin example](../examples/minimal-provider-plugin/README.md) — small executable example package.
+
+## Security and project policy
+
+- [Security model](security-model.md) — trust boundaries, credential handling, SSH host trust, local control-plane protections, and plugin trust assumptions.
+- [Security reporting](../SECURITY.md) — how to report vulnerabilities privately.
+- [Contributing](../CONTRIBUTING.md) — development setup and contribution workflow.
+
+## Release history
+
+Historical documents describe what shipped or was verified at a particular release. They are not the source of truth for current behavior.
+
 - [EasyServer 0.2.0 release notes](releases/v0.2.0.md)
-- [0.1.0 dependency and supply-chain audit](dependency-audit-0.1.0.md)
 - [EasyServer 0.1.0 release notes](releases/v0.1.0.md)
-
-Release-specific notes are kept under `releases/`; the current compatibility line is described by the package/version metadata and [Versioning and compatibility](versioning-and-compatibility.md).
+- [EasyServer 0.1.0 dependency and supply-chain audit](dependency-audit-0.1.0.md)
