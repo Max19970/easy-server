@@ -41,6 +41,8 @@ export type TuiOperationActionKind =
   | "retry"
   | "observe"
   | "refresh"
+  | "diagnostics"
+  | "edit"
   | "dismiss";
 
 export interface TuiOperationAction {
@@ -116,6 +118,9 @@ export interface PresentOperationErrorInput {
   readonly operation: HostOperationKind;
   readonly error: unknown;
   readonly allowRetry?: boolean;
+  readonly retryLabel?: string;
+  readonly allowDiagnostics?: boolean;
+  readonly editLabel?: string;
 }
 
 export interface PresentCompletedOperationInput {
@@ -146,6 +151,11 @@ const REFRESH_ACTION: TuiOperationAction = {
 const RETRY_ACTION: TuiOperationAction = {
   kind: "retry",
   label: "Retry",
+};
+
+const DIAGNOSTICS_ACTION: TuiOperationAction = {
+  kind: "diagnostics",
+  label: "Open Diagnostics",
 };
 
 export function isTuiOperationPresentation(
@@ -273,6 +283,22 @@ export function presentOperationError(
       (input.operation === "mutation" &&
         isRetrySafeHostMutationFailure(input.error)));
 
+  const retryAction =
+    input.retryLabel === undefined
+      ? RETRY_ACTION
+      : { kind: "retry" as const, label: input.retryLabel };
+  const actions: TuiOperationAction[] = [];
+  if (input.editLabel !== undefined) {
+    actions.push({ kind: "edit", label: input.editLabel });
+  }
+  if (retryAllowed) {
+    actions.push(retryAction);
+  }
+  if (input.allowDiagnostics === true) {
+    actions.push(DIAGNOSTICS_ACTION);
+  }
+  actions.push(DISMISS_ACTION);
+
   return createPresentation({
     phase: definitelyCancelled ? "cancelled" : "failed",
     tone: definitelyCancelled ? "info" : "danger",
@@ -280,9 +306,7 @@ export function presentOperationError(
       ? `${input.title}: cancelled`
       : `${input.title}: failed`,
     detail: message,
-    actions: retryAllowed
-      ? [RETRY_ACTION, DISMISS_ACTION]
-      : [DISMISS_ACTION],
+    actions,
   });
 }
 
@@ -659,7 +683,7 @@ function allowedActionKinds(
     presentation.phase === "failed" ||
     presentation.phase === "cancelled"
   ) {
-    return new Set(["retry", "dismiss"]);
+    return new Set(["retry", "diagnostics", "edit", "dismiss"]);
   }
   if (presentation.phase === "completed") {
     return new Set(["dismiss"]);

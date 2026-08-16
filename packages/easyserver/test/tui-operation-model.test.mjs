@@ -148,6 +148,51 @@ test("confirmed mutation success remains success when reconciliation fails", () 
   );
 });
 
+test("connection failures can expose truthful retry and Diagnostics actions", () => {
+  const presentation = presentOperationError({
+    title: "Open local connection",
+    operation: "read",
+    error: {
+      kind: "easyserver-error",
+      code: "authentication",
+      message: "SSH authentication rejected",
+    },
+    retryLabel: "Retry connection",
+    allowDiagnostics: true,
+  });
+
+  assert.deepEqual(
+    presentation.actions.map(({ kind, label }) => ({ kind, label })),
+    [
+      { kind: "retry", label: "Retry connection" },
+      { kind: "diagnostics", label: "Open Diagnostics" },
+      { kind: "dismiss", label: "Dismiss" },
+    ],
+  );
+});
+
+test("correctable connection conflicts can prioritize editing without Retry or Diagnostics", () => {
+  const presentation = presentOperationError({
+    title: "Open local connection",
+    operation: "read",
+    error: {
+      kind: "easyserver-error",
+      code: "conflict",
+      message: "Local connection port is already in use",
+    },
+    allowRetry: false,
+    editLabel: "Edit local port",
+  });
+
+  assert.deepEqual(
+    presentation.actions.map(({ kind, label }) => ({ kind, label })),
+    [
+      { kind: "edit", label: "Edit local port" },
+      { kind: "dismiss", label: "Dismiss" },
+    ],
+  );
+});
+
 test("mutation Retry requires host-certified pre-dispatch failure", async () => {
   const error = {
     kind: "easyserver-error",

@@ -2582,7 +2582,9 @@ test("a server-scoped Connect flow opens and closes a local connection without i
   await chooseVisibleAction(view, "Connect");
   assert.match(view.lastFrame(), /Home › Connections/);
   assert.match(view.lastFrame(), /Connect to server/);
-  assert.match(view.lastFrame(), /Service port on the server/);
+  assert.match(view.lastFrame(), /App\/service port on the server/);
+  assert.match(view.lastFrame(), /not the SSH port/i);
+  assert.match(view.lastFrame(), /8188 for ComfyUI/);
   assert.doesNotMatch(view.lastFrame(), /Access Method|Endpoint|daemon|Session/);
 
   await typeText(view, "8188");
@@ -2596,7 +2598,7 @@ test("a server-scoped Connect flow opens and closes a local connection without i
   view.stdin.write("\r");
   await tick();
   assert.match(view.lastFrame(), /Review local connection/);
-  assert.match(view.lastFrame(), /Service port: 8188/);
+  assert.match(view.lastFrame(), /App\/service port: 8188/);
   assert.match(view.lastFrame(), /Lifetime: available while this TUI is open/);
   assert.doesNotMatch(view.lastFrame(), /instance:connect|fixture|ssh-default|Access Method|Endpoint|daemon|Session/);
 
@@ -2616,6 +2618,180 @@ test("a server-scoped Connect flow opens and closes a local connection without i
   await tick();
   assert.equal(closedId, "foreground:fixture");
   assert.match(view.lastFrame(), /None open/);
+});
+
+test("ordinary Connect failure offers a truthful in-place retry with the preserved request", async () => {
+  const method = { id: "ssh-default", kind: "ssh", mode: "tcp-forward" };
+  const requests = [];
+  let connections = [];
+  const operations = {
+    list() {
+      return connections;
+    },
+    async listAccessMethods() {
+      return [method];
+    },
+    async open(request) {
+      requests.push(request);
+      if (requests.length === 1) {
+        throw normalizedError(
+          "authentication",
+          "SSH public-key authentication was rejected by the server.",
+        );
+      }
+      const connection = {
+        id: "foreground:retried",
+        instanceId: request.instanceId,
+        remoteHost: request.remoteHost,
+        remotePort: request.remotePort,
+        endpoint: { host: "127.0.0.1", port: 40124 },
+        accessMethod: method,
+        state: "live",
+      };
+      connections = [connection];
+      return connection;
+    },
+    async close() {},
+    async closeAll() {
+      connections = [];
+    },
+  };
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () => foregroundConnectionSnapshot(),
+      foregroundConnectionOperations: operations,
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openServersRoute(view);
+  await chooseVisibleAction(view, "Connect");
+  await typeText(view, "8188");
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+
+  assert.match(view.lastFrame(), /Open local connection: failed/);
+  assert.match(view.lastFrame(), /Retry connection/);
+  assert.match(view.lastFrame(), /Open Diagnostics/);
+  assert.equal(requests.length, 1);
+
+  await chooseVisibleAction(view, "Retry connection", { open: false });
+  await tick();
+  await tick();
+
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1], requests[0]);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:40124 → Server:8188/);
+  assert.doesNotMatch(view.lastFrame(), /Open local connection: failed|Retry connection/);
+});
+
+test("non-local connection conflicts never masquerade as an occupied local port", async () => {
+  const method = { id: "ssh-default", kind: "ssh", mode: "tcp-forward" };
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () => foregroundConnectionSnapshot(),
+      foregroundConnectionOperations: {
+        list() {
+          return [];
+        },
+        async listAccessMethods() {
+          return [method];
+        },
+        async open() {
+          throw normalizedError(
+            "conflict",
+            "Intelion rejected the operation as conflicting",
+          );
+        },
+        async close() {},
+        async closeAll() {},
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openServersRoute(view);
+  await chooseVisibleAction(view, "Connect");
+  await typeText(view, "8188");
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+
+  assert.match(view.lastFrame(), /Open local connection: failed/);
+  assert.match(view.lastFrame(), /Retry connection/);
+  assert.match(view.lastFrame(), /Open Diagnostics/);
+  assert.doesNotMatch(view.lastFrame(), /Edit local port|Local connection port is already in use/);
+});
+
+test("connection failure owns the qualified 60x20 viewport with recovery actions reachable", async () => {
+  const method = { id: "ssh-default", kind: "ssh", mode: "tcp-forward" };
+  const props = {
+    width: 60,
+    height: 20,
+    readSnapshot: foregroundConnectionSnapshot(),
+    readStatus: "ready",
+    async onListForegroundAccessMethods() {
+      return [method];
+    },
+    async onOpenForegroundConnection() {
+      return undefined;
+    },
+    async onCloseForegroundConnection() {
+      return true;
+    },
+  };
+  const view = render(shell(props));
+
+  await openServersRoute(view);
+  await chooseVisibleAction(view, "Connect");
+  await typeText(view, "8188");
+  view.stdin.write("\r");
+  await tick();
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Review local connection/);
+
+  view.rerender(
+    shell({
+      ...props,
+      operation: presentOperationError({
+        title: "Open local connection",
+        operation: "read",
+        error: normalizedError(
+          "authentication",
+          "SSH public-key authentication was rejected by the server.",
+        ),
+        retryLabel: "Retry connection",
+        allowDiagnostics: true,
+      }),
+    }),
+  );
+  await tick();
+
+  const frame = view.lastFrame();
+  assert.ok(frame.split("\n").length <= 20, frame);
+  assert.match(frame, /Open local connection: failed/);
+  assert.match(frame, /Retry connection/);
+  assert.match(frame, /Open Diagnostics/);
+  assert.doesNotMatch(frame, /Review local connection|App\/service port: 8188/);
 });
 
 test("delayed ordinary Connect working drawers keep canonical identity hidden", async () => {
@@ -2680,7 +2856,7 @@ test("delayed ordinary Connect working drawers keep canonical identity hidden", 
   view.stdin.write("\r");
   await tick();
   assert.match(view.lastFrame(), /Open local connection/);
-  assert.match(view.lastFrame(), /Server · service port 8188/);
+  assert.match(view.lastFrame(), /Server · app\/service port 8188/);
   assert.doesNotMatch(view.lastFrame(), /instance:connect|fixture|ssh-default|Access Method|Endpoint|daemon|Session/);
 
   resolveOpen();
@@ -2988,6 +3164,7 @@ test("screen-reader mode exposes late foreground SSH failure linearly without in
 
   assert.match(view.lastFrame(), /Local connection failed/);
   assert.match(view.lastFrame(), /SSH public-key authentication to Server was rejected/);
+  assert.match(view.lastFrame(), /Open Diagnostics/);
   assert.doesNotMatch(
     view.lastFrame(),
     /foreground:screen-reader-secret|instance:connect|ssh-screen-reader-secret|Credentials need attention|Open Providers/,
@@ -3261,7 +3438,8 @@ test("screen-reader server Connect stays linear without exposing internal connec
 
   await openServersRoute(view);
   await chooseVisibleAction(view, "Connect");
-  assert.match(view.lastFrame(), /Service port on the server/);
+  assert.match(view.lastFrame(), /App\/service port on the server/);
+  assert.match(view.lastFrame(), /not the SSH port/i);
   assert.match(view.lastFrame(), /Commands: Up and Down move; Enter selects; Escape goes back/);
   assert.doesNotMatch(view.lastFrame(), /instance:connect|fixture|ssh-default|Access Method|Endpoint|daemon|Session/);
 
@@ -3311,7 +3489,8 @@ test("local connection port conflicts preserve the guided values for correction"
   assert.match(view.lastFrame(), /Choose server/);
   view.stdin.write("\r");
   await tick();
-  assert.match(view.lastFrame(), /Service port on the server/);
+  assert.match(view.lastFrame(), /App\/service port on the server/);
+  assert.match(view.lastFrame(), /not the SSH port/i);
   await typeText(view, "8188");
   view.stdin.write("\r");
   await tick();
@@ -3328,15 +3507,14 @@ test("local connection port conflicts preserve the guided values for correction"
   assert.match(view.lastFrame(), /Open local connection: failed/);
   assert.match(view.lastFrame(), /Local connection port is already in use: 48188/);
   assert.doesNotMatch(view.lastFrame(), /Endpoint|Access Method|Connection Session/);
-  assert.match(view.lastFrame(), /Review local connection/);
-  assert.match(view.lastFrame(), /Service port: 8188/);
-  assert.match(view.lastFrame(), /Local address: 127\.0\.0\.1:48188/);
-  assert.doesNotMatch(view.lastFrame(), /Retry/);
+  assert.match(view.lastFrame(), /Edit local port/);
+  assert.doesNotMatch(view.lastFrame(), /Retry|Open Diagnostics|Review local connection/);
 
-  view.stdin.write("x");
+  view.stdin.write("\r");
   await tick();
   assert.doesNotMatch(view.lastFrame(), /Open local connection: failed/);
-  assert.match(view.lastFrame(), /Local address: 127\.0\.0\.1:48188/);
+  assert.match(view.lastFrame(), /Local port on this computer/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:48188/);
 });
 
 test("first-use SSH trust is reviewed and accepted inside the local connection flow", async () => {

@@ -491,6 +491,11 @@ export function TuiShell({
   const [quitArmed, setQuitArmed] = useState(false);
   const activeRoute = routes[activeIndex] ?? routes[0];
   const operationInteractionOpen = operation?.interaction !== undefined;
+  const connectionFailureOpen =
+    activeRoute.id === "sessions" &&
+    foregroundConnectionFlow?.mode === "foreground" &&
+    operation?.phase === "failed";
+  const operationOwnsViewport = operationInteractionOpen || connectionFailureOpen;
   const providerItems =
     readSnapshot?.providers.status === "ready"
       ? readSnapshot.providers.items
@@ -790,7 +795,7 @@ export function TuiShell({
     });
     setStatus(
       serverScoped
-        ? `Connecting to ${firstInstance.name ?? "the selected server"}. Enter the remote service port.`
+        ? `Connecting to ${firstInstance.name ?? "the selected server"}. Enter the app/service port to expose, not the SSH port.`
         : "Choose the server to connect to.",
     );
   };
@@ -1185,6 +1190,73 @@ export function TuiShell({
     }
   };
 
+  const runForegroundConnectionRequest = (
+    request: TuiForegroundConnectionRequest,
+  ): void => {
+    if (onOpenForegroundConnection === undefined) {
+      setStatus("Foreground connection creation is unavailable in this TUI session.");
+      return;
+    }
+    setForegroundConnectionBusy(true);
+    void onOpenForegroundConnection(request).then((connection) => {
+      setForegroundConnectionBusy(false);
+      if (connection === undefined) {
+        setStatus(
+          "Local connection was not opened. Your entered values are preserved for editing.",
+        );
+        return;
+      }
+      setForegroundConnectionFlow(undefined);
+      setSelectedForegroundConnectionId(connection.id);
+      setStatus(
+        `Local connection ready at ${connection.endpoint.host}:${connection.endpoint.port}.`,
+      );
+    });
+  };
+
+  const runOperationAction = (action: TuiOperationActionKind): void => {
+    if (action === "diagnostics") {
+      onOperationAction?.("dismiss");
+      openRoute(
+        "diagnostics",
+        "Opened privacy-safe Diagnostics from the connection failure.",
+      );
+      return;
+    }
+    if (
+      action === "edit" &&
+      foregroundConnectionFlow?.mode === "foreground" &&
+      foregroundConnectionFlow.step === "review"
+    ) {
+      onOperationAction?.("dismiss");
+      setForegroundConnectionFlow({
+        ...foregroundConnectionFlow,
+        step: "local-port",
+      });
+      setStatus("Edit the local port on this computer, then review the connection again.");
+      return;
+    }
+    if (
+      action === "retry" &&
+      operation?.actions.some(
+        (candidate) =>
+          candidate.kind === "retry" && candidate.label === "Retry connection",
+      ) &&
+      foregroundConnectionFlow?.mode === "foreground" &&
+      foregroundConnectionFlow.step === "review"
+    ) {
+      const request = foregroundConnectionRequest(foregroundConnectionFlow);
+      if (request === undefined) {
+        setStatus("The connection request is incomplete.");
+        return;
+      }
+      onOperationAction?.("dismiss");
+      runForegroundConnectionRequest(request);
+      return;
+    }
+    onOperationAction?.(action);
+  };
+
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
       requestExit();
@@ -1227,7 +1299,7 @@ export function TuiShell({
               Math.min(operationActionCursor, operation.actions.length - 1)
             ];
           if (action !== undefined) {
-            onOperationAction?.(action.kind);
+            runOperationAction(action.kind);
           }
           return;
         }
@@ -1236,17 +1308,17 @@ export function TuiShell({
             operation.actions.find((action) => action.kind === "decline") ??
             operation.actions.find((action) => action.kind === "dismiss");
           if (backAction !== undefined) {
-            onOperationAction?.(backAction.kind);
+            runOperationAction(backAction.kind);
             return;
           }
         }
       }
       const accelerator = operationActionForInput(operation, input, key);
       if (accelerator !== undefined) {
-        onOperationAction?.(accelerator);
+        runOperationAction(accelerator);
         return;
       }
-      if (operationInteractionOpen) {
+      if (operationOwnsViewport) {
         return;
       }
     }
@@ -1454,17 +1526,6 @@ export function TuiShell({
       return;
     }
 
-    if (
-      foregroundConnectionFlow !== undefined &&
-      input === "g" &&
-      (operation?.phase === "failed" ||
-        operation?.phase === "outcome-unknown" ||
-        operation?.phase === "reconciliation-failed")
-    ) {
-      openRoute("diagnostics", "Opened privacy-safe Diagnostics from the connection failure.");
-      return;
-    }
-
     if (foregroundConnectionFlow !== undefined && activeRoute.id === "sessions") {
       if (foregroundConnectionBusy) {
         return;
@@ -1518,7 +1579,7 @@ export function TuiShell({
           setStatus(
             foregroundConnectionFlow.advanced
               ? "Advanced: enter the remote host. 127.0.0.1 is the ordinary default."
-              : "Enter the TCP port used by the service on this server.",
+              : "Enter the app/service port to expose on this server, not the SSH port.",
           );
         }
         return;
@@ -1542,7 +1603,7 @@ export function TuiShell({
             remoteHost: foregroundConnectionFlow.remoteHost.trim(),
             step: "remote-port",
           });
-          setStatus("Enter the TCP port used by the service on this server.");
+          setStatus("Enter the app/service port to expose on this server, not the SSH port.");
           return;
         }
         if (!key.ctrl && !key.tab && input.length > 0) {
@@ -1724,25 +1785,7 @@ export function TuiShell({
           });
           return;
         }
-        if (onOpenForegroundConnection === undefined) {
-          setStatus("Foreground connection creation is unavailable in this TUI session.");
-          return;
-        }
-        setForegroundConnectionBusy(true);
-        void onOpenForegroundConnection(request).then((connection) => {
-          setForegroundConnectionBusy(false);
-          if (connection === undefined) {
-            setStatus(
-              "Local connection was not opened. Your entered values are preserved for editing.",
-            );
-            return;
-          }
-          setForegroundConnectionFlow(undefined);
-          setSelectedForegroundConnectionId(connection.id);
-          setStatus(
-            `Local connection ready at ${connection.endpoint.host}:${connection.endpoint.port}.`,
-          );
-        });
+        runForegroundConnectionRequest(request);
       }
       return;
     }
@@ -2353,11 +2396,11 @@ export function TuiShell({
         </Text>
         <Text color={muted}>v{EASYSERVER_VERSION}</Text>
       </Box>
-      {activeRoute.id === "overview" && !operationInteractionOpen ? (
+      {activeRoute.id === "overview" && !operationOwnsViewport ? (
         <Text color={muted}>Remote compute, without the provider control panel.</Text>
       ) : null}
 
-      {operationInteractionOpen && operation !== undefined ? (
+      {operationOwnsViewport && operation !== undefined ? (
         <Box
           flexGrow={1}
           minHeight={0}
@@ -2470,7 +2513,7 @@ export function TuiShell({
         </Box>
       )}
 
-      {operation === undefined || operationInteractionOpen ? null : (
+      {operation === undefined || operationOwnsViewport ? null : (
         <Box marginTop={1}>
           <TuiOperationDrawer
             operation={operation}
@@ -2485,7 +2528,7 @@ export function TuiShell({
         </Box>
       )}
 
-      {operationInteractionOpen || actionMenuOpen ? null : (
+      {operationOwnsViewport || actionMenuOpen ? null : (
         <Box marginTop={1} flexDirection="column">
           {status === "Ready." ? null : (
             <Text color={muted} aria-label={`Status: ${status}`} wrap="truncate">{status}</Text>
@@ -3242,8 +3285,9 @@ function ConnectionsSurface({
             </>
           ) : flow.step === "remote-port" ? (
             <>
-              <Text bold>Service port on the server</Text>
+              <Text bold>App/service port on the server</Text>
               <Text>Port: {flow.remotePort}</Text>
+              <Text>Use the app/service port (for example 8188 for ComfyUI), not the SSH port.</Text>
               <Text>Enter continue · Backspace edit · Esc back</Text>
             </>
           ) : flow.step === "access-method" ? (
@@ -3282,7 +3326,7 @@ function ConnectionsSurface({
                 Review {flow.mode === "persistent" ? "background connection" : "local connection"}
               </Text>
               <Text>Server: {serverDisplayName(snapshot, flow.instanceId)}</Text>
-              <Text>Service port: {flow.remotePort}</Text>
+              <Text>App/service port: {flow.remotePort}</Text>
               <Text>
                 Local address: 127.0.0.1:{flow.localPort.length === 0 ? "automatic" : flow.localPort}
               </Text>
@@ -4721,6 +4765,7 @@ export function TuiApp({
           connectionVocabulary: true,
         }),
         allowRetry: false,
+        allowDiagnostics: true,
       }),
     );
   }, [foregroundConnections, operation, snapshot]);
@@ -4759,6 +4804,7 @@ export function TuiApp({
               connectionVocabulary: true,
             }),
             allowRetry: false,
+            allowDiagnostics: true,
           }),
         );
         return undefined;
@@ -4779,7 +4825,7 @@ export function TuiApp({
       setOperation(
         presentWorkingOperation({
           title: "Open local connection",
-          detail: `${serverLabel} · service port ${request.remotePort}`,
+          detail: `${serverLabel} · app/service port ${request.remotePort}`,
           activity: "waiting-provider",
         }),
       );
@@ -4806,6 +4852,10 @@ export function TuiApp({
       } catch (error) {
         setPendingHostTrustConfirmation(undefined);
         setForegroundConnections([...foregroundConnectionOperations.list()]);
+        const localPortConflict =
+          isNormalizedError(error) &&
+          error.code === "conflict" &&
+          error.message.startsWith("Local Endpoint port is already in use:");
         setOperation(
           presentOperationError({
             title: "Open local connection",
@@ -4816,7 +4866,16 @@ export function TuiApp({
               accessMethodId: request.accessMethodId,
               connectionVocabulary: true,
             }),
-            allowRetry: false,
+            allowRetry:
+              !localPortConflict &&
+              (!isNormalizedError(error) ||
+                (error.code !== "not-found" &&
+                  error.code !== "unsupported-operation" &&
+                  error.code !== "cancelled" &&
+                  error.code !== "outcome-unknown")),
+            retryLabel: "Retry connection",
+            allowDiagnostics: !localPortConflict,
+            ...(localPortConflict ? { editLabel: "Edit local port" } : {}),
           }),
         );
         return undefined;

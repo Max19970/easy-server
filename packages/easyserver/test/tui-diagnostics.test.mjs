@@ -427,21 +427,19 @@ test("connection-flow failures can open Diagnostics without discarding the guide
   await tick();
 
   assert.match(view.lastFrame(), /Check connection method: failed/);
-  assert.match(view.lastFrame(), /after closing this result, open Diagnostics/);
-  assert.match(view.lastFrame(), /Port: 22/);
+  assert.match(view.lastFrame(), /Open Diagnostics/);
+  assert.doesNotMatch(view.lastFrame(), /after closing this result, open Diagnostics/);
+  assert.doesNotMatch(view.lastFrame(), /Port: 22|App\/service port on the server/);
 
-  view.stdin.write("g");
-  await tick();
+  await chooseVisibleAction(view, "Open Diagnostics", { open: false });
   await tick();
   await tick();
   assert.match(view.lastFrame(), /Support summary/);
   assert.match(view.lastFrame(), /Opened privacy-safe Diagnostics from the connection failure/);
 
-  view.stdin.write("\r");
-  await tick();
-  await tick();
   await chooseVisibleAction(view, "Open Connections");
-  assert.match(view.lastFrame(), /Service port on the server/);
+  assert.match(view.lastFrame(), /App\/service port on the server/);
+  assert.match(view.lastFrame(), /not the SSH port/i);
   assert.match(view.lastFrame(), /Port: 22/);
 });
 

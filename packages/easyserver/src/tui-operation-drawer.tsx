@@ -107,7 +107,11 @@ export function TuiOperationDrawer({
       operation.phase === "outcome-unknown" ||
       operation.phase === "reconciliation-failed" ? (
         <Box marginTop={1}>
-          <Text>Support: after closing this result, open Diagnostics before sharing raw logs.</Text>
+          <Text>
+            {operation.actions.some((action) => action.kind === "diagnostics")
+              ? "Support: Open Diagnostics for a privacy-safe report before sharing raw logs."
+              : "Support: after closing this result, open Diagnostics before sharing raw logs."}
+          </Text>
         </Box>
       ) : null}
 
