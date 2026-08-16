@@ -430,11 +430,12 @@ class LiveConnectionSession implements ConnectionSession {
       channel.stream.once("close", () => socket.destroy());
       socket.pipe(channel.stream);
       channel.stream.pipe(socket);
-    } catch {
+    } catch (error) {
       const tracked = this.#connections.delete(socket);
       const clientGone = clientSignal.aborted || socket.destroyed || !tracked;
       socket.destroy();
       if (!this.#controller.signal.aborted && !clientGone) {
+        this.#lifecycleErrors.push(error);
         void this.close().catch(() => undefined);
       }
     }

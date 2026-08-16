@@ -716,7 +716,7 @@ test("upstream channel failure tears down the published Endpoint", async () => {
     socket.on("error", () => undefined);
     await once(socket, "connect");
     await once(socket, "close");
-    await result.session.closed;
+    await assert.rejects(result.session.closed, /fixture upstream failure/);
     await expectConnectionRefused(result.endpoint);
   });
 });

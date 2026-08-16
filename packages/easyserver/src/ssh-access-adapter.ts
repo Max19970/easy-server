@@ -341,7 +341,7 @@ class OpenSshTransportSession implements AccessTransportSession {
           error,
         );
       }
-      throw error;
+      throw localOpenSshFailure(error);
     }
 
     let stderr = "";
@@ -356,6 +356,7 @@ class OpenSshTransportSession implements AccessTransportSession {
     });
     stream.on("error", () => undefined);
     let closePromise: Promise<void> | undefined;
+    let exitFailure: Error | undefined;
     let closing = false;
 
     const channel: AccessChannel = {
@@ -364,10 +365,16 @@ class OpenSshTransportSession implements AccessTransportSession {
         if (closePromise === undefined) {
           closing = true;
           stream.destroy();
-          closePromise = closeChild(child, context.signal).finally(() => {
-            context.signal.removeEventListener("abort", onAbort);
-            this.#channels.delete(channel);
-          });
+          closePromise = closeChild(child, context.signal)
+            .then(() => {
+              if (exitFailure !== undefined) {
+                throw exitFailure;
+              }
+            })
+            .finally(() => {
+              context.signal.removeEventListener("abort", onAbort);
+              this.#channels.delete(channel);
+            });
         }
         return closePromise;
       },
@@ -377,15 +384,14 @@ class OpenSshTransportSession implements AccessTransportSession {
     child.once("close", (code) => {
       context.signal.removeEventListener("abort", onAbort);
       this.#channels.delete(channel);
-      if (!closing && code !== 0 && !stream.destroyed) {
-        stream.destroy(
-          new Error(
-            `OpenSSH channel exited with code ${code ?? "unknown"}${formatSshDiagnostic(stderr)}`,
-          ),
-        );
+      if (!closing && code !== 0) {
+        exitFailure = openSshExitFailure(code, stderr);
+        if (!stream.destroyed) {
+          stream.destroy(exitFailure);
+        }
       }
     });
-    child.once("error", (error) => stream.destroy(error));
+    child.once("error", (error) => stream.destroy(localOpenSshFailure(error)));
 
     return channel;
   }
@@ -532,7 +538,7 @@ async function scanHostKeys(
         );
   throw normalizedError(
     "provider-unavailable",
-    `Unable to read SSH host key from ${host}:${port} with available local OpenSSH scanners`,
+    "SSH host key could not be read. The server may still be starting, or the local OpenSSH key scanner may be unavailable.",
     cause,
   );
 }
@@ -801,9 +807,73 @@ async function closeChild(
   }
 }
 
-function formatSshDiagnostic(stderr: string): string {
+function localOpenSshFailure(cause: unknown): Error {
+  return normalizedSshError(
+    "plugin-failure",
+    "Local OpenSSH client could not be started. Install or enable OpenSSH Client and retry.",
+    cause,
+  );
+}
+
+function openSshExitFailure(code: number | null, stderr: string): Error {
   const diagnostic = stderr.trim().replace(/\s+/gu, " ").slice(-512);
-  return diagnostic.length === 0 ? "" : `: ${diagnostic}`;
+  const cause = new Error(
+    `OpenSSH channel exited with code ${code ?? "unknown"}${
+      diagnostic.length === 0 ? "" : `: ${diagnostic}`
+    }`,
+  );
+  if (/Permission denied \([^)]*publickey[^)]*\)/iu.test(diagnostic)) {
+    return normalizedSshError(
+      "authentication",
+      "SSH public-key authentication was rejected by the server.",
+      cause,
+    );
+  }
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/iu.test(diagnostic)) {
+    return normalizedSshError(
+      "authentication",
+      "SSH host identity no longer matches the trusted host key.",
+      cause,
+    );
+  }
+  if (/open failed: connect failed: Connection refused/iu.test(diagnostic)) {
+    return normalizedSshError(
+      "provider-unavailable",
+      "SSH connected, but the requested service port is not accepting connections yet.",
+      cause,
+    );
+  }
+  if (/Permission denied/iu.test(diagnostic)) {
+    return normalizedSshError(
+      "authentication",
+      "SSH authentication was rejected by the server.",
+      cause,
+    );
+  }
+  if (
+    /Connection refused|Connection timed out|Operation timed out|No route to host|Connection reset by peer|kex_exchange_identification/iu.test(
+      diagnostic,
+    )
+  ) {
+    return normalizedSshError(
+      "provider-unavailable",
+      "SSH on the server is not ready or reachable yet.",
+      cause,
+    );
+  }
+  return normalizedSshError(
+    "plugin-failure",
+    "OpenSSH connection failed unexpectedly.",
+    cause,
+  );
+}
+
+function normalizedSshError(
+  code: Parameters<typeof normalizedError>[0],
+  message: string,
+  cause: unknown,
+): Error {
+  return Object.assign(new Error(message), normalizedError(code, message, cause));
 }
 
 function isErrno(error: unknown, code: string): boolean {

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type {
-  HostTrustRequiredError,
-  OperationContext,
+import {
+  isNormalizedError,
+  normalizedError,
+  type HostTrustRequiredError,
+  type NormalizedError,
+  type OperationContext,
 } from "@easyai101/easyserver-plugin-sdk";
 import { retryWithHostTrust, type ConfirmHostTrust } from "./connect-command.js";
 import type {
@@ -23,7 +26,7 @@ export interface TuiForegroundConnectionRequest {
   readonly accessMethodId: string;
 }
 
-export type TuiForegroundConnectionState = "live" | "closing";
+export type TuiForegroundConnectionState = "live" | "closing" | "failed";
 
 export interface TuiForegroundConnection {
   readonly id: string;
@@ -37,6 +40,7 @@ export interface TuiForegroundConnection {
   };
   readonly accessMethod: AccessMethodDescriptor;
   readonly state: TuiForegroundConnectionState;
+  readonly failure?: NormalizedError;
 }
 
 export interface TuiForegroundConnectionInteraction {
@@ -62,11 +66,17 @@ export interface TuiForegroundConnectionDependencies {
 
 export class TuiForegroundConnectionOperations {
   readonly #records = new Map<string, TuiForegroundConnectionRecord>();
+  readonly #listeners = new Set<() => void>();
 
   constructor(private readonly dependencies: TuiForegroundConnectionDependencies) {}
 
   list(): readonly TuiForegroundConnection[] {
     return [...this.#records.values()].map((record) => record.descriptor);
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
   }
 
   listAccessMethods(
@@ -104,10 +114,16 @@ export class TuiForegroundConnectionOperations {
       accessMethod: result.accessMethod,
       state: "live",
     };
-    this.#records.set(id, { descriptor, session: result.session });
+    const record = { descriptor, session: result.session };
+    this.#records.set(id, record);
+    this.#emit();
     void result.session.closed.then(
-      () => this.#records.delete(id),
-      () => this.#records.delete(id),
+      () => {
+        if (this.#records.get(id) === record && this.#records.delete(id)) {
+          this.#emit();
+        }
+      },
+      (error) => this.#markFailed(id, record, error),
     );
     return descriptor;
   }
@@ -117,23 +133,43 @@ export class TuiForegroundConnectionOperations {
     if (record === undefined) {
       return;
     }
+    if (record.descriptor.state === "failed") {
+      this.#records.delete(id);
+      this.#emit();
+      return;
+    }
     record.descriptor = { ...record.descriptor, state: "closing" };
-    await record.session.close();
-    this.#records.delete(id);
+    this.#emit();
+    try {
+      await record.session.close();
+    } catch (error) {
+      this.#markFailed(id, record, error);
+      throw error;
+    }
+    if (this.#records.get(id) === record && this.#records.delete(id)) {
+      this.#emit();
+    }
   }
 
   async closeAll(): Promise<void> {
     const records = [...this.#records.values()];
-    for (const record of records) {
+    const closable = records.filter((record) => record.descriptor.state !== "failed");
+    for (const record of closable) {
       record.descriptor = { ...record.descriptor, state: "closing" };
     }
+    if (closable.length > 0) {
+      this.#emit();
+    }
     const outcomes = await Promise.allSettled(
-      records.map((record) => record.session.close()),
+      closable.map((record) => record.session.close()),
     );
     const errors = outcomes.flatMap((outcome) =>
       outcome.status === "rejected" ? [outcome.reason] : [],
     );
-    this.#records.clear();
+    if (this.#records.size > 0) {
+      this.#records.clear();
+      this.#emit();
+    }
     if (errors.length === 1) {
       throw errors[0];
     }
@@ -141,6 +177,44 @@ export class TuiForegroundConnectionOperations {
       throw new AggregateError(errors, "TUI-owned connection cleanup failed");
     }
   }
+
+  #markFailed(id: string, record: TuiForegroundConnectionRecord, error: unknown): void {
+    if (this.#records.get(id) !== record || record.descriptor.state === "failed") {
+      return;
+    }
+    record.descriptor = {
+      ...record.descriptor,
+      state: "failed",
+      failure: foregroundConnectionFailure(error),
+    };
+    this.#emit();
+  }
+
+  #emit(): void {
+    for (const listener of this.#listeners) {
+      listener();
+    }
+  }
+}
+
+function foregroundConnectionFailure(error: unknown): NormalizedError {
+  if (!isNormalizedError(error)) {
+    return normalizedError(
+      "plugin-failure",
+      "The local connection ended unexpectedly.",
+    );
+  }
+  const safeMessage = [
+    "SSH public-key authentication was rejected by the server.",
+    "SSH authentication was rejected by the server.",
+    "SSH host identity no longer matches the trusted host key.",
+    "SSH on the server is not ready or reachable yet.",
+    "SSH connected, but the requested service port is not accepting connections yet.",
+    "Local OpenSSH client could not be started. Install or enable OpenSSH Client and retry.",
+  ].includes(error.message)
+    ? error.message
+    : "The local connection ended unexpectedly.";
+  return normalizedError(error.code, safeMessage);
 }
 
 export function createDefaultTuiForegroundConnectionOperations(

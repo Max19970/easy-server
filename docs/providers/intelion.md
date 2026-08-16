@@ -7,10 +7,11 @@ The Intelion.cloud Provider Plugin keeps Intelion's catalog/configurator model p
 You need:
 
 - an Intelion.cloud account with permission/quota to create the cloud-server configuration you select;
-- an Intelion API token;
-- a registered Intelion SSH public key if you want the created image to be reachable through SSH.
+- an Intelion API token.
 
-EasyServer imports the API token into its OS-backed Secret Store. It does not require the token in ordinary command arguments or Local State.
+Registered Intelion SSH public keys remain an optional provider-side server-creation setting. EasyServer's `0.2.0` normalized SSH tunnel does not use the API token or an Intelion public-key record as the SSH login credential: after host trust succeeds, it resolves the provider-issued password for that specific server through Intelion's authenticated API when opening the connection.
+
+EasyServer imports the API token into its OS-backed Secret Store. The token authorizes Intelion API requests, including that deferred password lookup; it is not itself sent to OpenSSH and is not stored in ordinary command arguments or Local State.
 
 ## 2. Install and register the plugin
 
@@ -171,7 +172,7 @@ Provider lifecycle state and billing state are deliberately separate concepts. D
 
 ## 7. Connect to a workload
 
-When an SSH-enabled image has active connection metadata, EasyServer can expose remote TCP services through its generic SSH Access Adapter.
+When an SSH-enabled image has active connection metadata, EasyServer can expose remote TCP services through its generic SSH Access Adapter. The provider-issued SSH password is resolved on demand through Intelion after host trust and is neither printed nor persisted as ordinary EasyServer Local State. A failure to retrieve or use that server-specific access credential is distinct from the configured Intelion API token being absent or rejected.
 
 For a workload on the server's `127.0.0.1:8188`:
 

@@ -218,7 +218,11 @@ The foreground output includes the selected Access Method ID and kind. The foreg
 
 If the selected access path uses SSH and the host key is unknown, foreground `connect` displays the exact host-key fingerprint and asks for explicit confirmation. Only explicit confirmation enrolls that key, then EasyServer retries once. Declining leaves it untrusted. A changed key fails closed rather than being silently replaced.
 
-Passwords/private identities are resolved only after host trust succeeds.
+If host-key scanning fails just after a server starts, wait briefly and retry because SSH may not be ready yet. If it keeps failing, verify that the local OpenSSH Client provides `ssh` and `ssh-keyscan`; Diagnostics reports whether those commands are available. If EasyServer reports that the SSH host identity changed, verify that the server really was replaced or reinstalled before removing its old entry from `~/.easyserver/known_hosts` and trusting the new fingerprint.
+
+A public-key authentication rejection is separate from provider API authentication. For an SSH method that relies on local OpenSSH identities, make sure the matching private key is available through a standard identity file or `ssh-agent` and that its public key is authorized on the server. Provider-specific requirements can add further constraints; for example, see the [Vast.ai guide](providers/vastai.md).
+
+Passwords/private identities declared by the selected access method are resolved only after host trust succeeds.
 
 ## Persistent Endpoints with the local daemon
 

@@ -715,7 +715,9 @@ export function TuiShell({
   };
 
   const requestExit = (): void => {
-    const count = foregroundConnections.length;
+    const count = foregroundConnections.filter(
+      (connection) => connection.state !== "failed",
+    ).length;
     if (count === 0) {
       exit();
       return;
@@ -820,6 +822,12 @@ export function TuiShell({
   const selectedProvider = providerItems.find(
     (provider) => provider.source === effectiveSelectedProviderSource,
   );
+  const selectedForegroundConnection =
+    selectedConnectionTarget?.kind === "foreground"
+      ? foregroundConnections.find(
+          (connection) => connection.id === selectedConnectionTarget.id,
+        )
+      : undefined;
   const selectedTargetIntent =
     selectedConnectionTarget?.kind === "intent"
       ? endpointIntents.find((intent) => intent.operationName === selectedConnectionTarget.id)
@@ -934,7 +942,13 @@ export function TuiShell({
         selectedConnectionTarget?.kind === "foreground" &&
         onCloseForegroundConnection !== undefined
       ) {
-        actions.push({ id: "connection-close-foreground", label: "Close local connection" });
+        actions.push({
+          id: "connection-close-foreground",
+          label:
+            selectedForegroundConnection?.state === "failed"
+              ? "Dismiss failed connection"
+              : "Close local connection",
+        });
       } else if (
         selectedConnectionTarget?.kind === "persistent" &&
         onClosePersistentSession !== undefined
@@ -4021,16 +4035,70 @@ function humanizeTuiServerError(
   if (!isNormalizedError(error) || error.code === "host-trust-required") {
     return error;
   }
+  if (connectionVocabulary && error.code === "provider-unavailable") {
+    if (error.message.includes("SSH host key could not be read")) {
+      return normalizedError(
+        error.code,
+        `SSH for ${serverLabel} is not ready yet, or this computer cannot scan its host key. Wait a moment and retry. If it keeps failing, install or enable OpenSSH Client and check Diagnostics.`,
+      );
+    }
+    if (error.message.includes("SSH connected, but the requested service port is not accepting connections yet")) {
+      return normalizedError(
+        error.code,
+        `SSH to ${serverLabel} works, but the requested service port is not accepting connections yet. Start or wait for that service, verify its port, then retry.`,
+      );
+    }
+    if (error.message.includes("SSH on the server is not ready or reachable yet")) {
+      return normalizedError(
+        error.code,
+        `SSH for ${serverLabel} is not ready or reachable yet. If the server just started, wait a moment and retry; otherwise check Diagnostics.`,
+      );
+    }
+    return normalizedError(
+      error.code,
+      `Could not prepare a connection to ${serverLabel}. If the server just started, wait a moment and retry; otherwise refresh Servers or open Diagnostics.`,
+    );
+  }
   if (error.code === "provider-unavailable") {
     return normalizedError(
       error.code,
       `Could not reach ${serverLabel}. Refresh Servers; use Providers or Diagnostics if the problem continues.`,
     );
   }
+  if (connectionVocabulary && error.code === "authentication") {
+    if (
+      /SSH host key (?:mismatch|changed)|SSH host identity/iu.test(error.message)
+    ) {
+      return normalizedError(
+        error.code,
+        `SSH host identity for ${serverLabel} changed. EasyServer blocked the connection. Verify the server was replaced or reinstalled before trusting a new host key; if the change is expected, remove the stale EasyServer host key and retry.`,
+      );
+    }
+    if (error.message.includes("SSH public-key authentication was rejected")) {
+      return normalizedError(
+        error.code,
+        `SSH public-key authentication to ${serverLabel} was rejected. Make sure the matching SSH private key is available to EasyServer/OpenSSH and its public key is authorized on the server, then retry.`,
+      );
+    }
+    return normalizedError(
+      error.code,
+      `Connection authentication for ${serverLabel} was rejected. Check the login or key expected by the server and retry; this does not necessarily mean the provider API credential is wrong.`,
+    );
+  }
   if (error.code === "authentication") {
     return normalizedError(
       error.code,
       `Credentials need attention before ${serverLabel} can be used. Open Providers to review them.`,
+    );
+  }
+  if (
+    connectionVocabulary &&
+    error.code === "plugin-failure" &&
+    error.message.includes("Local OpenSSH client could not be started")
+  ) {
+    return normalizedError(
+      error.code,
+      "This computer could not start OpenSSH. Install or enable OpenSSH Client, make sure ssh is available, then retry. Open Diagnostics to check local SSH tools.",
     );
   }
   if (error.code === "plugin-failure" || error.code === "unknown-provider-error") {
@@ -4497,6 +4565,7 @@ export function TuiApp({
   const bulkMutationControllerRef = useRef<AbortController | undefined>(undefined);
   const providerFlowBusyRef = useRef(false);
   const diagnosticsGenerationRef = useRef(0);
+  const reportedForegroundFailuresRef = useRef(new Set<string>());
 
   const refreshDiagnostics = useCallback(async (): Promise<boolean> => {
     if (diagnosticsOperations === undefined) {
@@ -4612,6 +4681,49 @@ export function TuiApp({
     },
     [foregroundConnectionOperations],
   );
+
+  useEffect(() => {
+    if (
+      foregroundConnectionOperations === undefined ||
+      typeof foregroundConnectionOperations.subscribe !== "function"
+    ) {
+      return;
+    }
+    return foregroundConnectionOperations.subscribe(() => {
+      setForegroundConnections([...foregroundConnectionOperations.list()]);
+    });
+  }, [foregroundConnectionOperations]);
+
+  useEffect(() => {
+    if (operation !== undefined) {
+      return;
+    }
+    const failed = foregroundConnections.find(
+      (connection) =>
+        connection.state === "failed" &&
+        connection.failure !== undefined &&
+        !reportedForegroundFailuresRef.current.has(connection.id),
+    );
+    if (failed === undefined || failed.failure === undefined) {
+      return;
+    }
+    reportedForegroundFailuresRef.current.add(failed.id);
+    const serverLabel =
+      snapshot === undefined ? "server" : serverDisplayName(snapshot, failed.instanceId);
+    setOperation(
+      presentOperationError({
+        title: "Local connection failed",
+        operation: "read",
+        error: humanizeTuiServerError(failed.failure, {
+          instanceId: failed.instanceId,
+          serverLabel,
+          accessMethodId: failed.accessMethod.id,
+          connectionVocabulary: true,
+        }),
+        allowRetry: false,
+      }),
+    );
+  }, [foregroundConnections, operation, snapshot]);
 
   const listForegroundAccessMethods = useCallback(
     async (

@@ -2722,7 +2722,7 @@ test("ordinary connection and lifecycle failure drawers hide canonical server id
   connectionView.stdin.write("\r");
   await tick();
   await tick();
-  assert.match(connectionView.lastFrame(), /Could not reach Server/);
+  assert.match(connectionView.lastFrame(), /Could not prepare a connection to Server/);
   assert.doesNotMatch(connectionView.lastFrame(), /instance:connect|remote-connect|fixture|Compute Instance|Access Method|Endpoint|daemon|Session/);
 
   const lifecycleView = render(
@@ -2765,6 +2765,320 @@ test("ordinary connection and lifecycle failure drawers hide canonical server id
   await tick();
   assert.match(lifecycleView.lastFrame(), /Server is no longer available/);
   assert.doesNotMatch(lifecycleView.lastFrame(), /instance:secret-123|provider-secret-456|Compute Instance/);
+});
+
+test("late foreground SSH public-key failure stays visible, actionable and dismissible", async () => {
+  let listener;
+  let connections = [
+    {
+      id: "foreground:late-secret",
+      instanceId: "instance:connect",
+      remoteHost: "127.0.0.1",
+      remotePort: 8188,
+      endpoint: { host: "127.0.0.1", port: 40131 },
+      accessMethod: { id: "ssh-secret", kind: "ssh", mode: "tcp-forward" },
+      state: "live",
+    },
+  ];
+  const operations = {
+    list() {
+      return connections;
+    },
+    subscribe(next) {
+      listener = next;
+      return () => {
+        listener = undefined;
+      };
+    },
+    async listAccessMethods() {
+      return [];
+    },
+    async open() {
+      assert.fail("open is not expected");
+    },
+    async close(id) {
+      assert.equal(id, "foreground:late-secret");
+      connections = [];
+      listener?.();
+    },
+    async closeAll() {
+      connections = [];
+      listener?.();
+    },
+  };
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () => foregroundConnectionSnapshot(),
+      foregroundConnectionOperations: operations,
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openConnectionsRoute(view);
+  connections = [
+    {
+      ...connections[0],
+      state: "failed",
+      failure: normalizedError(
+        "authentication",
+        "SSH public-key authentication was rejected by the server.",
+      ),
+    },
+  ];
+  listener?.();
+  await tick();
+  await tick();
+  await tick();
+
+  assert.match(view.lastFrame(), /Local connection failed/);
+  assert.match(view.lastFrame(), /SSH public-key authentication to Server was rejected/);
+  assert.match(view.lastFrame(), /matching SSH private key/);
+  assert.match(view.lastFrame(), /40131 → Server:8188 · failed/);
+  assert.doesNotMatch(
+    view.lastFrame(),
+    /Credentials need attention|Open Providers|Permission denied|foreground:late-secret|instance:connect|ssh-secret/,
+  );
+
+  view.stdin.write("x");
+  await tick();
+  await chooseVisibleAction(view, "Dismiss failed connection");
+  await tick();
+  assert.doesNotMatch(view.lastFrame(), /40131 → Server:8188 · failed/);
+});
+
+test("late foreground failure waits for an active operation drawer instead of replacing it", async () => {
+  let listener;
+  let resolveMethods;
+  let connections = [
+    {
+      id: "foreground:queued-failure",
+      instanceId: "instance:connect",
+      remoteHost: "127.0.0.1",
+      remotePort: 8188,
+      endpoint: { host: "127.0.0.1", port: 40133 },
+      accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+      state: "live",
+    },
+  ];
+  const methodsGate = new Promise((resolve) => {
+    resolveMethods = resolve;
+  });
+  const method = { id: "ssh", kind: "ssh", mode: "tcp-forward" };
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: false,
+      readLoader: async () => foregroundConnectionSnapshot(),
+      foregroundConnectionOperations: {
+        list() {
+          return connections;
+        },
+        subscribe(next) {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+        async listAccessMethods() {
+          return methodsGate;
+        },
+        async open() {
+          assert.fail("open is not expected");
+        },
+        async close() {},
+        async closeAll() {},
+      },
+    }),
+  );
+
+  await tick();
+  await tick();
+  await openServersRoute(view);
+  await chooseVisibleAction(view, "Connect");
+  await typeText(view, "8188");
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Check connection method/);
+
+  connections = [
+    {
+      ...connections[0],
+      state: "failed",
+      failure: normalizedError(
+        "authentication",
+        "SSH public-key authentication was rejected by the server.",
+      ),
+    },
+  ];
+  listener?.();
+  await tick();
+  await tick();
+
+  assert.match(view.lastFrame(), /Check connection method/);
+  assert.doesNotMatch(view.lastFrame(), /Local connection failed/);
+
+  resolveMethods([method]);
+  await tick();
+  await tick();
+  await tick();
+
+  assert.match(view.lastFrame(), /Local connection failed/);
+  assert.match(view.lastFrame(), /SSH public-key authentication to Server was rejected/);
+});
+
+test("screen-reader mode exposes late foreground SSH failure linearly without internal identity", async () => {
+  let listener;
+  let connections = [
+    {
+      id: "foreground:screen-reader-secret",
+      instanceId: "instance:connect",
+      remoteHost: "127.0.0.1",
+      remotePort: 8188,
+      endpoint: { host: "127.0.0.1", port: 40132 },
+      accessMethod: { id: "ssh-screen-reader-secret", kind: "ssh", mode: "tcp-forward" },
+      state: "live",
+    },
+  ];
+  const view = render(
+    React.createElement(TuiApp, {
+      colorEnabled: false,
+      screenReader: true,
+      readLoader: async () => foregroundConnectionSnapshot(),
+      foregroundConnectionOperations: {
+        list() {
+          return connections;
+        },
+        subscribe(next) {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+        async listAccessMethods() {
+          return [];
+        },
+        async open() {
+          assert.fail("open is not expected");
+        },
+        async close() {},
+        async closeAll() {},
+      },
+    }),
+  );
+  await tick();
+  await tick();
+
+  connections = [
+    {
+      ...connections[0],
+      state: "failed",
+      failure: normalizedError(
+        "authentication",
+        "SSH public-key authentication was rejected by the server.",
+      ),
+    },
+  ];
+  listener?.();
+  await tick();
+  await tick();
+  await tick();
+
+  assert.match(view.lastFrame(), /Local connection failed/);
+  assert.match(view.lastFrame(), /SSH public-key authentication to Server was rejected/);
+  assert.doesNotMatch(
+    view.lastFrame(),
+    /foreground:screen-reader-secret|instance:connect|ssh-screen-reader-secret|Credentials need attention|Open Providers/,
+  );
+});
+
+test("connection host-key and keyscan failures give SSH-specific remediation", async () => {
+  const renderFailure = async (error) => {
+    const view = render(
+      React.createElement(TuiApp, {
+        colorEnabled: false,
+        screenReader: false,
+        readLoader: async () => foregroundConnectionSnapshot(),
+        foregroundConnectionOperations: {
+          list() {
+            return [];
+          },
+          async listAccessMethods() {
+            throw error;
+          },
+          async open() {
+            assert.fail("open is not expected");
+          },
+          async close() {},
+          async closeAll() {},
+        },
+      }),
+    );
+    await tick();
+    await tick();
+    await openServersRoute(view);
+    await chooseVisibleAction(view, "Connect");
+    await typeText(view, "22");
+    view.stdin.write("\r");
+    await tick();
+    await tick();
+    return view;
+  };
+
+  const changedHost = await renderFailure(
+    normalizedError(
+      "authentication",
+      "SSH host key mismatch for secret-host.example:2222",
+    ),
+  );
+  assert.match(changedHost.lastFrame(), /SSH host identity for Server changed/);
+  assert.match(changedHost.lastFrame(), /Verify the server was/);
+  assert.match(changedHost.lastFrame(), /replaced or reinstalled/);
+  assert.doesNotMatch(
+    changedHost.lastFrame(),
+    /Credentials need attention|Open Providers|secret-host\.example/,
+  );
+  cleanup();
+
+  const rejectedLogin = await renderFailure(
+    normalizedError(
+      "authentication",
+      "SSH authentication was rejected by the server.",
+    ),
+  );
+  assert.match(rejectedLogin.lastFrame(), /Connection authentication for Server was rejected/);
+  assert.match(rejectedLogin.lastFrame(), /Check the login or key expected/);
+  assert.match(rejectedLogin.lastFrame(), /server and retry/);
+  assert.doesNotMatch(rejectedLogin.lastFrame(), /Credentials need attention|Open Providers/i);
+  cleanup();
+
+  const keyscan = await renderFailure(
+    normalizedError(
+      "provider-unavailable",
+      "SSH host key could not be read. The server may still be starting, or the local OpenSSH key scanner may be unavailable.",
+    ),
+  );
+  assert.match(keyscan.lastFrame(), /SSH for Server is not ready yet, or this computer cannot scan its host key/);
+  assert.match(keyscan.lastFrame(), /Wait a moment and/);
+  assert.match(keyscan.lastFrame(), /retry\. If it keeps failing/);
+  assert.match(keyscan.lastFrame(), /OpenSSH Client/);
+  assert.doesNotMatch(keyscan.lastFrame(), /Open Providers|credentials/i);
+  cleanup();
+
+  const servicePort = await renderFailure(
+    normalizedError(
+      "provider-unavailable",
+      "SSH connected, but the requested service port is not accepting connections yet.",
+    ),
+  );
+  assert.match(servicePort.lastFrame(), /SSH to Server works/);
+  assert.match(servicePort.lastFrame(), /requested service port is not accepting connections yet/);
+  assert.match(servicePort.lastFrame(), /Start or/);
+  assert.match(servicePort.lastFrame(), /wait for that service/);
+  assert.match(servicePort.lastFrame(), /verify its port/);
+  assert.doesNotMatch(servicePort.lastFrame(), /Open Providers|credentials|SSH for Server is not ready/i);
 });
 
 test("closing ordinary local and background connections keeps internal identity out of drawers", async () => {
@@ -2828,7 +3142,7 @@ test("closing ordinary local and background connections keeps internal identity 
   await chooseVisibleAction(foregroundView, "Close local connection");
   await tick();
   await tick();
-  assert.match(foregroundView.lastFrame(), /Could not reach Close target/);
+  assert.match(foregroundView.lastFrame(), /Could not prepare a connection to Close target/);
   assert.doesNotMatch(
     foregroundView.lastFrame(),
     /foreground:internal-secret|instance:close-secret|provider-secret|ssh-secret|fixture/,
@@ -3186,6 +3500,52 @@ test("quitting with live local connections states the count and renders closing 
   finishCloseAll();
   await tick();
   await tick();
+});
+
+test("failed foreground records do not require cleanup confirmation before quitting", async () => {
+  const stdin = new TtyInput();
+  const stdout = new CaptureOutput();
+  const stderr = new CaptureOutput();
+  let cleanupCalls = 0;
+  const app = renderInk(
+    shell({
+      foregroundConnections: [
+        {
+          id: "foreground:failed",
+          instanceId: "instance:connect",
+          remoteHost: "127.0.0.1",
+          remotePort: 8188,
+          endpoint: { host: "127.0.0.1", port: 41001 },
+          accessMethod: { id: "ssh", kind: "ssh", mode: "tcp-forward" },
+          state: "failed",
+          failure: normalizedError(
+            "authentication",
+            "SSH public-key authentication was rejected by the server.",
+          ),
+        },
+      ],
+      async onQuitWithForegroundConnections() {
+        cleanupCalls += 1;
+        return true;
+      },
+    }),
+    {
+      stdin,
+      stdout,
+      stderr,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  );
+
+  await app.waitUntilRenderFlush();
+  stdin.write("q");
+  await app.waitUntilExit();
+  app.cleanup();
+
+  assert.equal(cleanupCalls, 0);
+  assert.doesNotMatch(stdout.text(), /still open in this TUI/);
+  assert.equal(stderr.text(), "");
 });
 
 test("advanced background connection retry preserves one idempotency key across the guided TUI flow", async () => {
