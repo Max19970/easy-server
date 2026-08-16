@@ -124,10 +124,19 @@ export class IntelionApiClient {
     if (mutation && response.status === 404) {
       throw normalizedError("not-found", "Intelion resource was not found");
     }
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       throw normalizedError(
         "authentication",
         "Intelion rejected the configured API token",
+      );
+    }
+    if (response.status === 403) {
+      throw normalizedError(
+        "unknown-provider-error",
+        appendProviderDetail(
+          "Intelion denied the requested operation",
+          await readSafeIntelionErrorDetail(response, token),
+        ),
       );
     }
     if (response.status === 409) {

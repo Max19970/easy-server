@@ -82,6 +82,30 @@ test("Intelion access discovery is secret-free and password retrieval is deferre
   assert.equal(calls[1].url.pathname, "/api/v2/cloud-servers/42/password/");
 });
 
+test("Intelion access-specific 403 does not blame a working API token", async () => {
+  const plugin = createIntelionProviderPlugin({
+    baseUrl: "https://fixture.intelion.test",
+    async fetch(input) {
+      const url = new URL(input);
+      assert.equal(url.pathname, "/api/v2/cloud-servers/42/password/");
+      return json({ detail: "Password access is not available for this server." }, 403);
+    },
+  });
+
+  await assert.rejects(
+    plugin.provider.resolveAccessCredential(
+      "42",
+      "ssh-password",
+      context(),
+    ),
+    (error) =>
+      error?.code === "unknown-provider-error" &&
+      /denied the requested operation/i.test(error.message) &&
+      /Password access is not available for this server/i.test(error.message) &&
+      !/configured API token/i.test(error.message),
+  );
+});
+
 test("Intelion derives root SSH access for automatically provisioned SSH-enabled images", async () => {
   const calls = [];
   const plugin = createIntelionProviderPlugin({
