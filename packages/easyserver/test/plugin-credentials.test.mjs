@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rename } from "node:fs/promises";
+import { access, mkdtemp, readFile, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -185,7 +185,12 @@ test("a hung Secret Store create does not hold the Local State lock", async () =
   );
   await createStarted;
 
-  const independent = new JsonStateStore(store.path).update((state) => ({
+  await assert.rejects(
+    access(`${store.path}.lock`),
+    (error) => error?.code === "ENOENT",
+    "Secret Store create must not hold the Local State lock",
+  );
+  await new JsonStateStore(store.path).update((state) => ({
     ...state,
     instances: [
       ...(state.instances ?? []),
@@ -196,11 +201,6 @@ test("a hung Secret Store create does not hold the Local State lock", async () =
       },
     ],
   }));
-  const outcome = await Promise.race([
-    independent.then(() => "committed"),
-    delay(250).then(() => "blocked"),
-  ]);
-  assert.equal(outcome, "committed");
 
   releaseCreate();
   await credentialUpdate;

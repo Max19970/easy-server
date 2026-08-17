@@ -18,6 +18,8 @@ const CREDENTIAL_PREFIX = "credential-";
 // PowerShell startup can exceed five seconds on a contended Windows host/CI runner.
 // Keep the identity check bounded, but give the fail-closed query enough time to complete.
 const WINDOWS_PROCESS_QUERY_TIMEOUT_MS = 15_000;
+const CURRENT_OWNER_INSPECTION_ATTEMPTS = 2;
+let cachedCurrentOwner: CredentialOwnerRecord | undefined;
 
 interface CredentialOwnerRecord {
   readonly schemaVersion: 1;
@@ -304,29 +306,43 @@ function metadataCredentialId(name: string): string | undefined {
 }
 
 async function currentOwner(signal?: AbortSignal): Promise<CredentialOwnerRecord> {
+  signal?.throwIfAborted();
+  if (cachedCurrentOwner !== undefined) {
+    return cachedCurrentOwner;
+  }
+
   if (!supportsVerifiedProcessIdentity()) {
     // Unqualified platforms retain normal process-scope cleanup. They do not
     // gain crash-scavenging authority until an OS-stable identity is defined.
-    return {
+    cachedCurrentOwner = {
       schemaVersion: OWNER_SCHEMA_VERSION,
       platform: process.platform,
       pid: process.pid,
       processIdentity: `unverified:${process.pid}:${Date.now()}`,
     };
+    return cachedCurrentOwner;
   }
 
-  const inspection = await inspectProcess(process.pid, signal);
-  if (inspection.state !== "running") {
-    throw new Error(
-      "Unable to establish stable process ownership for temporary SSH credentials",
-    );
+  for (let attempt = 0; attempt < CURRENT_OWNER_INSPECTION_ATTEMPTS; attempt += 1) {
+    signal?.throwIfAborted();
+    const inspection = await inspectProcess(process.pid, signal);
+    if (inspection.state === "running") {
+      cachedCurrentOwner = {
+        schemaVersion: OWNER_SCHEMA_VERSION,
+        platform: process.platform,
+        pid: process.pid,
+        processIdentity: inspection.identity,
+      };
+      return cachedCurrentOwner;
+    }
+    if (inspection.state === "missing") {
+      break;
+    }
   }
-  return {
-    schemaVersion: OWNER_SCHEMA_VERSION,
-    platform: process.platform,
-    pid: process.pid,
-    processIdentity: inspection.identity,
-  };
+
+  throw new Error(
+    "Unable to establish stable process ownership for temporary SSH credentials",
+  );
 }
 
 function supportsVerifiedProcessIdentity(): boolean {
