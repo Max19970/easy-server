@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -1221,7 +1221,12 @@ test("hung plugin validation does not hold the Local State lock", async () => {
 
   try {
     await waitForFile(startedPath);
-    const independent = new JsonStateStore(stateFile).update((state) => ({
+    await assert.rejects(
+      access(`${stateFile}.lock`),
+      (error) => error?.code === "ENOENT",
+      "plugin validation must not hold the Local State lock",
+    );
+    await new JsonStateStore(stateFile).update((state) => ({
       ...state,
       instances: [
         ...(state.instances ?? []),
@@ -1232,11 +1237,6 @@ test("hung plugin validation does not hold the Local State lock", async () => {
         },
       ],
     }));
-    const outcome = await Promise.race([
-      independent.then(() => "committed"),
-      new Promise((resolve) => setTimeout(() => resolve("blocked"), 300)),
-    ]);
-    assert.equal(outcome, "committed");
 
     await writeFile(releasePath, "release", "utf8");
     const [code] = await once(operation.child, "exit");
@@ -1261,15 +1261,15 @@ test("plugin activation revalidates concurrent enabled-provider changes", async 
 
   try {
     await waitForFile(startedPath);
-    const competing = new JsonStateStore(stateFile).update((state) => ({
+    await assert.rejects(
+      access(`${stateFile}.lock`),
+      (error) => error?.code === "ENOENT",
+      "plugin validation must not hold the Local State lock",
+    );
+    await new JsonStateStore(stateFile).update((state) => ({
       ...state,
       plugins: [...state.plugins, { source: validPlugin, enabled: true }],
     }));
-    const outcome = await Promise.race([
-      competing.then(() => "committed"),
-      new Promise((resolve) => setTimeout(() => resolve("blocked"), 300)),
-    ]);
-    assert.equal(outcome, "committed");
 
     await writeFile(releasePath, "release", "utf8");
     const [code] = await once(operation.child, "exit");
