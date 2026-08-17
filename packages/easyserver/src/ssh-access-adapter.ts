@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { Duplex } from "node:stream";
+import { Duplex, PassThrough } from "node:stream";
 import {
   hostTrustRequiredError,
   isSshAccessMethod,
@@ -353,9 +353,15 @@ class OpenSshTransportSession implements AccessTransportSession {
       stderr = `${stderr}${chunk}`.slice(-16_384);
     });
 
+    let stdinFailure: Error | undefined;
+    const input = new PassThrough();
+    input.pipe(child.stdin);
+    child.stdin.on("error", (error) => {
+      stdinFailure = error;
+    });
     const stream = Duplex.from({
       readable: child.stdout,
-      writable: child.stdin,
+      writable: input,
     });
     stream.on("error", () => undefined);
     let closePromise: Promise<void> | undefined;
@@ -384,10 +390,15 @@ class OpenSshTransportSession implements AccessTransportSession {
     };
     this.#channels.add(channel);
 
+    child.once("exit", () => {
+      if (!stream.destroyed && !stream.writableEnded) {
+        stream.end();
+      }
+    });
     child.once("close", (code) => {
       context.signal.removeEventListener("abort", onAbort);
       this.#channels.delete(channel);
-      if (!closing && code !== 0) {
+      if (!closing && (code !== 0 || stdinFailure !== undefined)) {
         exitFailure = openSshExitFailure(code, stderr);
         if (!stream.destroyed) {
           stream.destroy(exitFailure);

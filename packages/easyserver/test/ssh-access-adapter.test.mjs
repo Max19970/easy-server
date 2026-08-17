@@ -722,7 +722,9 @@ test("abrupt OpenSSH child exit fails the channel without exposing raw remote ou
     const channel = await transport.openChannel(context);
 
     try {
-      const [error] = await once(channel.stream, "error");
+      const streamError = once(channel.stream, "error");
+      channel.stream.write(Buffer.alloc(256 * 1024));
+      const [error] = await streamError;
       assert.equal(error.code, "plugin-failure");
       assert.equal(error.message, "OpenSSH connection failed unexpectedly.");
       assert.doesNotMatch(error.message, /fixture abrupt SSH exit/);
