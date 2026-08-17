@@ -26,9 +26,6 @@ import {
 import {
   loadDefaultTuiReadSnapshot,
   type TuiEndpointIntentReadItem,
-  type TuiInstanceReadItem,
-  type TuiPersistentSessionReadItem,
-  type TuiProviderCandidateReadItem,
   type TuiProviderWorkflowReadItem,
   type TuiReadSnapshot,
 } from "./tui-read-model.js";
@@ -49,15 +46,10 @@ import {
   createDefaultTuiBulkInstanceMutationRunner,
   createDefaultTuiInstanceMutationRunner,
   type TuiBulkInstanceMutation,
-  type TuiBulkInstanceMutationResult,
   type TuiBulkInstanceMutationRunner,
   type TuiInstanceMutation,
   type TuiInstanceMutationRunner,
 } from "./tui-instance-operations.js";
-import type {
-  BulkInstanceDestroyConfirmationDetails,
-  InstanceDestroyConfirmationDetails,
-} from "./instance-operations.js";
 import type { AccessMethodDescriptor } from "./connection-gateway.js";
 import {
   createDefaultTuiForegroundConnectionOperations,
@@ -80,7 +72,6 @@ import {
   hostTrustRequiredError,
   isNormalizedError,
   normalizedError,
-  PROVIDER_CAPABILITIES,
   type AvailableAction,
   type OperationContext,
   type ProviderInteractiveEvent,
@@ -90,29 +81,61 @@ import {
   moveTuiFocus,
   tuiFocusWindowWithinRows,
 } from "./tui-focus.js";
-import { escapeTerminalText } from "./terminal-text.js";
-import type { DiagnosticsReport } from "./diagnostics.js";
+import {
+  DiagnosticsSurface,
+  diagnosticsSummary,
+  wrapDiagnosticsText,
+  type TuiDiagnosticsView,
+} from "./tui-diagnostics-surface.js";
+import {
+  connectionContextActions,
+  diagnosticsContextActions,
+  providerContextActions,
+  rentContextActions,
+  serverContextActions,
+  type TuiContextAction,
+  type TuiContextActionId,
+} from "./tui-context-actions.js";
+import {
+  NewInstanceSurface,
+  ProvidersSurface,
+  firstProviderSource,
+  firstWorkflowKey,
+  workflowKey,
+  type ProviderCandidatePickerView,
+  type ProviderCredentialFlow,
+  type ProviderCredentialFlowView,
+} from "./tui-providers-surface.js";
+import {
+  ConnectionsSurface,
+  foregroundConnectionCanRetry,
+  foregroundConnectionFlowFromFailedConnection,
+  foregroundConnectionNeedsServicePortEdit,
+  foregroundConnectionRequest,
+  humanizeTuiServerError,
+  parseConnectionPort,
+  previousForegroundConnectionStep,
+  type ForegroundConnectionFlow,
+  type TuiConnectionTarget,
+} from "./tui-connections-surface.js";
+import {
+  InstancesSurface,
+  bulkInstanceConfirmationResources,
+  bulkInstanceMutationStatus,
+  bulkInstanceMutationTitle,
+  bulkServerDisplayName,
+  canStartInstanceMutation,
+  destroyAffectedResources,
+  destroyServerConsequence,
+  firstInstanceId,
+  humanizeBulkInstanceMessage,
+  humanizeBulkInstanceResult,
+  humanizeBulkMutationError,
+  instanceMutationStatus,
+  instanceMutationTitle,
+  serverDisplayName,
+} from "./tui-servers-surface.js";
 import { EASYSERVER_VERSION } from "./version.js";
-
-interface TuiDiagnosticsSummary {
-  readonly version: string;
-  readonly stateStatus: DiagnosticsReport["state"]["status"];
-  readonly configuredPlugins: number;
-  readonly failedPlugins: number;
-  readonly daemonStatus: DiagnosticsReport["daemon"]["status"];
-  readonly ssh: DiagnosticsReport["access"]["ssh"];
-  readonly sshKeyscan: DiagnosticsReport["access"]["sshKeyscan"];
-}
-
-type TuiDiagnosticsView =
-  | { readonly status: "idle" }
-  | { readonly status: "loading" }
-  | { readonly status: "failed"; readonly message: string }
-  | {
-      readonly status: "ready";
-      readonly text: string;
-      readonly summary: TuiDiagnosticsSummary;
-    };
 
 type TuiRouteId =
   | "overview"
@@ -129,48 +152,6 @@ interface TuiRoute {
   readonly description: string;
   readonly body: string;
 }
-
-type TuiContextActionId =
-  | "refresh"
-  | "new-instance"
-  | "providers"
-  | "connections"
-  | "instance-details"
-  | "instance-connect"
-  | "instance-adopt"
-  | "instance-mark"
-  | "bulk-clear"
-  | "provider-details"
-  | "provider-add-installed"
-  | "provider-add-advanced"
-  | "provider-credentials"
-  | "provider-toggle"
-  | "connection-details"
-  | "connection-new-foreground"
-  | "connection-new-persistent"
-  | "daemon-toggle"
-  | "connection-retry-foreground"
-  | "connection-edit-service-port"
-  | "connection-close-foreground"
-  | "connection-close-persistent"
-  | "intent-toggle"
-  | "intent-host-trust"
-  | "intent-retry"
-  | "intent-remove"
-  | "diagnostics-view"
-  | "diagnostics-copy"
-  | `instance-action:${AvailableAction}`
-  | `bulk-action:${AvailableAction}`;
-
-interface TuiContextAction {
-  readonly id: TuiContextActionId;
-  readonly label: string;
-}
-
-type TuiConnectionTarget =
-  | { readonly kind: "foreground"; readonly id: string }
-  | { readonly kind: "intent"; readonly id: string }
-  | { readonly kind: "persistent"; readonly id: string };
 
 const routes: readonly TuiRoute[] = [
   {
@@ -260,40 +241,6 @@ function routeBreadcrumb(routeId: TuiRouteId): string {
 
 export type TuiReadStatus = "idle" | "loading" | "ready" | "stale" | "failed";
 
-type ProviderCredentialFlow =
-  | {
-      readonly kind: "picker";
-      readonly providerSource: string;
-      readonly selectedName: string;
-    }
-  | {
-      readonly kind: "actions";
-      readonly providerSource: string;
-      readonly credentialName: string;
-      readonly cursor: number;
-    }
-  | {
-      readonly kind: "secret";
-      readonly providerSource: string;
-      readonly credentialName: string;
-      readonly secret: string;
-    };
-
-interface ProviderCandidatePickerView {
-  readonly items: readonly TuiProviderCandidateReadItem[];
-  readonly cursor: number;
-}
-
-type ProviderCredentialFlowView =
-  | Extract<ProviderCredentialFlow, { readonly kind: "picker" }>
-  | Extract<ProviderCredentialFlow, { readonly kind: "actions" }>
-  | {
-      readonly kind: "secret";
-      readonly providerSource: string;
-      readonly credentialName: string;
-      readonly hasSecret: boolean;
-    };
-
 interface PendingProviderFlowConfirmation {
   readonly resolve: (accepted: boolean) => void;
   readonly workingTitle: string;
@@ -319,28 +266,6 @@ interface PendingEndpointIntentRemoval {
 
 interface PendingEndpointIntentRemovalRetry {
   readonly intent: TuiEndpointIntentReadItem;
-}
-
-type ForegroundConnectionStep =
-  | "instance"
-  | "remote-host"
-  | "remote-port"
-  | "access-method"
-  | "local-port"
-  | "review";
-
-interface ForegroundConnectionFlow {
-  readonly mode: "foreground" | "persistent";
-  readonly advanced: boolean;
-  readonly serverScoped: boolean;
-  readonly step: ForegroundConnectionStep;
-  readonly instanceId: string;
-  readonly remoteHost: string;
-  readonly remotePort: string;
-  readonly accessMethods: readonly AccessMethodDescriptor[];
-  readonly accessMethodId?: string;
-  readonly localPort: string;
-  readonly idempotencyKey?: string;
 }
 
 export interface TuiShellProps {
@@ -877,206 +802,61 @@ export function TuiShell({
       : undefined;
 
   const contextActions: readonly TuiContextAction[] = (() => {
-    if (activeRoute.id === "overview" || activeRoute.id === "settings") {
-      return [];
-    }
-    if (activeRoute.id === "instances") {
-      const actions: TuiContextAction[] = [
-        { id: "new-instance", label: "Rent a server" },
-        { id: "refresh", label: "Refresh servers" },
-      ];
-      if (selectedInstance !== undefined) {
-        actions.unshift({
-          id: "instance-details",
-          label: instanceDetailsOpen ? "Hide technical details" : "Show technical details",
+    switch (activeRoute.id) {
+      case "overview":
+      case "settings":
+        return [];
+      case "instances":
+        return serverContextActions({
+          selectedInstance,
+          detailsOpen: instanceDetailsOpen,
+          canConnect:
+            onOpenForegroundConnection !== undefined &&
+            onListForegroundAccessMethods !== undefined,
+          canMutate: onInstanceMutation !== undefined,
+          canBulkMutate: onBulkInstanceMutation !== undefined,
+          bulkSelectedInstanceIds,
+          bulkSelectedInstances,
+          missingBulkSelectedInstanceIds,
         });
-        if (
-          selectedInstance.freshness === "fresh" &&
-          onOpenForegroundConnection !== undefined &&
-          onListForegroundAccessMethods !== undefined
-        ) {
-          actions.unshift({ id: "instance-connect", label: "Connect" });
-        }
-        if (
-          selectedInstance.freshness === "fresh" &&
-          selectedInstance.management === "discovered" &&
-          onInstanceMutation !== undefined
-        ) {
-          actions.push({ id: "instance-adopt", label: "Adopt for EasyServer management" });
-        }
-        if (onInstanceMutation !== undefined) {
-          for (const action of availableInstanceActions(selectedInstance)) {
-            actions.push({
-              id: `instance-action:${action}`,
-              label: instanceActionLabel(action),
-            });
-          }
-        }
-        if (onBulkInstanceMutation !== undefined && selectedInstance.freshness === "fresh") {
-          actions.push({
-            id: "instance-mark",
-            label: bulkSelectedInstanceIds.includes(selectedInstance.id)
-              ? "Remove from bulk selection"
-              : "Add to bulk selection",
-          });
-        }
-      }
-      if (bulkSelectedInstanceIds.length > 0 && onBulkInstanceMutation !== undefined) {
-        actions.push({ id: "bulk-clear", label: "Clear bulk selection" });
-        if (missingBulkSelectedInstanceIds.length === 0) {
-          for (const action of bulkAvailableInstanceActions(bulkSelectedInstances)) {
-            actions.push({
-              id: `bulk-action:${action}`,
-              label: `${action.slice("instance.".length)} ${bulkSelectedInstanceIds.length} selected server${bulkSelectedInstanceIds.length === 1 ? "" : "s"}`,
-            });
-          }
-        }
-      }
-      return actions;
-    }
-    if (activeRoute.id === "providers") {
-      const actions: TuiContextAction[] = [{ id: "refresh", label: "Refresh providers" }];
-      if (canRegisterProvider) {
-        actions.unshift({
-          id: "provider-add-advanced",
-          label: "Advanced: add module or path",
+      case "providers":
+        return providerContextActions({
+          selectedProvider,
+          detailsOpen: providerDetailsOpen,
+          canRegister: canRegisterProvider,
+          canAddInstalled: canAddInstalledProvider,
+          canMutate: onProviderMutation !== undefined,
         });
-        if (canAddInstalledProvider) {
-          actions.unshift({
-            id: "provider-add-installed",
-            label: "Add installed provider",
-          });
-        }
-      }
-      if (selectedProvider !== undefined) {
-        actions.unshift({
-          id: "provider-details",
-          label: providerDetailsOpen ? "Hide provider details" : "Show provider details",
+      case "new-instance":
+        return rentContextActions(workflowItems.length > 0);
+      case "sessions":
+        return connectionContextActions({
+          detailsOpen: connectionDetailsOpen,
+          canStartForeground: canStartForegroundConnection,
+          hasNoServers:
+            readSnapshot?.instances.status === "ready" && inventoryItems.length === 0,
+          selectedTarget: selectedConnectionTarget,
+          selectedForeground: selectedForegroundConnection,
+          selectedIntent: selectedTargetIntent,
+          canRetryForeground: onRetryForegroundConnection !== undefined,
+          canCloseForeground: onCloseForegroundConnection !== undefined,
+          canClosePersistent: onClosePersistentSession !== undefined,
+          canCreatePersistent:
+            onCreatePersistentSession !== undefined &&
+            onListForegroundAccessMethods !== undefined,
+          canManageDaemon: onStartDaemon !== undefined && onStopDaemon !== undefined,
+          daemonRunning: readSnapshot?.daemon.status === "running",
+          canSetIntentEnabled: onSetEndpointIntentEnabled !== undefined,
+          canReviewIntentHostTrust: onReviewEndpointIntentHostTrust !== undefined,
+          canRetryIntent: onRetryEndpointIntent !== undefined,
+          canRemoveIntent: onRemoveEndpointIntent !== undefined,
         });
-        if (
-          onProviderMutation !== undefined &&
-          selectedProvider.state !== "disabled" &&
-          selectedProvider.state !== "failed" &&
-          (selectedProvider.credentials.items?.length ?? 0) > 0
-        ) {
-          actions.push({ id: "provider-credentials", label: "Manage credentials" });
-        }
-        if (onProviderMutation !== undefined) {
-          actions.push({
-            id: "provider-toggle",
-            label: selectedProvider.state === "disabled" ? "Enable provider" : "Disable provider",
-          });
-        }
-      }
-      return actions;
+      case "diagnostics":
+        return diagnosticsContextActions(
+          diagnostics,
+          onCopyDiagnostics !== undefined,
+        );
     }
-    if (activeRoute.id === "new-instance") {
-      const actions: TuiContextAction[] = [
-        { id: "refresh", label: "Refresh acquisition options" },
-      ];
-      if (workflowItems.length === 0) {
-        actions.unshift({ id: "providers", label: "Open Providers" });
-      }
-      return actions;
-    }
-    if (activeRoute.id === "sessions") {
-      const actions: TuiContextAction[] = [
-        { id: "connection-details", label: connectionDetailsOpen ? "Hide technical details" : "Show technical details" },
-        { id: "refresh", label: "Refresh connections" },
-      ];
-      if (canStartForegroundConnection) {
-        actions.unshift({ id: "connection-new-foreground", label: "New local connection" });
-      } else if (
-        readSnapshot?.instances.status === "ready" &&
-        inventoryItems.length === 0
-      ) {
-        actions.unshift({ id: "new-instance", label: "Rent a server" });
-      }
-      if (
-        selectedConnectionTarget?.kind === "foreground" &&
-        selectedForegroundConnection?.state === "failed"
-      ) {
-        if (
-          foregroundConnectionCanRetry(selectedForegroundConnection) &&
-          onRetryForegroundConnection !== undefined
-        ) {
-          actions.push({ id: "connection-retry-foreground", label: "Retry connection" });
-        }
-        if (
-          foregroundConnectionNeedsServicePortEdit(selectedForegroundConnection) &&
-          onCloseForegroundConnection !== undefined
-        ) {
-          actions.push({ id: "connection-edit-service-port", label: "Edit service port" });
-        }
-        if (onCloseForegroundConnection !== undefined) {
-          actions.push({
-            id: "connection-close-foreground",
-            label: "Dismiss failed connection",
-          });
-        }
-      } else if (
-        selectedConnectionTarget?.kind === "foreground" &&
-        onCloseForegroundConnection !== undefined
-      ) {
-        actions.push({
-          id: "connection-close-foreground",
-          label: "Close local connection",
-        });
-      } else if (
-        selectedConnectionTarget?.kind === "persistent" &&
-        onClosePersistentSession !== undefined
-      ) {
-        actions.push({ id: "connection-close-persistent", label: "Close local connection" });
-      }
-      if (connectionDetailsOpen) {
-        if (
-          onCreatePersistentSession !== undefined &&
-          onListForegroundAccessMethods !== undefined
-        ) {
-          actions.push({ id: "connection-new-persistent", label: "Advanced: new background connection" });
-        }
-        if (onStartDaemon !== undefined && onStopDaemon !== undefined) {
-          actions.push({
-            id: "daemon-toggle",
-            label: readSnapshot?.daemon.status === "running"
-              ? "Advanced: stop background connection service"
-              : "Advanced: start background connection service",
-          });
-        }
-        if (selectedTargetIntent !== undefined && onSetEndpointIntentEnabled !== undefined) {
-          actions.push({
-            id: "intent-toggle",
-            label: selectedTargetIntent.enabled ? "Disable selected saved connection" : "Enable selected saved connection",
-          });
-          if (
-            selectedTargetIntent.state === "error" &&
-            selectedTargetIntent.failure?.hostTrust !== undefined &&
-            onReviewEndpointIntentHostTrust !== undefined
-          ) {
-            actions.push({ id: "intent-host-trust", label: "Review SSH fingerprint" });
-          }
-          if (selectedTargetIntent.state === "error" && onRetryEndpointIntent !== undefined) {
-            actions.push({ id: "intent-retry", label: "Retry selected saved connection" });
-          }
-          if (onRemoveEndpointIntent !== undefined) {
-            actions.push({ id: "intent-remove", label: "Remove selected saved connection" });
-          }
-        }
-      }
-      return actions;
-    }
-    const actions: TuiContextAction[] = [{ id: "refresh", label: "Refresh diagnostics" }];
-    if (diagnostics.status === "ready") {
-      actions.unshift({ id: "diagnostics-view", label: "View report" });
-      if (onCopyDiagnostics !== undefined) {
-        actions.push({ id: "diagnostics-copy", label: "Copy report" });
-      }
-    }
-    actions.push(
-      { id: "providers", label: "Open Providers" },
-      { id: "connections", label: "Open Connections" },
-    );
-    return actions;
   })();
 
   const executeContextAction = (id: TuiContextActionId): void => {
@@ -2233,40 +2013,50 @@ export function TuiShell({
               route={activeRoute}
               snapshot={readSnapshot}
               readStatus={readStatus}
-              diagnostics={diagnostics}
-              diagnosticsReportOpen={diagnosticsReportOpen}
-              diagnosticsScroll={diagnosticsScroll}
-              canCopyDiagnostics={onCopyDiagnostics !== undefined}
               screenReader={screenReader}
               height={routeSurfaceRows}
               width={routeContentColumns}
               colorEnabled={colorEnabled}
               settingsCursor={settingsCursor}
-              selectedInstanceId={selectedInstanceId}
-              showInstanceDetails={instanceDetailsOpen}
-              bulkSelectedInstanceIds={bulkSelectedInstanceIds}
-              canMutateInstances={onInstanceMutation !== undefined}
-              canBulkMutateInstances={onBulkInstanceMutation !== undefined}
-              foregroundConnectionFlow={foregroundConnectionFlow}
-              foregroundConnectionBusy={foregroundConnectionBusy}
-              foregroundConnections={foregroundConnections}
-              selectedForegroundConnectionId={selectedForegroundConnectionId}
-              selectedPersistentSessionId={selectedPersistentSessionId}
-              selectedEndpointIntentName={effectiveSelectedEndpointIntentName}
-              selectedConnectionTarget={selectedConnectionTarget}
-              showConnectionDetails={connectionDetailsOpen}
-              providerCandidatePicker={providerCandidatePickerView}
-              providerSourceInput={providerSourceInput}
-              providerCredentialFlow={providerCredentialFlowView}
-              selectedProviderSource={effectiveSelectedProviderSource}
-              showProviderDetails={providerDetailsOpen}
-              canRegisterProvider={canRegisterProvider}
-              canAddInstalledProvider={canAddInstalledProvider}
-              selectedWorkflowKey={effectiveSelectedWorkflowKey}
-              providerInteractiveScreen={providerInteractiveScreen}
-              providerInteractiveDisabled={providerInteractiveDisabled}
-              onProviderInteractiveEvent={onProviderInteractiveEvent}
-              onProviderInteractiveClose={onProviderInteractiveClose}
+              diagnostics={{
+                view: diagnostics,
+                reportOpen: diagnosticsReportOpen,
+                scroll: diagnosticsScroll,
+                canCopy: onCopyDiagnostics !== undefined,
+              }}
+              servers={{
+                selectedInstanceId,
+                showDetails: instanceDetailsOpen,
+                bulkSelectedInstanceIds,
+                canMutate: onInstanceMutation !== undefined,
+                canBulkMutate: onBulkInstanceMutation !== undefined,
+              }}
+              connections={{
+                flow: foregroundConnectionFlow,
+                busy: foregroundConnectionBusy,
+                connections: foregroundConnections,
+                selectedConnectionId: selectedForegroundConnectionId,
+                selectedPersistentSessionId,
+                selectedEndpointIntentName: effectiveSelectedEndpointIntentName,
+                selectedTarget: selectedConnectionTarget,
+                showDetails: connectionDetailsOpen,
+              }}
+              providers={{
+                candidatePicker: providerCandidatePickerView,
+                sourceInput: providerSourceInput,
+                credentialFlow: providerCredentialFlowView,
+                selectedSource: effectiveSelectedProviderSource,
+                showDetails: providerDetailsOpen,
+                canRegister: canRegisterProvider,
+                canAddInstalled: canAddInstalledProvider,
+              }}
+              rent={{
+                selectedWorkflowKey: effectiveSelectedWorkflowKey,
+                interactiveScreen: providerInteractiveScreen,
+                interactiveDisabled: providerInteractiveDisabled,
+                onInteractiveEvent: onProviderInteractiveEvent,
+                onInteractiveClose: onProviderInteractiveClose,
+              }}
             />
             {actionMenuOpen ? (
               <ContextActionMenu
@@ -2415,87 +2205,82 @@ function ContextActionMenu({
   );
 }
 
+interface DiagnosticsRouteState {
+  readonly view: TuiDiagnosticsView;
+  readonly reportOpen: boolean;
+  readonly scroll: number;
+  readonly canCopy: boolean;
+}
+
+interface ServersRouteState {
+  readonly selectedInstanceId?: string;
+  readonly showDetails: boolean;
+  readonly bulkSelectedInstanceIds: readonly string[];
+  readonly canMutate: boolean;
+  readonly canBulkMutate: boolean;
+}
+
+interface ConnectionsRouteState {
+  readonly flow?: ForegroundConnectionFlow;
+  readonly busy: boolean;
+  readonly connections: readonly TuiForegroundConnection[];
+  readonly selectedConnectionId?: string;
+  readonly selectedPersistentSessionId?: string;
+  readonly selectedEndpointIntentName?: string;
+  readonly selectedTarget?: TuiConnectionTarget;
+  readonly showDetails: boolean;
+}
+
+interface ProvidersRouteState {
+  readonly candidatePicker?: ProviderCandidatePickerView;
+  readonly sourceInput?: string;
+  readonly credentialFlow?: ProviderCredentialFlowView;
+  readonly selectedSource?: string;
+  readonly showDetails: boolean;
+  readonly canRegister: boolean;
+  readonly canAddInstalled: boolean;
+}
+
+interface RentRouteState {
+  readonly selectedWorkflowKey?: string;
+  readonly interactiveScreen?: ProviderInteractiveScreen;
+  readonly interactiveDisabled: boolean;
+  readonly onInteractiveEvent?: (event: ProviderInteractiveEvent) => void;
+  readonly onInteractiveClose?: () => void;
+}
+
 interface RouteSurfaceProps {
   readonly route: TuiRoute;
   readonly snapshot?: TuiReadSnapshot;
   readonly readStatus: TuiReadStatus;
-  readonly diagnostics: TuiDiagnosticsView;
-  readonly diagnosticsReportOpen: boolean;
-  readonly diagnosticsScroll: number;
-  readonly canCopyDiagnostics: boolean;
   readonly screenReader: boolean;
   readonly height: number;
   readonly width: number;
   readonly colorEnabled: boolean;
   readonly settingsCursor: number;
-  readonly selectedInstanceId?: string;
-  readonly showInstanceDetails: boolean;
-  readonly bulkSelectedInstanceIds: readonly string[];
-  readonly canMutateInstances: boolean;
-  readonly canBulkMutateInstances: boolean;
-  readonly foregroundConnectionFlow?: ForegroundConnectionFlow;
-  readonly foregroundConnectionBusy: boolean;
-  readonly foregroundConnections: readonly TuiForegroundConnection[];
-  readonly selectedForegroundConnectionId?: string;
-  readonly selectedPersistentSessionId?: string;
-  readonly selectedEndpointIntentName?: string;
-  readonly selectedConnectionTarget?: TuiConnectionTarget;
-  readonly showConnectionDetails: boolean;
-  readonly providerCandidatePicker?: ProviderCandidatePickerView;
-  readonly providerSourceInput?: string;
-  readonly providerCredentialFlow?: ProviderCredentialFlowView;
-  readonly selectedProviderSource?: string;
-  readonly showProviderDetails: boolean;
-  readonly canRegisterProvider: boolean;
-  readonly canAddInstalledProvider: boolean;
-  readonly selectedWorkflowKey?: string;
-  readonly providerInteractiveScreen?: ProviderInteractiveScreen;
-  readonly providerInteractiveDisabled: boolean;
-  readonly onProviderInteractiveEvent?: (event: ProviderInteractiveEvent) => void;
-  readonly onProviderInteractiveClose?: () => void;
+  readonly diagnostics: DiagnosticsRouteState;
+  readonly servers: ServersRouteState;
+  readonly connections: ConnectionsRouteState;
+  readonly providers: ProvidersRouteState;
+  readonly rent: RentRouteState;
 }
 
 function RouteSurface({
   route,
   snapshot,
   readStatus,
-  diagnostics,
-  diagnosticsReportOpen,
-  diagnosticsScroll,
-  canCopyDiagnostics,
   screenReader,
   height,
   width,
   colorEnabled,
   settingsCursor,
-  selectedInstanceId,
-  showInstanceDetails,
-  bulkSelectedInstanceIds,
-  canMutateInstances,
-  canBulkMutateInstances,
-  foregroundConnectionFlow,
-  foregroundConnectionBusy,
-  foregroundConnections,
-  selectedForegroundConnectionId,
-  selectedPersistentSessionId,
-  selectedEndpointIntentName,
-  selectedConnectionTarget,
-  showConnectionDetails,
-  providerCandidatePicker,
-  providerSourceInput,
-  providerCredentialFlow,
-  selectedProviderSource,
-  showProviderDetails,
-  canRegisterProvider,
-  canAddInstalledProvider,
-  selectedWorkflowKey,
-  providerInteractiveScreen,
-  providerInteractiveDisabled,
-  onProviderInteractiveEvent,
-  onProviderInteractiveClose,
+  diagnostics,
+  servers,
+  connections,
+  providers,
+  rent,
 }: RouteSurfaceProps): React.ReactElement {
   if (
-    route.id !== "overview" &&
     route.id !== "instances" &&
     route.id !== "providers" &&
     route.id !== "new-instance" &&
@@ -2509,10 +2294,10 @@ function RouteSurface({
   if (route.id === "diagnostics") {
     return (
       <DiagnosticsSurface
-        diagnostics={diagnostics}
-        reportOpen={diagnosticsReportOpen}
-        scroll={diagnosticsScroll}
-        canCopy={canCopyDiagnostics}
+        diagnostics={diagnostics.view}
+        reportOpen={diagnostics.reportOpen}
+        scroll={diagnostics.scroll}
+        canCopy={diagnostics.canCopy}
         screenReader={screenReader}
         height={height}
         width={width}
@@ -2535,28 +2320,25 @@ function RouteSurface({
     return <Text wrap="wrap">{route.body}</Text>;
   }
 
-  if (route.id === "overview") {
-    return <OverviewSurface snapshot={snapshot} />;
-  }
   if (route.id === "new-instance") {
-    if (providerInteractiveScreen !== undefined) {
+    if (rent.interactiveScreen !== undefined) {
       return (
         <ProviderInteractiveSurface
-          key={`${providerInteractiveScreen.kind}:${providerInteractiveScreen.id}`}
-          screen={providerInteractiveScreen}
+          key={`${rent.interactiveScreen.kind}:${rent.interactiveScreen.id}`}
+          screen={rent.interactiveScreen}
           colorEnabled={false}
-          disabled={providerInteractiveDisabled}
+          disabled={rent.interactiveDisabled}
           height={height}
           screenReader={screenReader}
-          onEvent={onProviderInteractiveEvent ?? (() => undefined)}
-          onClose={onProviderInteractiveClose ?? (() => undefined)}
+          onEvent={rent.onInteractiveEvent ?? (() => undefined)}
+          onClose={rent.onInteractiveClose ?? (() => undefined)}
         />
       );
     }
     return (
       <NewInstanceSurface
         snapshot={snapshot}
-        selectedWorkflowKey={selectedWorkflowKey}
+        selectedWorkflowKey={rent.selectedWorkflowKey}
       />
     );
   }
@@ -2565,11 +2347,11 @@ function RouteSurface({
       <InstancesSurface
         snapshot={snapshot}
         height={height}
-        selectedInstanceId={selectedInstanceId}
-        showDetails={showInstanceDetails}
-        bulkSelectedInstanceIds={bulkSelectedInstanceIds}
-        canMutate={canMutateInstances}
-        canBulkMutate={canBulkMutateInstances}
+        selectedInstanceId={servers.selectedInstanceId}
+        showDetails={servers.showDetails}
+        bulkSelectedInstanceIds={servers.bulkSelectedInstanceIds}
+        canMutate={servers.canMutate}
+        canBulkMutate={servers.canBulkMutate}
       />
     );
   }
@@ -2579,14 +2361,14 @@ function RouteSurface({
         snapshot={snapshot}
         height={height}
         screenReader={screenReader}
-        flow={foregroundConnectionFlow}
-        busy={foregroundConnectionBusy}
-        connections={foregroundConnections}
-        selectedConnectionId={selectedForegroundConnectionId}
-        selectedPersistentSessionId={selectedPersistentSessionId}
-        selectedEndpointIntentName={selectedEndpointIntentName}
-        selectedConnectionTarget={selectedConnectionTarget}
-        showDetails={showConnectionDetails}
+        flow={connections.flow}
+        busy={connections.busy}
+        connections={connections.connections}
+        selectedConnectionId={connections.selectedConnectionId}
+        selectedPersistentSessionId={connections.selectedPersistentSessionId}
+        selectedEndpointIntentName={connections.selectedEndpointIntentName}
+        selectedConnectionTarget={connections.selectedTarget}
+        showDetails={connections.showDetails}
       />
     );
   }
@@ -2594,1786 +2376,14 @@ function RouteSurface({
     <ProvidersSurface
       snapshot={snapshot}
       height={height}
-      candidatePicker={providerCandidatePicker}
-      sourceInput={providerSourceInput}
-      credentialFlow={providerCredentialFlow}
-      selectedSource={selectedProviderSource}
-      showDetails={showProviderDetails}
-      canRegister={canRegisterProvider}
-      canAddInstalled={canAddInstalledProvider}
+      candidatePicker={providers.candidatePicker}
+      sourceInput={providers.sourceInput}
+      credentialFlow={providers.credentialFlow}
+      selectedSource={providers.selectedSource}
+      showDetails={providers.showDetails}
+      canRegister={providers.canRegister}
+      canAddInstalled={providers.canAddInstalled}
     />
-  );
-}
-
-function OverviewSurface({ snapshot }: { readonly snapshot: TuiReadSnapshot }): React.ReactElement {
-  const providers = snapshot.providers;
-  const instances = snapshot.instances;
-  const providerItems = providers.status === "ready" ? providers.items : [];
-  const instanceItems = instances.status === "ready" ? instances.items : [];
-  const failedProviderOutcomes =
-    instances.status === "ready"
-      ? instances.providerOutcomes.filter((provider) => provider.status === "failed")
-      : [];
-  const readyProviders = providerItems.filter((provider) => provider.readiness === "ready").length;
-  const missingCredentials = providerItems.filter(
-    (provider) => provider.readiness === "credentials-missing",
-  ).length;
-  const failedPlugins = providerItems.filter((provider) => provider.state === "failed").length;
-  const disabledPlugins = providerItems.filter((provider) => provider.state === "disabled").length;
-  const runningInstances = instanceItems.filter((instance) => instance.state === "running").length;
-  const staleInstances = instanceItems.filter((instance) => instance.freshness === "stale").length;
-  const unobservedInstances = instanceItems.filter(
-    (instance) => instance.freshness === "unobserved",
-  ).length;
-
-  return (
-    <Box flexDirection="column">
-      <Text bold>Ready to use</Text>
-      {providers.status === "failed" ? (
-        <Text>Providers unavailable: {providers.message}</Text>
-      ) : providerItems.length === 0 ? (
-        <Text>No provider plugins configured. Open Providers for the next setup step.</Text>
-      ) : (
-        <Text>
-          Providers: {providerItems.length} configured · {readyProviders} ready{missingCredentials > 0 ? ` · ${missingCredentials} need setup` : ""}{disabledPlugins + failedPlugins > 0 ? ` · ${disabledPlugins + failedPlugins} unavailable` : ""}
-        </Text>
-      )}
-
-      <Box marginTop={1} flexDirection="column">
-        <Text bold>Instances</Text>
-        {instances.status === "failed" ? (
-          <Text>Instance inventory unavailable: {instances.message}</Text>
-        ) : instanceItems.length === 0 ? (
-          <Text>{instanceEmptyGuidance(snapshot)}</Text>
-        ) : (
-          <Text>
-            Instances: {instanceItems.length} total · {runningInstances} running{staleInstances + unobservedInstances > 0 ? ` · ${staleInstances + unobservedInstances} need refresh` : ""}
-          </Text>
-        )}
-      </Box>
-
-      <Box marginTop={1} flexDirection="column">
-        <Text bold>Connections</Text>
-        <Text>
-          Daemon: {snapshot.daemon.status}{snapshot.daemon.status === "running" && snapshot.daemon.sessions.status === "ready" ? ` · ${snapshot.daemon.sessions.live} live persistent` : ""}
-        </Text>
-      </Box>
-
-      {failedProviderOutcomes.length === 0 ? null : (
-        <Box marginTop={1} flexDirection="column">
-          <Text bold>Provider issues</Text>
-          {failedProviderOutcomes.map((provider) => (
-            <Text key={provider.providerId}>
-              {provider.providerId} · {provider.error.code} · {provider.error.message}
-            </Text>
-          ))}
-          <Text>Healthy providers and instances above remain usable.</Text>
-        </Box>
-      )}
-
-
-    </Box>
-  );
-}
-
-function DiagnosticsSurface({
-  diagnostics,
-  reportOpen,
-  scroll,
-  canCopy,
-  screenReader,
-  height,
-  width,
-  colorEnabled,
-}: {
-  readonly diagnostics: TuiDiagnosticsView;
-  readonly reportOpen: boolean;
-  readonly scroll: number;
-  readonly canCopy: boolean;
-  readonly screenReader: boolean;
-  readonly height: number;
-  readonly width: number;
-  readonly colorEnabled: boolean;
-}): React.ReactElement {
-  const muted = colorEnabled ? "gray" : undefined;
-  if (diagnostics.status === "idle") {
-    return (
-      <Box flexDirection="column">
-        <Text>Diagnostics have not been collected yet.</Text>
-        <Text>Press Enter for Actions, then choose Refresh diagnostics.</Text>
-      </Box>
-    );
-  }
-  if (diagnostics.status === "loading") {
-    return <Text>Collecting privacy-safe Diagnostics…</Text>;
-  }
-  if (diagnostics.status === "failed") {
-    return (
-      <Box flexDirection="column">
-        <Text>{diagnostics.message}</Text>
-        <Text>Use Actions to retry. Do not substitute raw logs that may contain sensitive data.</Text>
-      </Box>
-    );
-  }
-
-  if (reportOpen) {
-    if (screenReader) {
-      return (
-        <Box flexDirection="column">
-          <Text bold>Full privacy-safe diagnostics report</Text>
-          <Text>{diagnostics.text}</Text>
-          <Text>
-            {canCopy ? "Enter — copy this exact report · Esc — back to summary" : "Esc — back to summary"}
-          </Text>
-        </Box>
-      );
-    }
-
-    const lines = wrapDiagnosticsText(diagnostics.text, width);
-    const visibleRows = Math.max(1, height - 3);
-    const maxStart = Math.max(0, lines.length - visibleRows);
-    const start = Math.min(Math.max(0, scroll), maxStart);
-    const end = Math.min(lines.length, start + visibleRows);
-    return (
-      <Box flexDirection="column" height={height} overflowY="hidden">
-        <Text bold wrap="truncate">Privacy-safe diagnostics report</Text>
-        <Text color={muted} wrap="truncate">
-          Lines {lines.length === 0 ? 0 : start + 1}–{end} of {lines.length}
-        </Text>
-        {lines.slice(start, end).map((line, index) => (
-          <Text key={`${start + index}:${line}`} wrap="truncate">{line.length === 0 ? " " : line}</Text>
-        ))}
-        <Text color={muted} wrap="truncate">
-          {canCopy ? "↑/↓ scroll · Enter Copy report · Esc Back" : "↑/↓ scroll · Esc Back"}
-        </Text>
-      </Box>
-    );
-  }
-
-  const summary = diagnostics.summary;
-  return (
-    <Box flexDirection="column">
-      <Text bold>Support summary</Text>
-      <Text>EasyServer: v{summary.version}</Text>
-      <Text>Local state: {diagnosticsStateLabel(summary.stateStatus)}</Text>
-      <Text>
-        Providers: {summary.configuredPlugins} configured{summary.failedPlugins > 0 ? ` · ${summary.failedPlugins} need attention` : " · no reported failures"}
-      </Text>
-      <Text>Connection service: {diagnosticsDaemonLabel(summary.daemonStatus)}</Text>
-      <Text>SSH tools: client {summary.ssh} · key scan {summary.sshKeyscan}</Text>
-      <Box marginTop={1} flexDirection="column">
-        <Text>
-          The detailed report is privacy-safe by contract: raw secrets, Secret References, daemon tokens, private keys and resource identifiers are excluded.
-        </Text>
-        <Text>
-          {canCopy
-            ? "Use Actions to View report before sharing it, or Copy report to copy that exact same sanitized payload."
-            : "Use Actions to View report before sharing it. Clipboard integration is unavailable in this TUI session."}
-        </Text>
-        <Text>Raw logs are separate and may contain sensitive data.</Text>
-      </Box>
-    </Box>
-  );
-}
-
-function diagnosticsStateLabel(status: DiagnosticsReport["state"]["status"]): string {
-  return status === "ok" ? "ready" : status === "empty" ? "empty" : "needs attention";
-}
-
-function diagnosticsDaemonLabel(status: DiagnosticsReport["daemon"]["status"]): string {
-  return status === "running"
-    ? "running"
-    : status === "stopped"
-      ? "stopped"
-      : status === "unreachable"
-        ? "unreachable"
-        : "invalid state";
-}
-
-function diagnosticsSummary(report: DiagnosticsReport): TuiDiagnosticsSummary {
-  return {
-    version: report.easyserver.version,
-    stateStatus: report.state.status,
-    configuredPlugins: report.state.configuredPlugins,
-    failedPlugins: report.plugins.filter((plugin) => plugin.state === "failed").length,
-    daemonStatus: report.daemon.status,
-    ssh: report.access.ssh,
-    sshKeyscan: report.access.sshKeyscan,
-  };
-}
-
-function wrapDiagnosticsText(text: string, width: number): readonly string[] {
-  const safeWidth = Math.max(1, Math.floor(width));
-  const lines: string[] = [];
-  for (const logicalLine of text.split("\n")) {
-    const characters = Array.from(logicalLine);
-    if (characters.length === 0) {
-      lines.push("");
-      continue;
-    }
-    for (let offset = 0; offset < characters.length; offset += safeWidth) {
-      lines.push(characters.slice(offset, offset + safeWidth).join(""));
-    }
-  }
-  return lines;
-}
-
-interface InstancesSurfaceProps {
-  readonly snapshot: TuiReadSnapshot;
-  readonly height: number;
-  readonly selectedInstanceId?: string;
-  readonly showDetails: boolean;
-  readonly bulkSelectedInstanceIds: readonly string[];
-  readonly canMutate: boolean;
-  readonly canBulkMutate: boolean;
-}
-
-function InstancesSurface({
-  snapshot,
-  height,
-  selectedInstanceId,
-  showDetails,
-  bulkSelectedInstanceIds,
-  canMutate,
-  canBulkMutate,
-}: InstancesSurfaceProps): React.ReactElement {
-  if (snapshot.instances.status === "failed") {
-    return (
-      <Box flexDirection="column">
-        <Text>Instance inventory unavailable: {snapshot.instances.message}</Text>
-        <Text>Use Actions to refresh. Other TUI sections remain available.</Text>
-      </Box>
-    );
-  }
-
-  const items = snapshot.instances.items;
-  const failedProviderOutcomes = snapshot.instances.providerOutcomes.filter(
-    (provider) => provider.status === "failed",
-  );
-  if (items.length === 0) {
-    return (
-      <Box flexDirection="column">
-        {snapshot.instances.complete ? null : (
-          <PartialInventoryNotice failedProviders={failedProviderOutcomes} />
-        )}
-        <Text>{instanceEmptyGuidance(snapshot)}</Text>
-      </Box>
-    );
-  }
-
-  const selected =
-    selectedInstanceId === undefined
-      ? items[0]
-      : items.find((instance) => instance.id === selectedInstanceId);
-  const selectionMissing = selectedInstanceId !== undefined && selected === undefined;
-  const marked = new Set(bulkSelectedInstanceIds);
-  const markedInstances = items.filter((instance) => marked.has(instance.id));
-  const missingMarkedIds = bulkSelectedInstanceIds.filter(
-    (instanceId) => !items.some((instance) => instance.id === instanceId),
-  );
-  const selectedIndex = Math.max(0, items.findIndex((instance) => instance.id === selected?.id));
-  const partialNoticeRows = snapshot.instances.complete ? 0 : 3;
-  const bulkSelectionRows =
-    bulkSelectedInstanceIds.length === 0
-      ? 0
-      : 2 +
-        Math.min(2, bulkSelectedInstanceIds.length) +
-        (bulkSelectedInstanceIds.length > 2 ? 1 : 0) +
-        (missingMarkedIds.length > 0 ? 1 : 0);
-  const serverWindow = tuiFocusWindowWithinRows(
-    selectedIndex,
-    items.length,
-    Math.max(1, height - 2 - partialNoticeRows - bulkSelectionRows),
-  );
-
-  return (
-    <Box flexDirection="column">
-      {snapshot.instances.complete ? null : (
-        <PartialInventoryNotice failedProviders={failedProviderOutcomes} />
-      )}
-      <Text>Choose a server. Enter opens its actions.</Text>
-      {showDetails ? null : (
-        <Box flexDirection="column">
-          {serverWindow.showBefore ? <Text>↑ {serverWindow.hiddenBefore} more servers</Text> : null}
-          {items.slice(serverWindow.start, serverWindow.end).map((instance, visibleIndex) => (
-            <Text key={instance.id} bold={instance.id === selected?.id} wrap="truncate">
-              {instance.id === selected?.id ? "> " : "  "}
-              {canBulkMutate ? (marked.has(instance.id) ? "[x] " : "[ ] ") : ""}
-              {serverListLabel(instance, serverWindow.start + visibleIndex, items)} · {instance.state ?? "status unavailable"}
-              {instance.freshness === "fresh" ? "" : " · needs refresh"}
-            </Text>
-          ))}
-          {serverWindow.showAfter ? <Text>↓ {serverWindow.hiddenAfter} more servers</Text> : null}
-        </Box>
-      )}
-      {bulkSelectedInstanceIds.length === 0 ? null : (
-        <BulkInstanceSelection
-          instanceIds={bulkSelectedInstanceIds}
-          instances={items}
-          missingInstanceIds={missingMarkedIds}
-        />
-      )}
-      {selectionMissing ? (
-        <Box marginTop={1} flexDirection="column">
-          <Text bold>Selected server is no longer visible.</Text>
-          <Text>
-            The previously selected server disappeared from the refreshed inventory. No action target was changed; use ↑/↓ to choose a current server.
-          </Text>
-        </Box>
-      ) : selected === undefined || !showDetails ? null : (
-        <Box marginTop={1} flexDirection="column">
-          <Text bold>Technical server details</Text>
-          <Text>Server: {selected.name ?? selected.id}</Text>
-          <Text>EasyServer ID: {selected.id}</Text>
-          <Text>Provider: {selected.providerId}</Text>
-          <Text>Provider ID: {selected.providerExternalId}</Text>
-          <Text>Normalized state: {selected.state ?? "unobserved"}</Text>
-          {selected.rawState === undefined ? null : (
-            <Text>Provider state: {String(selected.rawState)}</Text>
-          )}
-          <Text>Freshness: {selected.freshness}</Text>
-          {selected.observedAt === undefined ? null : (
-            <Text>Last observed: {selected.observedAt}</Text>
-          )}
-          {selected.freshness === "stale" ? (
-            <Text>Observation: retained last-known state; the current provider refresh failed.</Text>
-          ) : selected.freshness === "unobserved" ? (
-            <Text>Observation: identity is known, but no current provider state is available.</Text>
-          ) : null}
-          <Text>Management: {selected.management}</Text>
-          <Text>Available lifecycle actions: {formatActions(availableInstanceActions(selected).map(instanceActionLabel))}</Text>
-          {bulkSelectedInstanceIds.length > 0 && canBulkMutate ? (
-            <BulkInstanceActionGuidance
-              instances={markedInstances}
-              missingInstanceIds={missingMarkedIds}
-            />
-          ) : canMutate ? (
-            <InstanceActionGuidance instance={selected} />
-          ) : null}
-        </Box>
-      )}
-    </Box>
-  );
-}
-
-function ConnectionsSurface({
-  snapshot,
-  height,
-  screenReader,
-  flow,
-  busy,
-  connections,
-  selectedConnectionId,
-  selectedPersistentSessionId,
-  selectedEndpointIntentName,
-  selectedConnectionTarget,
-  showDetails,
-}: {
-  readonly snapshot: TuiReadSnapshot;
-  readonly height: number;
-  readonly screenReader: boolean;
-  readonly flow?: ForegroundConnectionFlow;
-  readonly busy: boolean;
-  readonly connections: readonly TuiForegroundConnection[];
-  readonly selectedConnectionId?: string;
-  readonly selectedPersistentSessionId?: string;
-  readonly selectedEndpointIntentName?: string;
-  readonly selectedConnectionTarget?: TuiConnectionTarget;
-  readonly showDetails: boolean;
-}): React.ReactElement {
-  if (flow !== undefined) {
-    const instances =
-      snapshot.instances.status === "ready" ? snapshot.instances.items : [];
-    const selectedInstanceIndex = Math.max(
-      0,
-      instances.findIndex((instance) => instance.id === flow.instanceId),
-    );
-    const instanceWindow = tuiFocusWindowWithinRows(
-      selectedInstanceIndex,
-      instances.length,
-      Math.max(1, height - (busy ? 5 : 4)),
-    );
-    const selectedMethod = flow.accessMethods.find(
-      (method) => method.id === flow.accessMethodId,
-    );
-    return (
-      <Box flexDirection="column">
-        <Text bold>
-          {flow.mode === "persistent" ? "Advanced background connection" : "Connect to server"}
-        </Text>
-        {flow.step === "instance" ? null : (
-          <Text>
-            {flow.mode === "persistent"
-              ? "Keeps a local port available after this TUI closes. Esc returns to the previous step."
-              : "Expose a TCP service from a server on this computer. Esc returns to the previous step."}
-          </Text>
-        )}
-        {busy ? <Text>Working… input is temporarily paused.</Text> : null}
-        <Box marginTop={flow.step === "instance" ? 0 : 1} flexDirection="column">
-          {flow.step === "instance" ? (
-            <>
-              <Text bold>Choose server</Text>
-              {instances.length === 0 ? (
-                <Text>No servers are currently available.</Text>
-              ) : (
-                <>
-                  {instanceWindow.showBefore ? (
-                    <Text>↑ {instanceWindow.hiddenBefore} more servers</Text>
-                  ) : null}
-                  {instances.slice(instanceWindow.start, instanceWindow.end).map((instance, visibleIndex) => (
-                    <Text key={instance.id} bold={instance.id === flow.instanceId} wrap="truncate">
-                      {instance.id === flow.instanceId ? "> " : "  "}
-                      {serverListLabel(instance, instanceWindow.start + visibleIndex, instances)} · {instance.state ?? "status unavailable"}
-                    </Text>
-                  ))}
-                  {instanceWindow.showAfter ? (
-                    <Text>↓ {instanceWindow.hiddenAfter} more servers</Text>
-                  ) : null}
-                </>
-              )}
-            </>
-          ) : flow.step === "remote-host" ? (
-            <>
-              <Text bold>Advanced remote host</Text>
-              <Text>Host: {escapeTerminalText(flow.remoteHost)}</Text>
-              <Text>Default: 127.0.0.1 · Enter continue · Backspace edit · Esc back</Text>
-            </>
-          ) : flow.step === "remote-port" ? (
-            <>
-              <Text bold>App/service port on the server</Text>
-              <Text>Port: {flow.remotePort}</Text>
-              <Text>Use the app/service port (for example 8188 for ComfyUI), not the SSH port.</Text>
-              <Text>Enter continue · Backspace edit · Esc back</Text>
-            </>
-          ) : flow.step === "access-method" ? (
-            <>
-              <Text bold>Advanced connection method</Text>
-              <Text>
-                EasyServer normally chooses this automatically. Advanced mode lets you select the exact provider-declared method.
-              </Text>
-              {flow.accessMethods.length === 0 ? (
-                <Text>
-                  No supported connection methods are currently available. Esc back and choose another server or refresh provider state.
-                </Text>
-              ) : (
-                flow.accessMethods.map((method, index) => (
-                  <Text key={method.id} bold={method.id === flow.accessMethodId}>
-                    {method.id === flow.accessMethodId ? "> " : "  "}
-                    {escapeTerminalText(method.id)} · {escapeTerminalText(method.kind)} · {method.mode}
-                    {index === 0 ? " · default" : ""}
-                  </Text>
-                ))
-              )}
-              <Text>↑/↓ choose · Enter continue · Esc back</Text>
-            </>
-          ) : flow.step === "local-port" ? (
-            <>
-              <Text bold>Local port on this computer</Text>
-              <Text>
-                Local address: 127.0.0.1:{flow.localPort.length === 0 ? "automatic" : flow.localPort}
-              </Text>
-              <Text>Leave blank for an automatic port, or enter 1-65535 for a stable local address.</Text>
-              <Text>Enter continue · Backspace edit · Esc back</Text>
-            </>
-          ) : (
-            <>
-              <Text bold>
-                Review {flow.mode === "persistent" ? "background connection" : "local connection"}
-              </Text>
-              <Text>Server: {serverDisplayName(snapshot, flow.instanceId)}</Text>
-              <Text>App/service port: {flow.remotePort}</Text>
-              <Text>
-                Local address: 127.0.0.1:{flow.localPort.length === 0 ? "automatic" : flow.localPort}
-              </Text>
-              <Text>
-                Lifetime: {flow.mode === "persistent" ? "kept available in the background after TUI exit" : "available while this TUI is open"}.
-              </Text>
-              {flow.advanced ? (
-                <Text>
-                  Technical route: {escapeTerminalText(flow.remoteHost)} · method={selectedMethod === undefined ? "unavailable" : escapeTerminalText(selectedMethod.id)}
-                </Text>
-              ) : null}
-              <Text>Enter {flow.mode === "persistent" ? "create" : "open"} · Esc back</Text>
-            </>
-          )}
-        </Box>
-      </Box>
-    );
-  }
-
-  const selected =
-    selectedConnectionTarget === undefined
-      ? connections.find((connection) => connection.id === selectedConnectionId)
-      : selectedConnectionTarget.kind === "foreground"
-        ? connections.find((connection) => connection.id === selectedConnectionTarget.id)
-        : undefined;
-  const persistentSessions =
-    snapshot.daemon.status === "running" && snapshot.daemon.sessions.status === "ready"
-      ? snapshot.daemon.sessions.items ?? []
-      : [];
-  const selectedPersistent =
-    selectedConnectionTarget === undefined
-      ? persistentSessions.find((session) => session.id === selectedPersistentSessionId)
-      : selectedConnectionTarget.kind === "persistent"
-        ? persistentSessions.find((session) => session.id === selectedConnectionTarget.id)
-        : undefined;
-  const endpointIntents =
-    snapshot.daemon.status === "running" &&
-    snapshot.daemon.endpointIntents.status === "ready"
-      ? snapshot.daemon.endpointIntents.items ?? []
-      : [];
-  const selectedIntent =
-    selectedConnectionTarget === undefined
-      ? endpointIntents.find((intent) => intent.operationName === selectedEndpointIntentName)
-      : selectedConnectionTarget.kind === "intent"
-        ? endpointIntents.find((intent) => intent.operationName === selectedConnectionTarget.id)
-        : undefined;
-  if (showDetails && !screenReader && height < 12) {
-    return (
-      <Box flexDirection="column">
-        <Text bold>Technical details</Text>
-        <Text>Background service: {snapshot.daemon.status}</Text>
-        {selected !== undefined ? (
-          <>
-            <Text bold>Selected local connection</Text>
-            <Text wrap="truncate">
-              {serverDisplayName(snapshot, selected.instanceId)} · {escapeTerminalText(selected.remoteHost)}:{selected.remotePort}
-            </Text>
-            <Text wrap="truncate">
-              Method: {escapeTerminalText(selected.accessMethod.id)} · {escapeTerminalText(selected.accessMethod.kind)}
-            </Text>
-          </>
-        ) : selectedPersistent !== undefined ? (
-          <>
-            <Text bold>Selected background connection</Text>
-            <Text wrap="truncate">
-              {serverDisplayName(snapshot, selectedPersistent.instanceId)} · {escapeTerminalText(selectedPersistent.remoteHost)}:{selectedPersistent.remotePort}
-            </Text>
-            <Text wrap="truncate">State: {selectedPersistent.state}</Text>
-          </>
-        ) : selectedIntent !== undefined ? (
-          <>
-            <Text bold>Saved connection: {selectedIntent.name}</Text>
-            <Text wrap="truncate">
-              {selectedIntent.enabled ? "enabled" : "disabled"} · {selectedIntent.state} · target {selectedIntent.remoteHost}:{selectedIntent.remotePort}
-            </Text>
-            {selectedIntent.failure === undefined ? null : (
-              <Text wrap="truncate">
-                Error: {selectedIntent.failure.code} · {selectedIntent.failure.message}
-              </Text>
-            )}
-            {selectedIntent.failure?.hostTrust === undefined ? null : (
-              <Text wrap="truncate">
-                SSH fingerprint: {selectedIntent.failure.hostTrust.key.type} · {selectedIntent.failure.hostTrust.key.fingerprint}
-              </Text>
-            )}
-            <Text>Use Actions for recovery.</Text>
-          </>
-        ) : (
-          <Text>Use ↑/↓ to select a connection or saved definition.</Text>
-        )}
-      </Box>
-    );
-  }
-  const localConnectionRows = [
-    ...connections.map((connection) => ({
-      kind: "foreground" as const,
-      id: connection.id,
-      instanceId: connection.instanceId,
-      remotePort: connection.remotePort,
-      endpoint: connection.endpoint,
-      state: connection.state,
-    })),
-    ...persistentSessions.map((session) => ({
-      kind: "persistent" as const,
-      id: session.id,
-      instanceId: session.instanceId,
-      remotePort: session.remotePort,
-      endpoint: session.endpoint,
-      state: session.state,
-    })),
-  ];
-  const selectedLocalIndex = Math.max(
-    0,
-    selectedConnectionTarget === undefined
-      ? -1
-      : localConnectionRows.findIndex(
-          (row) => row.kind === selectedConnectionTarget.kind && row.id === selectedConnectionTarget.id,
-        ),
-  );
-  const connectionWindow = tuiFocusWindowWithinRows(
-    selectedLocalIndex,
-    localConnectionRows.length,
-    Math.max(1, height - 4),
-  );
-  return (
-    <Box flexDirection="column">
-      <Text>
-        Local connections make a service on a server available at 127.0.0.1 on this computer.
-      </Text>
-      <Box flexDirection="column">
-        <Text bold>Local connections</Text>
-        {localConnectionRows.length === 0 ? (
-          <Text>
-            None open. {snapshot.instances.status === "ready" && snapshot.instances.items.length === 0
-              ? "Use Actions to rent a server first."
-              : "Choose a server and use Connect, or open Actions here to create one."}
-          </Text>
-        ) : (
-          <>
-            {connectionWindow.showBefore ? <Text>↑ {connectionWindow.hiddenBefore} more connections</Text> : null}
-            {localConnectionRows.slice(connectionWindow.start, connectionWindow.end).map((connection) => {
-              const selectedRow =
-                selectedConnectionTarget?.kind === connection.kind &&
-                selectedConnectionTarget.id === connection.id;
-              return (
-                <Text key={`${connection.kind}:${connection.id}`} bold={selectedRow} wrap="truncate">
-                  {selectedRow ? "> " : "  "}
-                  {connection.endpoint === undefined
-                    ? "Local port unavailable"
-                    : `${connection.endpoint.host}:${connection.endpoint.port}`}
-                  {` → ${serverDisplayName(snapshot, connection.instanceId)}:${connection.remotePort}`}
-                  {connection.kind === "persistent" ? " · background" : ""}
-                  {connection.state === "live" ? "" : ` · ${connection.state}`}
-                </Text>
-              );
-            })}
-            {connectionWindow.showAfter ? <Text>↓ {connectionWindow.hiddenAfter} more connections</Text> : null}
-          </>
-        )}
-      </Box>
-      {snapshot.daemon.status === "unreachable" || snapshot.daemon.status === "stale" ? (
-        <Text>Some background connections need attention; ordinary local connections remain usable.</Text>
-      ) : snapshot.daemon.status === "running" && snapshot.daemon.sessions.status === "unavailable" ? (
-        <Text>Some background connection status is temporarily unavailable.</Text>
-      ) : null}
-      {showDetails ? (
-        <Box marginTop={1} flexDirection="column">
-          <Text bold>Technical details</Text>
-          <Text>Background service: {snapshot.daemon.status}</Text>
-          {selected === undefined ? null : (
-            <Box flexDirection="column">
-              <Text>Connection ID: {selected.id}</Text>
-              <Text>Server ID: {selected.instanceId}</Text>
-              <Text>Remote target: {escapeTerminalText(selected.remoteHost)}:{selected.remotePort}</Text>
-              <Text>Access Method: {escapeTerminalText(selected.accessMethod.id)} · {escapeTerminalText(selected.accessMethod.kind)}</Text>
-            </Box>
-          )}
-          {selectedPersistent === undefined ? null : (
-            <PersistentSessionDetail session={selectedPersistent} />
-          )}
-          <Box marginTop={1} flexDirection="column">
-            <Text bold>Saved background connection definitions</Text>
-            {snapshot.daemon.status !== "running" ? (
-              <Text>Background service must be running to inspect current realization state.</Text>
-            ) : snapshot.daemon.endpointIntents.status === "unavailable" ? (
-              <Text>Saved definitions exist independently, but current realization state is unavailable.</Text>
-            ) : endpointIntents.length === 0 ? (
-              <Text>No saved background connection definitions.</Text>
-            ) : (
-              <>
-                {endpointIntents.map((intent) => (
-                  <EndpointIntentLine
-                    key={intent.operationName}
-                    intent={intent}
-                    selected={intent.operationName === selectedIntent?.operationName}
-                  />
-                ))}
-                {selectedIntent === undefined ? null : (
-                  <EndpointIntentDetail intent={selectedIntent} />
-                )}
-              </>
-            )}
-          </Box>
-        </Box>
-      ) : null}
-    </Box>
-  );
-}
-
-function serverListLabel(
-  server: TuiInstanceReadItem,
-  index: number,
-  servers: readonly TuiInstanceReadItem[],
-): string {
-  if (server.name !== undefined) {
-    return server.name;
-  }
-  const unnamed = servers.filter((candidate) => candidate.name === undefined);
-  if (unnamed.length <= 1) {
-    return "Server";
-  }
-  const ordinal = servers
-    .slice(0, index + 1)
-    .filter((candidate) => candidate.name === undefined).length;
-  return `Server #${ordinal}`;
-}
-
-function serverDisplayName(snapshot: TuiReadSnapshot, instanceId: string): string {
-  if (snapshot.instances.status !== "ready") {
-    return "server";
-  }
-  const index = snapshot.instances.items.findIndex((instance) => instance.id === instanceId);
-  const server = index < 0 ? undefined : snapshot.instances.items[index];
-  return server === undefined ? "server" : serverListLabel(server, index, snapshot.instances.items);
-}
-
-function bulkServerDisplayName(
-  snapshot: TuiReadSnapshot | undefined,
-  instanceId: string,
-  targetIndex: number,
-): string {
-  if (snapshot?.instances.status !== "ready") {
-    return `Selected server #${targetIndex + 1}`;
-  }
-  const index = snapshot.instances.items.findIndex((instance) => instance.id === instanceId);
-  const server = index < 0 ? undefined : snapshot.instances.items[index];
-  return server === undefined
-    ? `Selected server #${targetIndex + 1}`
-    : serverListLabel(server, index, snapshot.instances.items);
-}
-
-function humanizeBulkInstanceMessage(
-  message: string,
-  snapshot: TuiReadSnapshot | undefined,
-  instanceId: string,
-  serverLabel: string,
-): string {
-  let human = message
-    .replaceAll(instanceId, serverLabel)
-    .replaceAll("Compute Instance", "Server")
-    .replaceAll("compute instance", "server");
-  if (snapshot?.instances.status === "ready") {
-    const server = snapshot.instances.items.find((instance) => instance.id === instanceId);
-    if (server !== undefined) {
-      human = human
-        .replaceAll(server.providerId, "provider")
-        .replaceAll(server.providerExternalId, "remote server");
-    }
-  }
-  return human;
-}
-
-function humanizeBulkMutationError(
-  error: unknown,
-  snapshot: TuiReadSnapshot | undefined,
-  instanceIds: readonly string[],
-): unknown {
-  if (!isNormalizedError(error)) {
-    return normalizedError(
-      "plugin-failure",
-      "EasyServer could not complete the operation for the selected servers. Open Diagnostics for details.",
-    );
-  }
-  if (error.code === "provider-unavailable") {
-    return normalizedError(
-      error.code,
-      "Could not reach one or more selected servers. Refresh Servers; use Providers or Diagnostics if the problem continues.",
-    );
-  }
-  if (error.code === "authentication") {
-    return normalizedError(
-      error.code,
-      "Credentials need attention before the selected servers can be managed. Open Providers to review them.",
-    );
-  }
-  if (error.code === "plugin-failure" || error.code === "unknown-provider-error") {
-    return normalizedError(
-      error.code,
-      "EasyServer could not complete the operation for the selected servers. Open Diagnostics for details.",
-    );
-  }
-  const message = instanceIds.reduce(
-    (current, instanceId, targetIndex) =>
-      humanizeBulkInstanceMessage(
-        current,
-        snapshot,
-        instanceId,
-        bulkServerDisplayName(snapshot, instanceId, targetIndex),
-      ),
-    error.message,
-  );
-  return message === error.message ? error : normalizedError(error.code, message);
-}
-
-function humanizeBulkInstanceResult(
-  snapshot: TuiReadSnapshot | undefined,
-  result: TuiBulkInstanceMutationResult,
-): TuiBulkInstanceMutationResult {
-  return {
-    ...result,
-    results: result.results.map((item, targetIndex) => {
-      const serverLabel = bulkServerDisplayName(snapshot, item.instanceId, targetIndex);
-      if (item.status === "completed") {
-        return {
-          ...item,
-          instanceId: serverLabel,
-          ...(item.observationError === undefined
-            ? {}
-            : {
-                observationError: {
-                  ...item.observationError,
-                  message: humanizeBulkInstanceMessage(
-                    item.observationError.message,
-                    snapshot,
-                    item.instanceId,
-                    serverLabel,
-                  ),
-                },
-              }),
-        };
-      }
-      return {
-        ...item,
-        instanceId: serverLabel,
-        error: {
-          ...item.error,
-          message: humanizeBulkInstanceMessage(
-            item.error.message,
-            snapshot,
-            item.instanceId,
-            serverLabel,
-          ),
-        },
-      };
-    }),
-  };
-}
-
-function PersistentSessionDetail({
-  session,
-}: {
-  readonly session: TuiPersistentSessionReadItem;
-}): React.ReactElement {
-  return (
-    <Box marginTop={1} flexDirection="column">
-      <Text bold>Persistent Session detail</Text>
-      <Text>Session ID: {session.id}</Text>
-      <Text>State: {session.state}</Text>
-      <Text>Instance: {session.instanceId}</Text>
-      <Text>Remote target: {session.remoteHost}:{session.remotePort}</Text>
-      <Text>Requested local port: {session.requestedLocalPort ?? "dynamic"}</Text>
-      <Text>Access Method: {session.accessMethod.id} · {session.accessMethod.kind}</Text>
-      {session.endpoint === undefined ? null : (
-        <Text>Local Endpoint: {session.endpoint.host}:{session.endpoint.port}</Text>
-      )}
-      {session.state === "failed" ? (
-        <Text>Cleanup failure: {session.failure?.code}: {session.failure?.message}</Text>
-      ) : null}
-    </Box>
-  );
-}
-
-function EndpointIntentLine({
-  intent,
-  selected,
-}: {
-  readonly intent: TuiEndpointIntentReadItem;
-  readonly selected: boolean;
-}): React.ReactElement {
-  const realization =
-    intent.state === "live" && intent.endpoint !== undefined
-      ? `live endpoint=${intent.endpoint.host}:${intent.endpoint.port}`
-      : intent.state;
-  return (
-    <Text bold={selected}>
-      {selected ? "> " : "  "}{intent.name} · {intent.enabled ? "enabled" : "disabled"} · {realization}
-      {intent.state === "error" ? ` · ${intent.failure?.code ?? "failure"}` : ""}
-    </Text>
-  );
-}
-
-function EndpointIntentDetail({
-  intent,
-}: {
-  readonly intent: TuiEndpointIntentReadItem;
-}): React.ReactElement {
-  return (
-    <Box marginTop={1} flexDirection="column">
-      <Text bold>Persisted Endpoint intent detail</Text>
-      <Text>Name: {intent.name}</Text>
-      <Text>Desired state: {intent.enabled ? "enabled" : "disabled"}</Text>
-      <Text>Realization state: {intent.state}</Text>
-      <Text>Instance: {intent.instanceId}</Text>
-      <Text>Remote target: {intent.remoteHost}:{intent.remotePort}</Text>
-      <Text>Requested local port: {intent.requestedLocalPort ?? "dynamic"}</Text>
-      <Text>Requested Access Method: {intent.requestedAccessMethodId ?? "default"}</Text>
-      {intent.endpoint === undefined ? null : (
-        <Text>
-          Current live Endpoint: {intent.endpoint.host}:{intent.endpoint.port}
-        </Text>
-      )}
-      {intent.accessMethod === undefined ? null : (
-        <Text>Current Access Method: {intent.accessMethod.id} · {intent.accessMethod.kind}</Text>
-      )}
-      {intent.state === "starting" ? (
-        <Text>Recovery: daemon is realizing desired state; refresh to observe the resulting live Endpoint or Error.</Text>
-      ) : intent.state === "error" ? (
-        <>
-          <Text>Error: {intent.failure?.code}: {intent.failure?.message}</Text>
-          {intent.failure?.hostTrust === undefined ? null : (
-            <Text>
-              SSH fingerprint awaiting review: {intent.failure.hostTrust.key.type} · {intent.failure.hostTrust.key.fingerprint}
-            </Text>
-          )}
-          <Text>Remediation: {endpointIntentRemediation(intent)}</Text>
-        </>
-      ) : intent.state === "disabled" ? (
-        <Text>Recovery: desired state is disabled; use Actions to enable and realize it again.</Text>
-      ) : (
-        <Text>Recovery: current transport is live. On daemon restart it will be recreated from this persisted definition.</Text>
-      )}
-    </Box>
-  );
-}
-
-function endpointIntentRemediation(intent: TuiEndpointIntentReadItem): string {
-  const code = intent.failure?.code;
-  const message = intent.failure?.message ?? "";
-  if (code === "host-trust-required") {
-    return intent.failure?.hostTrust === undefined
-      ? "refresh the saved connection to obtain structured SSH trust evidence, then review the fingerprint before retrying"
-      : "use Actions to review this exact SSH fingerprint; after approval EasyServer retries the same saved connection";
-  }
-  if (code === "authentication") {
-    if (/SSH public-key authentication/iu.test(message)) {
-      return "make the matching SSH private key available on this computer or authorize its public key on the server, then retry";
-    }
-    if (/SSH host key mismatch|SSH host identity/iu.test(message)) {
-      return "verify whether the server was replaced or reinstalled; changed trusted host identity remains blocked until you deliberately correct EasyServer host trust";
-    }
-    if (/SSH authentication/iu.test(message)) {
-      return "check the SSH login or key expected by the server, then retry";
-    }
-    return "configure or rotate the required provider credential in Providers, then use Actions to retry";
-  }
-  if (code === "provider-unavailable") {
-    if (/requested service port is not accepting|requested service could not be reached/iu.test(message)) {
-      return "SSH works; start the app/service or correct its configured port, then retry the saved connection";
-    }
-    if (/could not obtain the SSH host fingerprint/iu.test(message)) {
-      return "EasyServer could not safely obtain a fingerprint yet; retry, and check local SSH tools in Diagnostics if direct SSH works repeatedly";
-    }
-    return "restore provider or instance availability, refresh state, then use Actions to retry";
-  }
-  if (code === "conflict" && /port/i.test(message)) {
-    return "the requested fixed local port is unavailable; free it, or remove and recreate the intent with another fixed or dynamic port, then retry";
-  }
-  if (code === "unsupported-operation") {
-    return "restore a compatible provider Access Method, then use Actions to retry";
-  }
-  return "resolve the reported cause without deleting the desired intent, then use Actions to retry realization";
-}
-
-function NewInstanceSurface({
-  snapshot,
-  selectedWorkflowKey,
-}: {
-  readonly snapshot: TuiReadSnapshot;
-  readonly selectedWorkflowKey?: string;
-}): React.ReactElement {
-  if (snapshot.providerWorkflows.status === "failed") {
-    return (
-      <Box flexDirection="column">
-        <Text>Provider workflows unavailable: {snapshot.providerWorkflows.message}</Text>
-        <Text>Use Actions to refresh. Provider CLI commands remain available.</Text>
-      </Box>
-    );
-  }
-
-  const workflows = snapshot.providerWorkflows.items.filter(
-    (workflow) => workflow.operation === "mutation",
-  );
-  if (workflows.length === 0) {
-    return (
-      <Box flexDirection="column">
-        <Text>No provider acquisition workflows are available.</Text>
-        <Text>Open Providers from Actions to configure or enable a provider, then refresh acquisition options.</Text>
-        <Text>Providers without a guided rental flow remain available under Advanced provider tools.</Text>
-      </Box>
-    );
-  }
-
-  return (
-    <Box flexDirection="column">
-      <Text>Choose a provider workflow with ↑/↓ and press Enter to start.</Text>
-      {workflows.map((workflow) => {
-        const key = workflowKey(workflow);
-        const selected = key === selectedWorkflowKey;
-        return (
-          <Box key={key} flexDirection="column" marginTop={1}>
-            <Text bold={selected}>
-              {selected ? "> " : "  "}
-              {workflow.providerId} · {workflow.featureDisplayName} · {workflow.commandName}
-              {workflow.presentation.kind === "interactive-flow" ? " · interactive" : " · CLI only"}
-            </Text>
-            <Text>    {workflow.description}</Text>
-            {workflow.presentation.kind === "cli-fallback" ? (
-              <Text>
-                {`    easyserver provider ${workflow.providerId} ${workflow.featureId} ${workflow.commandName}`}
-              </Text>
-            ) : null}
-          </Box>
-        );
-      })}
-    </Box>
-  );
-}
-
-function ProvidersSurface({
-  snapshot,
-  height,
-  candidatePicker,
-  sourceInput,
-  credentialFlow,
-  selectedSource,
-  showDetails,
-  canRegister,
-  canAddInstalled,
-}: {
-  readonly snapshot: TuiReadSnapshot;
-  readonly height: number;
-  readonly candidatePicker?: ProviderCandidatePickerView;
-  readonly sourceInput?: string;
-  readonly credentialFlow?: ProviderCredentialFlowView;
-  readonly selectedSource?: string;
-  readonly showDetails: boolean;
-  readonly canRegister: boolean;
-  readonly canAddInstalled: boolean;
-}): React.ReactElement {
-  if (candidatePicker !== undefined) {
-    const focusedCandidate = candidatePicker.items[candidatePicker.cursor];
-    const fixedRows = 2 + (focusedCandidate?.description === undefined ? 0 : 1);
-    const window = tuiFocusWindowWithinRows(
-      candidatePicker.cursor,
-      candidatePicker.items.length,
-      Math.max(1, height - fixedRows),
-    );
-    return (
-      <Box flexDirection="column" height={height} overflowY="hidden">
-        <Text bold wrap="truncate">Add an installed provider</Text>
-        {candidatePicker.items.length === 0 ? (
-          <Text wrap="truncate">No discoverable installed Provider Plugins are available.</Text>
-        ) : (
-          <>
-            {window.showBefore ? <Text>↑ {window.hiddenBefore} more</Text> : null}
-            {candidatePicker.items.slice(window.start, window.end).map((candidate, visibleIndex) => {
-              const index = window.start + visibleIndex;
-              return (
-                <Text key={candidate.source} bold={index === candidatePicker.cursor} wrap="truncate">
-                  {index === candidatePicker.cursor ? "> " : "  "}{candidate.displayName}
-                </Text>
-              );
-            })}
-            {window.showAfter ? <Text>↓ {window.hiddenAfter} more</Text> : null}
-          </>
-        )}
-        {focusedCandidate?.description === undefined ? null : (
-          <Text wrap="truncate">{focusedCandidate.description}</Text>
-        )}
-        <Text wrap="truncate">↑/↓ choose · Enter add · Esc back</Text>
-      </Box>
-    );
-  }
-
-  if (sourceInput !== undefined) {
-    return (
-      <Box flexDirection="column">
-        <Text bold>Advanced provider registration</Text>
-        <Text>Module or path: {escapeTerminalText(sourceInput)}</Text>
-        <Text>Enter add · Esc cancel</Text>
-        <Text>Use this only for a package or local path that is not discoverable in the installed-provider picker.</Text>
-      </Box>
-    );
-  }
-
-  if (credentialFlow !== undefined && snapshot.providers.status === "ready") {
-    const provider = snapshot.providers.items.find(
-      (item) => item.source === credentialFlow.providerSource,
-    );
-    if (provider !== undefined) {
-      const providerLabel =
-        provider.displayName ??
-        provider.pluginId ??
-        provider.providerId ??
-        provider.source;
-      if (credentialFlow.kind === "secret") {
-        return (
-          <Box flexDirection="column">
-            <Text bold>Configure credential {credentialFlow.credentialName}</Text>
-            <Text>Provider: {providerLabel}</Text>
-            <Text>Secret: {credentialFlow.hasSecret ? "********" : ""}</Text>
-            <Text>Input status: {credentialFlow.hasSecret ? "value entered" : "empty"}</Text>
-            <Text>Enter save · Backspace edit · Esc cancel</Text>
-            <Text>The secret value is masked and is never read back by the TUI.</Text>
-          </Box>
-        );
-      }
-
-      if (credentialFlow.kind === "actions") {
-        const selectedCredential = provider.credentials.items.find(
-          (credential) => credential.name === credentialFlow.credentialName,
-        );
-        return (
-          <Box flexDirection="column">
-            <Text bold>{credentialFlow.credentialName}</Text>
-            {selectedCredential?.description === undefined ? null : (
-              <Text>{selectedCredential.description}</Text>
-            )}
-            <Box marginTop={1} flexDirection="column">
-              <Text bold>Actions</Text>
-              <Text bold={credentialFlow.cursor === 0}>
-                {credentialFlow.cursor === 0 ? "> " : "  "}Set or rotate
-              </Text>
-              {selectedCredential?.configured ? (
-                <Text bold={credentialFlow.cursor === 1}>
-                  {credentialFlow.cursor === 1 ? "> " : "  "}Remove credential
-                </Text>
-              ) : null}
-            </Box>
-            <Box marginTop={1}>
-              <Text>↑/↓ choose · Enter run · Esc back</Text>
-            </Box>
-          </Box>
-        );
-      }
-
-      return (
-        <Box flexDirection="column">
-          <Text bold>Credentials for {providerLabel}</Text>
-          <Text>↑/↓ choose credential · Enter actions · Esc back</Text>
-          {provider.credentials.items.map((credential) => (
-            <Box key={credential.name} flexDirection="column" marginTop={1}>
-              <Text bold={credential.name === credentialFlow.selectedName}>
-                {credential.name === credentialFlow.selectedName ? "> " : "  "}
-                {credential.name} · {credential.required ? "required" : "optional"} · {credential.configured ? "configured" : "missing"}
-              </Text>
-              {credential.description === undefined ? null : (
-                <Text>{credential.description}</Text>
-              )}
-            </Box>
-          ))}
-        </Box>
-      );
-    }
-  }
-
-  if (snapshot.providers.status === "failed") {
-    return (
-      <Box flexDirection="column">
-        <Text>Provider configuration unavailable: {snapshot.providers.message}</Text>
-        <Text>Use Actions to refresh. Instance inventory may still be available.</Text>
-      </Box>
-    );
-  }
-
-  if (snapshot.providers.items.length === 0) {
-    return (
-      <Box flexDirection="column">
-        <Text>No providers added yet.</Text>
-        {canAddInstalled ? (
-          <Text>Open Actions and choose Add installed provider.</Text>
-        ) : !canRegister ? (
-          <Text>Provider setup is unavailable in this TUI session.</Text>
-        ) : snapshot.providerCandidates?.status === "ready" ? (
-          <Text>No installed provider packages were discovered. Install one outside EasyServer, then use Refresh providers; Advanced module/path registration is also available.</Text>
-        ) : (
-          <Text>Installed provider discovery is unavailable. Use Refresh providers, or Advanced module/path registration if you already know the provider source.</Text>
-        )}
-      </Box>
-    );
-  }
-
-  return (
-    <Box flexDirection="column">
-      <Box marginBottom={1}>
-        <Text>Choose a provider, then press Enter for actions.</Text>
-      </Box>
-      {snapshot.providers.items.map((provider) => {
-        const selected = provider.source === selectedSource;
-        return (
-        <Box key={`${provider.source}:${provider.pluginId ?? "unloaded"}`} flexDirection="column" marginBottom={1}>
-          <Text bold={selected}>
-            {selected ? "> " : "  "}{provider.displayName ?? provider.pluginId ?? provider.providerId ?? provider.source}
-            {` · ${provider.state === "loaded" ? provider.readiness : provider.state}`}
-          </Text>
-          {!selected || !showDetails ? null : (
-            <Box flexDirection="column" marginLeft={2}>
-              <Text>Source: {provider.source}</Text>
-              {provider.providerId === undefined ? null : (
-                <Text>Provider ID: {provider.providerId}</Text>
-              )}
-              {provider.version === undefined ? null : <Text>Version: {provider.version}</Text>}
-              {provider.state === "disabled" ? (
-                <Text>Credential metadata unavailable while disabled.</Text>
-              ) : provider.state === "failed" ? (
-                <Text>Failure: {provider.failure}</Text>
-              ) : provider.credentials.declared === 0 ? (
-                <Text>Credentials: none declared</Text>
-              ) : (
-                <Text>
-                  Credentials: {provider.credentials.configured}/{provider.credentials.declared} configured
-                  {provider.credentials.missingRequired === 0
-                    ? ""
-                    : ` · ${provider.credentials.missingRequired} required missing`}
-                </Text>
-              )}
-            </Box>
-          )}
-        </Box>
-        );
-      })}
-    </Box>
-  );
-}
-
-function PartialInventoryNotice({
-  failedProviders,
-}: {
-  readonly failedProviders: readonly Extract<
-    TuiReadSnapshot["instances"],
-    { readonly status: "ready" }
-  >["providerOutcomes"][number][];
-}): React.ReactElement {
-  const firstFailure = failedProviders.find((provider) => provider.status === "failed");
-  const hiddenFailures = Math.max(0, failedProviders.length - (firstFailure === undefined ? 0 : 1));
-  return (
-    <Box flexDirection="column">
-      <Text wrap="truncate">
-        Some providers are unavailable. Available provider results remain usable.
-      </Text>
-      <Text wrap="truncate">
-        {firstFailure === undefined
-          ? ""
-          : `${firstFailure.providerId} · ${firstFailure.error.code}${hiddenFailures === 0 ? "" : ` · +${hiddenFailures} more`} · `}
-        Open Providers or Diagnostics, then refresh.
-      </Text>
-    </Box>
-  );
-}
-
-function instanceEmptyGuidance(snapshot: TuiReadSnapshot): string {
-  if (snapshot.providers.status === "failed") {
-    return "No servers are visible. Provider configuration could not be inspected; resolve provider setup and refresh from Actions.";
-  }
-  if (snapshot.providers.items.length === 0) {
-    return "No servers yet. Configure a provider first, then rent a server.";
-  }
-  if (
-    snapshot.instances.status === "ready" &&
-    !snapshot.instances.complete &&
-    snapshot.instances.providerOutcomes.some((provider) => provider.status === "failed")
-  ) {
-    return "No servers were reported by available providers. Unavailable providers may have additional servers that are not visible right now.";
-  }
-  return "No servers yet. Providers are configured; use Rent a server.";
-}
-
-function previousForegroundConnectionStep(
-  flow: ForegroundConnectionFlow,
-): ForegroundConnectionStep | undefined {
-  if (flow.step === "instance") {
-    return undefined;
-  }
-  if (flow.step === "remote-host") {
-    return flow.serverScoped ? undefined : "instance";
-  }
-  if (flow.step === "remote-port") {
-    if (flow.advanced) {
-      return "remote-host";
-    }
-    return flow.serverScoped ? undefined : "instance";
-  }
-  if (flow.step === "access-method") {
-    return "remote-port";
-  }
-  if (flow.step === "local-port") {
-    return flow.advanced ? "access-method" : "remote-port";
-  }
-  return "local-port";
-}
-
-function humanizeTuiServerError(
-  error: unknown,
-  {
-    instanceId,
-    serverLabel,
-    accessMethodId,
-    connectionVocabulary = false,
-  }: {
-    readonly instanceId: string;
-    readonly serverLabel: string;
-    readonly accessMethodId?: string;
-    readonly connectionVocabulary?: boolean;
-  },
-): unknown {
-  if (!isNormalizedError(error) || error.code === "host-trust-required") {
-    return error;
-  }
-  if (connectionVocabulary && error.code === "provider-unavailable") {
-    if (error.message.includes("could not obtain the SSH host fingerprint")) {
-      return normalizedError(
-        error.code,
-        `EasyServer could not obtain an SSH host fingerprint for ${serverLabel}, so it cannot safely ask you to trust a key yet. Retry connection; if direct SSH works but this keeps failing, check the local SSH tools in Diagnostics.`,
-      );
-    }
-    if (error.message.includes("SSH connected, but the requested service port is not accepting connections yet")) {
-      return normalizedError(
-        error.code,
-        `SSH to ${serverLabel} works, but the requested app/service port is not accepting connections yet. Start or wait for that service, or edit the service port, then retry.`,
-      );
-    }
-    if (error.message.includes("SSH connected, but the requested service could not be reached from the server")) {
-      return normalizedError(
-        error.code,
-        `SSH to ${serverLabel} works, but the requested app/service port could not be reached from the server. Verify the service is running and the port is correct, then retry.`,
-      );
-    }
-    if (error.message.includes("The SSH route closed before TCP forwarding was established")) {
-      return normalizedError(
-        error.code,
-        `The SSH route to ${serverLabel} closed before app/service forwarding was established. Retry the connection; if direct SSH keeps working while forwarding fails, check Diagnostics or try another available connection method.`,
-      );
-    }
-    if (error.message.includes("SSH on the server is not ready or reachable yet")) {
-      return normalizedError(
-        error.code,
-        `SSH for ${serverLabel} is not ready or reachable yet. If the server just started, wait a moment and retry; otherwise check Diagnostics.`,
-      );
-    }
-    return normalizedError(
-      error.code,
-      `Could not prepare a connection to ${serverLabel}. If the server just started, wait a moment and retry; otherwise refresh Servers or open Diagnostics.`,
-    );
-  }
-  if (error.code === "provider-unavailable") {
-    return normalizedError(
-      error.code,
-      `Could not reach ${serverLabel}. Refresh Servers; use Providers or Diagnostics if the problem continues.`,
-    );
-  }
-  if (connectionVocabulary && error.code === "authentication") {
-    if (error.message.includes("changed before trust confirmation")) {
-      return normalizedError(
-        error.code,
-        `The SSH fingerprint for ${serverLabel} changed since you reviewed it. Nothing was trusted. Retry connection to review the current fingerprint before continuing.`,
-      );
-    }
-    if (
-      /SSH host key (?:mismatch|changed)|SSH host identity/iu.test(error.message)
-    ) {
-      return normalizedError(
-        error.code,
-        `SSH host identity for ${serverLabel} changed. EasyServer blocked the connection. Verify the server was replaced or reinstalled before trusting a new host key; if the change is expected, remove the stale EasyServer host key and retry.`,
-      );
-    }
-    if (error.message.includes("SSH public-key authentication was rejected")) {
-      return normalizedError(
-        error.code,
-        `SSH public-key authentication to ${serverLabel} was rejected. Make sure the matching SSH private key is available to EasyServer/OpenSSH and its public key is authorized on the server, then retry.`,
-      );
-    }
-    return normalizedError(
-      error.code,
-      `Connection authentication for ${serverLabel} was rejected. Check the login or key expected by the server and retry; this does not necessarily mean the provider API credential is wrong.`,
-    );
-  }
-  if (error.code === "authentication") {
-    return normalizedError(
-      error.code,
-      `Credentials need attention before ${serverLabel} can be used. Open Providers to review them.`,
-    );
-  }
-  if (
-    connectionVocabulary &&
-    error.code === "unsupported-operation" &&
-    error.message.includes("does not permit TCP forwarding")
-  ) {
-    return normalizedError(
-      error.code,
-      `SSH to ${serverLabel} works, but this SSH route does not allow TCP forwarding. Choose another connection method if one is available, or use a server/SSH route that permits forwarding.`,
-    );
-  }
-  if (
-    connectionVocabulary &&
-    error.code === "plugin-failure" &&
-    error.message.includes("Local OpenSSH client could not be started")
-  ) {
-    return normalizedError(
-      error.code,
-      "This computer could not start OpenSSH. Install or enable OpenSSH Client, make sure ssh is available, then retry. Open Diagnostics to check local SSH tools.",
-    );
-  }
-  if (
-    connectionVocabulary &&
-    error.code === "plugin-failure" &&
-    error.message === "OpenSSH connection failed unexpectedly."
-  ) {
-    return normalizedError(
-      error.code,
-      `The SSH transport to ${serverLabel} ended unexpectedly. Retry connection. Diagnostics can check local SSH and provider readiness, but raw SSH output is intentionally not retained.`,
-    );
-  }
-  if (error.code === "plugin-failure" || error.code === "unknown-provider-error") {
-    return normalizedError(
-      error.code,
-      `EasyServer could not complete this operation for ${serverLabel}. Open Diagnostics to check current EasyServer and provider readiness.`,
-    );
-  }
-  if (connectionVocabulary && error.code === "unsupported-operation") {
-    return normalizedError(
-      error.code,
-      `No supported connection method is currently available for ${serverLabel}.`,
-    );
-  }
-  if (error.code === "not-found" && error.message.includes(instanceId)) {
-    return normalizedError(
-      error.code,
-      `${serverLabel} is no longer available. Refresh Servers and try again.`,
-    );
-  }
-  let message = error.message
-    .replaceAll(instanceId, serverLabel)
-    .replaceAll("Compute Instance", "Server")
-    .replaceAll("compute instance", "server");
-  if (accessMethodId !== undefined) {
-    message = message.replaceAll(accessMethodId, "the selected connection method");
-  }
-  if (connectionVocabulary) {
-    message = message
-      .replaceAll("Local Endpoint", "Local connection")
-      .replaceAll("Connection Session", "background connection")
-      .replaceAll("Access Method", "connection method")
-      .replaceAll("Endpoint", "connection");
-  }
-  return message === error.message ? error : normalizedError(error.code, message);
-}
-
-function parseConnectionPort(value: string): number | undefined {
-  if (!/^[0-9]+$/.test(value)) {
-    return undefined;
-  }
-  const port = Number(value);
-  return Number.isInteger(port) && port >= 1 && port <= 65_535
-    ? port
-    : undefined;
-}
-
-function foregroundConnectionNeedsServicePortEdit(
-  connection: TuiForegroundConnection,
-): boolean {
-  return (
-    connection.state === "failed" &&
-    connection.failure?.code === "provider-unavailable" &&
-    (connection.failure.message.includes(
-      "requested service port is not accepting connections",
-    ) ||
-      connection.failure.message.includes(
-        "requested service could not be reached from the server",
-      ))
-  );
-}
-
-function foregroundConnectionCanRetry(
-  connection: TuiForegroundConnection,
-): boolean {
-  if (connection.state !== "failed" || connection.failure === undefined) {
-    return false;
-  }
-  return (
-    connection.failure.code !== "unsupported-operation" &&
-    !(
-      connection.failure.code === "authentication" &&
-      /SSH host identity no longer matches|SSH host key mismatch/iu.test(
-        connection.failure.message,
-      )
-    )
-  );
-}
-
-function foregroundConnectionFlowFromFailedConnection(
-  connection: TuiForegroundConnection,
-  step: ForegroundConnectionStep,
-): ForegroundConnectionFlow {
-  return {
-    mode: "foreground",
-    advanced: false,
-    serverScoped: true,
-    step,
-    instanceId: connection.instanceId,
-    remoteHost: connection.remoteHost,
-    remotePort: String(connection.remotePort),
-    accessMethods: [connection.accessMethod],
-    accessMethodId: connection.accessMethod.id,
-    localPort:
-      connection.requestedLocalPort === undefined
-        ? ""
-        : String(connection.requestedLocalPort),
-  };
-}
-
-function foregroundConnectionRequest(
-  flow: ForegroundConnectionFlow,
-): TuiForegroundConnectionRequest | undefined {
-  const remotePort = parseConnectionPort(flow.remotePort);
-  const localPort =
-    flow.localPort.length === 0
-      ? undefined
-      : parseConnectionPort(flow.localPort);
-  if (
-    remotePort === undefined ||
-    (flow.localPort.length > 0 && localPort === undefined) ||
-    flow.remoteHost.trim().length === 0 ||
-    flow.accessMethodId === undefined
-  ) {
-    return undefined;
-  }
-  return {
-    instanceId: flow.instanceId,
-    remoteHost: flow.remoteHost.trim(),
-    remotePort,
-    ...(localPort === undefined ? {} : { localPort }),
-    accessMethodId: flow.accessMethodId,
-  };
-}
-
-function availableInstanceActions(
-  instance: TuiInstanceReadItem,
-): TuiInstanceReadItem["availableActions"] {
-  if (instance.freshness !== "fresh") {
-    return [];
-  }
-  return instance.availableActions.filter(
-    (action) => action !== "instance.destroy" || instance.management === "managed",
-  );
-}
-
-function bulkAvailableInstanceActions(
-  instances: readonly TuiInstanceReadItem[],
-): readonly AvailableAction[] {
-  return PROVIDER_CAPABILITIES.filter((action) =>
-    instances.some((instance) => availableInstanceActions(instance).includes(action)),
-  );
-}
-
-function bulkActionSupportCount(
-  instances: readonly TuiInstanceReadItem[],
-  action: AvailableAction,
-): number {
-  return instances.filter((instance) =>
-    availableInstanceActions(instance).includes(action),
-  ).length;
-}
-
-function instanceMutationStatus(mutation: TuiInstanceMutation): string {
-  return mutation.kind === "adopt"
-    ? "Server adoption requested."
-    : `${instanceActionLabel(mutation.action)} requested.`;
-}
-
-function bulkInstanceMutationStatus(mutation: TuiBulkInstanceMutation): string {
-  return `${instanceActionLabel(mutation.action)} requested for ${mutation.instanceIds.length} selected ${mutation.instanceIds.length === 1 ? "server" : "servers"}.`;
-}
-
-function instanceMutationTitle(mutation: TuiInstanceMutation): string {
-  return mutation.kind === "adopt" ? "Adopt server" : instanceActionLabel(mutation.action);
-}
-
-function bulkInstanceMutationTitle(mutation: TuiBulkInstanceMutation): string {
-  const verb = mutation.action.slice("instance.".length);
-  return `${verb[0]?.toUpperCase() ?? ""}${verb.slice(1)} selected servers`;
-}
-
-function bulkInstanceConfirmationResources(
-  snapshot: TuiReadSnapshot | undefined,
-  details: BulkInstanceDestroyConfirmationDetails,
-): readonly string[] {
-  return details.targets.map((target, index) => {
-    if (snapshot?.instances.status !== "ready") {
-      return `Selected server #${index + 1}`;
-    }
-    const serverIndex = snapshot.instances.items.findIndex(
-      (server) => server.id === target.instanceId,
-    );
-    const server = serverIndex < 0 ? undefined : snapshot.instances.items[serverIndex];
-    return server === undefined
-      ? `Selected server #${index + 1}`
-      : serverListLabel(server, serverIndex, snapshot.instances.items);
-  });
-}
-
-function destroyAffectedResources(
-  details: InstanceDestroyConfirmationDetails,
-): readonly string[] {
-  const resources: string[] = [];
-  if (details.impact.sessionIds.length > 0) {
-    resources.push(
-      `${details.impact.sessionIds.length} background ${details.impact.sessionIds.length === 1 ? "connection" : "connections"}`,
-    );
-  }
-  if (details.impact.endpointIntentNames.length > 0) {
-    resources.push(
-      `${details.impact.endpointIntentNames.length} saved background connection ${details.impact.endpointIntentNames.length === 1 ? "definition" : "definitions"}`,
-    );
-  }
-  if (details.impact.pendingCleanupCount > 0) {
-    resources.push(
-      `${details.impact.pendingCleanupCount} pending connection ${details.impact.pendingCleanupCount === 1 ? "cleanup" : "cleanups"}`,
-    );
-  }
-  return resources;
-}
-
-function destroyServerConsequence(details: InstanceDestroyConfirmationDetails): string {
-  const affected = destroyAffectedResources(details);
-  return affected.length === 0
-    ? "This permanently destroys the selected server."
-    : `This permanently destroys the selected server and closes or removes ${affected.join(", ")}.`;
-}
-
-function BulkInstanceSelection({
-  instanceIds,
-  instances,
-  missingInstanceIds,
-}: {
-  readonly instanceIds: readonly string[];
-  readonly instances: readonly TuiInstanceReadItem[];
-  readonly missingInstanceIds: readonly string[];
-}): React.ReactElement {
-  return (
-    <Box marginTop={1} flexDirection="column">
-      <Text bold>
-        Selected servers ({instanceIds.length})
-      </Text>
-      {instanceIds.slice(0, 2).map((instanceId, targetIndex) => {
-        const instanceIndex = instances.findIndex((item) => item.id === instanceId);
-        const instance = instanceIndex < 0 ? undefined : instances[instanceIndex];
-        return instance === undefined ? (
-          <Text key={instanceId}>Selected server #{targetIndex + 1} · no longer visible</Text>
-        ) : (
-          <Text key={instanceId} wrap="truncate">
-            {serverListLabel(instance, instanceIndex, instances)} · {instance.state ?? "status unavailable"}
-            {instance.freshness === "fresh" ? "" : " · needs refresh"}
-          </Text>
-        );
-      })}
-      {instanceIds.length <= 2 ? null : (
-        <Text wrap="truncate">+{instanceIds.length - 2} more selected · scroll checked server rows to review.</Text>
-      )}
-      {missingInstanceIds.length === 0 ? null : (
-        <Text wrap="truncate">Some selected servers are missing; bulk actions are blocked.</Text>
-      )}
-    </Box>
-  );
-}
-
-function BulkInstanceActionGuidance({
-  instances,
-  missingInstanceIds,
-}: {
-  readonly instances: readonly TuiInstanceReadItem[];
-  readonly missingInstanceIds: readonly string[];
-}): React.ReactElement {
-  if (missingInstanceIds.length > 0) {
-    return <Text>Bulk actions are blocked because part of the exact target set is no longer visible.</Text>;
-  }
-  if (instances.some((instance) => instance.freshness !== "fresh")) {
-    return <Text>Refresh before bulk mutation; stale or unobserved targets are read-only.</Text>;
-  }
-  const actions = bulkAvailableInstanceActions(instances);
-  if (actions.length === 0) {
-    return <Text>No normalized lifecycle action is currently advertised by the marked targets.</Text>;
-  }
-  return (
-    <Box flexDirection="column">
-      <Text>
-        Available bulk actions: {actions.map((action) => `${action.slice("instance.".length)} (${bulkActionSupportCount(instances, action)}/${instances.length} advertise)`).join(" · ")}
-      </Text>
-      <Text>Unsupported, failed and outcome-unknown targets stay visible independently; no target is retried blindly.</Text>
-    </Box>
-  );
-}
-
-function InstanceActionGuidance({
-  instance,
-}: {
-  readonly instance: TuiInstanceReadItem;
-}): React.ReactElement {
-  if (instance.freshness !== "fresh") {
-    return <Text>Refresh before managing this instance; stale or unobserved state is read-only.</Text>;
-  }
-
-  const actions = availableInstanceActions(instance);
-  return (
-    <Box flexDirection="column">
-      {instance.management === "discovered" ? (
-        <Text>Adopt for EasyServer management is available from Actions.</Text>
-      ) : null}
-      {instance.management === "discovered" &&
-      instance.availableActions.includes("instance.destroy") ? (
-        <Text>Destroy is unavailable until this resource is explicitly adopted.</Text>
-      ) : null}
-      {actions.length === 0 ? (
-        <Text>No lifecycle actions are currently available.</Text>
-      ) : (
-        <Text>
-          Available lifecycle actions: {actions.map((action) => action.slice("instance.".length)).join(" · ")}
-        </Text>
-      )}
-    </Box>
-  );
-}
-
-function instanceActionLabel(action: AvailableAction): string {
-  const verb = action.slice("instance.".length);
-  return `${verb[0]?.toUpperCase() ?? ""}${verb.slice(1)} server`;
-}
-
-function formatActions(actions: readonly string[]): string {
-  return actions.length === 0 ? "none" : actions.join(", ");
-}
-
-function workflowKey(workflow: TuiProviderWorkflowReadItem): string {
-  return `${workflow.providerId}\u0000${workflow.featureId}\u0000${workflow.commandName}`;
-}
-
-function firstWorkflowKey(
-  snapshot: TuiReadSnapshot | undefined,
-): string | undefined {
-  if (snapshot?.providerWorkflows.status !== "ready") {
-    return undefined;
-  }
-  const first = snapshot.providerWorkflows.items.find(
-    (workflow) => workflow.operation === "mutation",
-  );
-  return first === undefined ? undefined : workflowKey(first);
-}
-
-function firstProviderSource(
-  snapshot: TuiReadSnapshot | undefined,
-): string | undefined {
-  return snapshot?.providers.status === "ready"
-    ? snapshot.providers.items[0]?.source
-    : undefined;
-}
-
-function firstInstanceId(snapshot: TuiReadSnapshot | undefined): string | undefined {
-  return snapshot?.instances.status === "ready"
-    ? snapshot.instances.items[0]?.id
-    : undefined;
-}
-
-function canStartInstanceMutation(
-  operation: TuiOperationPresentation | undefined,
-): boolean {
-  if (operation?.instanceResults !== undefined) {
-    return false;
-  }
-  return (
-    operation === undefined ||
-    operation.phase === "completed" ||
-    operation.phase === "failed" ||
-    operation.phase === "cancelled"
   );
 }
 
