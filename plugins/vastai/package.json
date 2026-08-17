@@ -48,7 +48,7 @@
   },
   "scripts": {
     "prebuild": "npm run build --workspace=@easyai101/easyserver-plugin-sdk",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../../scripts/copy-provider-http-safety.mjs dist/provider-http-safety.js",
     "prepack": "npm run build",
     "pretypecheck": "npm run build --workspace=@easyai101/easyserver-plugin-sdk",
     "test": "npm run build && npm run test:compiled",
