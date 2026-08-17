@@ -1,4 +1,4 @@
-export const PLUGIN_SDK_VERSION = "0.2.1";
+export const PLUGIN_SDK_VERSION = "0.2.2";
 
 export const PROVIDER_CAPABILITIES = [
   "instance.start",

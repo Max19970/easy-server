@@ -19,7 +19,7 @@ easyserver --json sessions list
 Каждая успешная команда в JSON mode записывает ровно один компактный JSON document в stdout:
 
 ```json
-{"schemaVersion":1,"ok":true,"data":{"version":"0.2.1"}}
+{"schemaVersion":1,"ok":true,"data":{"version":"0.2.2"}}
 ```
 
 Каждая terminal command error записывает ровно один компактный JSON document в stderr и оставляет stdout пустым:

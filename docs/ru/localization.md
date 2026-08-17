@@ -35,6 +35,7 @@ docs/
       vastai.md
       intelion.md
     releases/
+      v0.2.2.md
       v0.2.1.md
       v0.2.0.md
     ...
