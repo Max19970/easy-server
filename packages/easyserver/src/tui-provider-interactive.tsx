@@ -21,6 +21,10 @@ import {
   moveTuiFocus,
   tuiFocusWindowWithinRows,
 } from "./tui-focus.js";
+import {
+  tuiTableColumnWidths,
+  tuiTableRow,
+} from "./tui-layout.js";
 import { escapeTerminalText } from "./terminal-text.js";
 
 export interface ProviderInteractiveSurfaceProps {
@@ -28,6 +32,7 @@ export interface ProviderInteractiveSurfaceProps {
   readonly colorEnabled?: boolean;
   readonly disabled?: boolean;
   readonly height?: number;
+  readonly width?: number;
   readonly screenReader?: boolean;
   onEvent(event: ProviderInteractiveEvent): void;
   onClose(): void;
@@ -45,6 +50,7 @@ export function ProviderInteractiveSurface({
   colorEnabled = true,
   disabled = false,
   height,
+  width,
   screenReader = false,
   onEvent,
   onClose,
@@ -52,6 +58,7 @@ export function ProviderInteractiveSurface({
   const { exit } = useApp();
   const windowSize = useWindowSize();
   const terminalRows = height ?? windowSize.rows ?? 24;
+  const terminalColumns = width ?? windowSize.columns ?? 80;
   const [cursor, setCursor] = useState(() =>
     screen.kind === "review" ? screen.items.length : 0,
   );
@@ -389,6 +396,7 @@ export function ProviderInteractiveSurface({
             windowEnd={contentWindow.end}
             hiddenBefore={contentWindow.showBefore ? contentWindow.hiddenBefore : 0}
             hiddenAfter={contentWindow.showAfter ? contentWindow.hiddenAfter : 0}
+            width={terminalColumns}
             colorEnabled={colorEnabled}
           />
         ) : (
@@ -589,6 +597,7 @@ function TableView({
   windowEnd,
   hiddenBefore,
   hiddenAfter,
+  width,
   colorEnabled,
 }: {
   readonly screen: Extract<ProviderInteractiveScreen, { readonly kind: "table" }>;
@@ -597,14 +606,20 @@ function TableView({
   readonly windowEnd: number;
   readonly hiddenBefore: number;
   readonly hiddenAfter: number;
+  readonly width: number;
   readonly colorEnabled: boolean;
 }): React.ReactElement {
   const selected = new Set(screen.selectedRowIds);
   const appearance = tuiAppearance(colorEnabled);
   const muted = appearance.muted;
+  const rows = screen.rows.map((row) =>
+    screen.columns.map((column) => safe(String(row.cells[column.id] ?? ""))),
+  );
+  const headers = screen.columns.map((column) => safe(column.label));
+  const columnWidths = tuiTableColumnWidths(headers, rows, width, 6);
   return (
     <Box flexDirection="column">
-      <Text wrap="truncate">{screen.columns.map((column) => safe(column.label)).join(" · ")}</Text>
+      <Text color={muted} wrap="truncate">      {tuiTableRow(headers, columnWidths)}</Text>
       {hiddenBefore > 0 ? <Text color={muted}>↑ {hiddenBefore} more offers</Text> : null}
       {screen.rows.slice(windowStart, windowEnd).map((row, visibleIndex) => {
         const index = windowStart + visibleIndex;
@@ -616,10 +631,8 @@ function TableView({
             wrap="truncate"
           >
             {index === cursor ? "> " : "  "}{selected.has(row.id) ? "[x] " : "[ ] "}
-            {screen.columns
-              .map((column) => safe(String(row.cells[column.id] ?? "")))
-              .join(" · ")}
-            {row.disabled ? " · unavailable" : ""}
+            {tuiTableRow(rows[index] ?? [], columnWidths)}
+            {row.disabled ? "  unavailable" : ""}
           </Text>
         );
       })}

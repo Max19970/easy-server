@@ -191,8 +191,8 @@ test("Connections keeps persisted Endpoint intents distinct from runtime Session
 
   await openConnections(view);
   assert.match(view.lastFrame(), /Local connections/);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:53000 → server:3000/);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:49000 → server:9000 · background/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:53000\s+→ server:3000\s+live/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:49000\s+→ server:9000 · bg\s+live\/bg/);
   assert.doesNotMatch(view.lastFrame(), /Endpoint intent|Connection Session|Access Method|Daemon-owned/);
 
   await chooseVisibleAction(view, "Show technical details");

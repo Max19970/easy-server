@@ -17,6 +17,7 @@ import {
   type TuiAppearance,
 } from "./tui-appearance.js";
 import { tuiFocusWindowWithinRows } from "./tui-focus.js";
+import { tuiResourceRow } from "./tui-layout.js";
 import type {
   TuiEndpointIntentReadItem,
   TuiPersistentSessionReadItem,
@@ -61,6 +62,7 @@ export interface ForegroundConnectionFlow {
 export interface ConnectionsSurfaceProps {
   readonly snapshot: TuiReadSnapshot;
   readonly height: number;
+  readonly width: number;
   readonly screenReader: boolean;
   readonly flow?: ForegroundConnectionFlow;
   readonly busy: boolean;
@@ -76,6 +78,7 @@ export interface ConnectionsSurfaceProps {
 export function ConnectionsSurface({
   snapshot,
   height,
+  width,
   screenReader,
   flow,
   busy,
@@ -351,13 +354,17 @@ export function ConnectionsSurface({
                   color={selectedRow ? tuiFocusColor(appearance, true) : tuiResourceColor(appearance, connection.state)}
                   wrap="truncate"
                 >
-                  {selectedRow ? "> " : "  "}
-                  {connection.endpoint === undefined
-                    ? "Local port unavailable"
-                    : `${connection.endpoint.host}:${connection.endpoint.port}`}
-                  {` → ${serverDisplayName(snapshot, connection.instanceId)}:${connection.remotePort}`}
-                  {connection.kind === "persistent" ? " · background" : ""}
-                  {connection.state === "live" ? "" : ` · ${connection.state}`}
+                  {tuiResourceRow({
+                    marker: selectedRow ? "> " : "  ",
+                    primary: connection.endpoint === undefined
+                      ? "Local port unavailable"
+                      : `${connection.endpoint.host}:${connection.endpoint.port}`,
+                    secondary: `→ ${serverDisplayName(snapshot, connection.instanceId)}:${connection.remotePort}${connection.kind === "persistent" ? " · bg" : ""}`,
+                    compactPrimary: `${connection.endpoint === undefined ? "Local unavailable" : `${connection.endpoint.host}:${connection.endpoint.port}`} → ${serverDisplayName(snapshot, connection.instanceId)}:${connection.remotePort}`,
+                    state: connection.kind === "persistent"
+                      ? `${connection.state}/bg`
+                      : connection.state,
+                  }, width)}
                 </Text>
               );
             })}

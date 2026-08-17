@@ -123,7 +123,7 @@ test("a server-scoped Connect flow opens and closes a local connection without i
     remotePort: 8188,
     accessMethodId: "ssh-default",
   });
-  assert.match(view.lastFrame(), /127\.0\.0\.1:40123 → Server:8188/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:40123\s+→ Server:8188\s+live/);
   assert.doesNotMatch(view.lastFrame(), /Access Method|Endpoint|daemon|Session/);
 
   await chooseVisibleAction(view, "Close local connection");
@@ -202,7 +202,7 @@ test("ordinary Connect failure offers a truthful in-place retry with the preserv
 
   assert.equal(requests.length, 2);
   assert.deepEqual(requests[1], requests[0]);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:40124 → Server:8188/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:40124\s+→ Server:8188\s+live/);
   assert.doesNotMatch(view.lastFrame(), /Open local connection: failed|Retry connection/);
 });
 
@@ -549,7 +549,7 @@ test("late foreground SSH public-key failure stays visible and retries the retai
   await tick();
   await tick();
   assert.equal(retryCalls, 1);
-  assert.match(view.lastFrame(), /40134 → Server:8188/);
+  assert.match(view.lastFrame(), /40134\s+→ Server:8188\s+live/);
   assert.doesNotMatch(view.lastFrame(), /Local connection failed/);
 });
 
@@ -676,14 +676,14 @@ test("dismissed late failure remains retryable from the selected failed connecti
   view.stdin.write("\r");
   await tick();
   assert.doesNotMatch(view.lastFrame(), /Local connection failed/);
-  assert.match(view.lastFrame(), /40136 → Server:8188 · failed/);
+  assert.match(view.lastFrame(), /40136\s+→ Server:8188\s+failed/);
 
   await chooseVisibleAction(view, "Retry connection");
   await tick();
   await tick();
   assert.equal(retryCalls, 1);
-  assert.match(view.lastFrame(), /40137 → Server:8188/);
-  assert.doesNotMatch(view.lastFrame(), /40136 → Server:8188 · failed/);
+  assert.match(view.lastFrame(), /40137\s+→ Server:8188\s+live/);
+  assert.doesNotMatch(view.lastFrame(), /40136\s+→ Server:8188\s+failed/);
 });
 
 test("late service-port failure is edit-first and returns to the retained service port", async () => {
@@ -804,7 +804,7 @@ test("late foreground recovery owns the qualified 60x20 viewport", async () => {
   assert.ok(frame.split("\n").length <= 20, frame);
   assert.match(frame, /Retry connection/);
   assert.match(frame, /Open Diagnostics/);
-  assert.doesNotMatch(frame, /Connections\n|40135 → Server:8188/);
+  assert.doesNotMatch(frame, /Connections\n|40135\s+→ Server:8188/);
 });
 
 test("late foreground failure waits for an active operation drawer instead of replacing it", async () => {
@@ -1431,7 +1431,7 @@ test("first-use SSH trust is reviewed and accepted inside the local connection f
   await tick();
   await tick();
   assert.equal(accepted, true);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:40222 → Server:22/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:40222\s+→ Server:22\s+live/);
 });
 
 test("quitting with live local connections states the count and renders closing before exit", async () => {
@@ -1493,8 +1493,8 @@ test("quitting with live local connections states the count and renders closing 
   await tick();
   await tick();
   await openConnectionsRoute(view);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:41001 → Server:8188/);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:41002 → Server:7860/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:41001\s+→ Server:8188\s+live/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:41002\s+→ Server:7860\s+live/);
 
   view.stdin.write("q");
   await tick();
@@ -1507,8 +1507,8 @@ test("quitting with live local connections states the count and renders closing 
   await tick();
   assert.equal(closeAllCalls, 1);
   assert.match(view.lastFrame(), /Closing 2 local connections/);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:41001 → Server:8188 · closing/);
-  assert.match(view.lastFrame(), /127\.0\.0\.1:41002 → Server:7860 · closing/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:41001\s+→ Server:8188\s+closing/);
+  assert.match(view.lastFrame(), /127\.0\.0\.1:41002\s+→ Server:7860\s+closing/);
 
   finishCloseAll();
   await tick();
@@ -1896,11 +1896,11 @@ test("cleanup-failed background connection remains visible beside healthy connec
   );
 
   await openConnectionsRoute(view);
-  assert.match(view.lastFrame(), /> 127\.0\.0\.1:48188 → Server:8188 · background/);
-  assert.match(view.lastFrame(), /Local port unavailable → Server:7860 · background · failed/);
+  assert.match(view.lastFrame(), /> 127\.0\.0\.1:48188\s+→ Server:8188 · bg\s+live\/bg/);
+  assert.match(view.lastFrame(), /Local port unavailable\s+→ Server:7860 · bg\s+failed\/bg/);
   view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /> Local port unavailable → Server:7860 · background · failed/);
+  assert.match(view.lastFrame(), /> Local port unavailable\s+→ Server:7860 · bg\s+failed\/bg/);
   await chooseVisibleAction(view, "Show technical details");
   assert.match(view.lastFrame(), /Session ID: session:cleanup-failed/);
   assert.match(view.lastFrame(), /Cleanup failure: plugin-failure: Connection Session cleanup failed/);

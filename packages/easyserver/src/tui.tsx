@@ -13,6 +13,7 @@ import {
   tuiFocusColor,
   type TuiAppearance,
 } from "./tui-appearance.js";
+import { tuiReadableMeasure } from "./tui-layout.js";
 import { TuiOperationDrawer } from "./tui-operation-drawer.js";
 import { ProviderInteractiveSurface } from "./tui-provider-interactive.js";
 import {
@@ -369,10 +370,11 @@ export function TuiShell({
   const rows = height ?? windowSize.rows ?? 24;
   const routeContentRows = Math.max(7, rows - 11);
   const routeContentColumns = Math.max(20, columns - 4);
+  const routeVisualColumns = tuiReadableMeasure(routeContentColumns);
   const diagnosticsReportRows = Math.max(1, routeContentRows - 3);
   const diagnosticsVisualLines =
     diagnostics.status === "ready"
-      ? wrapDiagnosticsText(diagnostics.text, routeContentColumns)
+      ? wrapDiagnosticsText(diagnostics.text, routeVisualColumns)
       : [];
   const diagnosticsMaxScroll = Math.max(
     0,
@@ -2003,9 +2005,11 @@ export function TuiShell({
           <HelpPanel colorEnabled={colorEnabled} />
         </Box>
       ) : activeRoute.id === "overview" ? (
-        <HomeSurface cursor={Math.min(focusedIndex, homeDestinations.length - 1)} appearance={appearance} />
+        <Box width={routeVisualColumns}>
+          <HomeSurface cursor={Math.min(focusedIndex, homeDestinations.length - 1)} appearance={appearance} />
+        </Box>
       ) : (
-        <Box marginTop={1} flexDirection="column" flexGrow={1} minHeight={0}>
+        <Box marginTop={1} flexDirection="column" flexGrow={1} minHeight={0} width={routeVisualColumns}>
           <Text color={muted}>{routeBreadcrumb(activeRoute.id)}</Text>
           <Text bold>{activeRoute.label}</Text>
           <Text color={muted}>{activeRoute.description}</Text>
@@ -2022,7 +2026,7 @@ export function TuiShell({
               readStatus={readStatus}
               screenReader={screenReader}
               height={routeSurfaceRows}
-              width={routeContentColumns}
+              width={routeVisualColumns}
               colorEnabled={colorEnabled}
               settingsCursor={settingsCursor}
               diagnostics={{
@@ -2338,6 +2342,7 @@ function RouteSurface({
           colorEnabled={colorEnabled}
           disabled={rent.interactiveDisabled}
           height={height}
+          width={width}
           screenReader={screenReader}
           onEvent={rent.onInteractiveEvent ?? (() => undefined)}
           onClose={rent.onInteractiveClose ?? (() => undefined)}
@@ -2357,6 +2362,7 @@ function RouteSurface({
       <InstancesSurface
         snapshot={snapshot}
         height={height}
+        width={width}
         selectedInstanceId={servers.selectedInstanceId}
         showDetails={servers.showDetails}
         bulkSelectedInstanceIds={servers.bulkSelectedInstanceIds}
@@ -2371,6 +2377,7 @@ function RouteSurface({
       <ConnectionsSurface
         snapshot={snapshot}
         height={height}
+        width={width}
         screenReader={screenReader}
         flow={connections.flow}
         busy={connections.busy}
@@ -2388,6 +2395,7 @@ function RouteSurface({
     <ProvidersSurface
       snapshot={snapshot}
       height={height}
+      width={width}
       candidatePicker={providers.candidatePicker}
       sourceInput={providers.sourceInput}
       credentialFlow={providers.credentialFlow}

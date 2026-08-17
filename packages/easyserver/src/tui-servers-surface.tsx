@@ -12,6 +12,7 @@ import {
   tuiResourceColor,
 } from "./tui-appearance.js";
 import { tuiFocusWindowWithinRows } from "./tui-focus.js";
+import { tuiResourceRow } from "./tui-layout.js";
 import type {
   TuiInstanceReadItem,
   TuiReadSnapshot,
@@ -30,6 +31,7 @@ import type { TuiOperationPresentation } from "./tui-operation-model.js";
 export interface InstancesSurfaceProps {
   readonly snapshot: TuiReadSnapshot;
   readonly height: number;
+  readonly width: number;
   readonly selectedInstanceId?: string;
   readonly showDetails: boolean;
   readonly bulkSelectedInstanceIds: readonly string[];
@@ -41,6 +43,7 @@ export interface InstancesSurfaceProps {
 export function InstancesSurface({
   snapshot,
   height,
+  width,
   selectedInstanceId,
   showDetails,
   bulkSelectedInstanceIds,
@@ -116,10 +119,13 @@ export function InstancesSurface({
                 : tuiResourceColor(appearance, instance.freshness === "fresh" ? instance.state : instance.freshness)}
               wrap="truncate"
             >
-              {instance.id === selected?.id ? "> " : "  "}
-              {canBulkMutate ? (marked.has(instance.id) ? "[x] " : "[ ] ") : ""}
-              {serverListLabel(instance, serverWindow.start + visibleIndex, items)} · {instance.state ?? "status unavailable"}
-              {instance.freshness === "fresh" ? "" : " · needs refresh"}
+              {tuiResourceRow({
+                marker: `${instance.id === selected?.id ? "> " : "  "}${canBulkMutate ? (marked.has(instance.id) ? "[x] " : "[ ] ") : ""}`,
+                primary: serverListLabel(instance, serverWindow.start + visibleIndex, items),
+                state: instance.freshness === "fresh"
+                  ? (instance.state ?? "unavailable")
+                  : `${instance.state ?? "unknown"}/${instance.freshness}`,
+              }, width)}
             </Text>
           ))}
           {serverWindow.showAfter ? <Text>↓ {serverWindow.hiddenAfter} more servers</Text> : null}

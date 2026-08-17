@@ -469,7 +469,7 @@ test("failed refresh keeps prior snapshot visibly stale after error drawer dismi
   await tick();
   await tick();
   await openProvidersRoute(view);
-  assert.match(view.lastFrame(), /> fixture · ready/);
+  assert.match(view.lastFrame(), /> fixture\s+ready/);
 
   await chooseVisibleAction(view, "Refresh providers");
   await tick();
@@ -480,7 +480,7 @@ test("failed refresh keeps prior snapshot visibly stale after error drawer dismi
   await flushEscape();
   assert.doesNotMatch(view.lastFrame(), /Refresh EasyServer status: failed/);
   assert.match(view.lastFrame(), /Showing the previous snapshot/);
-  assert.match(view.lastFrame(), /> fixture · ready/);
+  assert.match(view.lastFrame(), /> fixture\s+ready/);
 });
 
 test("TuiApp loads and refreshes read data through an injected loader", async () => {
@@ -514,12 +514,12 @@ test("TuiApp loads and refreshes read data through an injected loader", async ()
   await tick();
   assert.equal(calls, 1);
   await openProvidersRoute(view);
-  assert.match(view.lastFrame(), /> fixture · ready/);
+  assert.match(view.lastFrame(), /> fixture\s+ready/);
 
   await chooseVisibleAction(view, "Refresh providers");
   await tick();
   assert.equal(calls, 2);
-  assert.match(view.lastFrame(), /> fixture · ready/);
+  assert.match(view.lastFrame(), /> fixture\s+ready/);
 });
 
 test("routine TUI navigation stays quiet and uses one contextual hint across release terminal sizes", async (t) => {
@@ -560,14 +560,14 @@ test("routine TUI navigation stays quiet and uses one contextual hint across rel
       let frame = view.lastFrame();
       assert.doesNotMatch(frame, /Opened Servers|Selected Quiet|Choose an action|Closed actions/);
       assert.equal((frame.match(/Enter actions/g) ?? []).length, 1);
-      assert.match(frame, /> Quiet A · running/);
-      assert.match(frame, /Quiet B · stopped/);
+      assert.match(frame, /> Quiet A\s+running/);
+      assert.match(frame, /Quiet B\s+stopped/);
       assert.ok(frame.split("\n").length <= height);
 
       view.stdin.write("\u001b[B");
       await tick();
       frame = view.lastFrame();
-      assert.match(frame, /> Quiet B · stopped/);
+      assert.match(frame, /> Quiet B\s+stopped/);
       assert.doesNotMatch(frame, /Selected Quiet B/);
 
       view.stdin.write("\r");

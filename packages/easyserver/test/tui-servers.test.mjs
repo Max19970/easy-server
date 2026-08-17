@@ -111,15 +111,15 @@ test("degraded provider state remains visible while healthy instance inventory s
   await openServersRoute(view);
   assert.match(view.lastFrame(), /Some providers are unavailable/);
   assert.match(view.lastFrame(), /offline.*provider-unavailable/);
-  assert.match(view.lastFrame(), /> Healthy GPU · running/);
+  assert.match(view.lastFrame(), /> Healthy GPU\s+running/);
   assert.doesNotMatch(view.lastFrame(), /Normalized state: running/);
   await chooseVisibleAction(view, "Show technical details");
   assert.match(view.lastFrame(), /Normalized state: running/);
   assert.match(view.lastFrame(), /Available lifecycle actions: none/);
 
   await openProvidersRoute(view);
-  assert.match(view.lastFrame(), /Healthy Provider · ready/);
-  assert.match(view.lastFrame(), /broken-plugin\.mjs · failed/);
+  assert.match(view.lastFrame(), /Healthy Provider\s+ready/);
+  assert.match(view.lastFrame(), /broken-plugin\.mjs\s+failed/);
 });
 
 test("stale retained instance state is visibly distinct from a fresh provider observation", async () => {
@@ -161,7 +161,7 @@ test("stale retained instance state is visibly distinct from a fresh provider ob
 
   await openServersRoute(view);
 
-  assert.match(view.lastFrame(), /> Retained GPU · running · needs refresh/);
+  assert.match(view.lastFrame(), /> Retained GPU\s+running\/stale/);
   assert.doesNotMatch(view.lastFrame(), /Last observed:/);
   await chooseVisibleAction(view, "Show technical details");
   assert.match(view.lastFrame(), /Freshness: stale/);
@@ -206,7 +206,7 @@ test("empty instance guidance reflects configured but degraded providers", async
 
   await openServersRoute(view);
   assert.match(view.lastFrame(), /No servers were reported by available providers/i);
-  assert.match(view.lastFrame(), /unavailable providers may have\s+additional servers/i);
+  assert.match(view.lastFrame(), /unavailable providers may have additional\s+servers/i);
   assert.doesNotMatch(view.lastFrame(), /because provider inventory is incomplete/i);
   assert.doesNotMatch(view.lastFrame(), /Configure a provider first/);
 
@@ -250,14 +250,14 @@ test("instance actions come only from provider-declared availableActions", async
   const view = render(shell({ width: 100, readSnapshot: snapshot, readStatus: "ready" }));
 
   await openServersRoute(view);
-  assert.match(view.lastFrame(), /> Server #1 · running/);
+  assert.match(view.lastFrame(), /> Server #1\s+running/);
   assert.doesNotMatch(view.lastFrame(), /Available lifecycle actions:/);
   await chooseVisibleAction(view, "Show technical details");
   assert.match(view.lastFrame(), /Available lifecycle actions: none/);
 
   view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /> Server #2 · running/);
+  assert.match(view.lastFrame(), /> Server #2\s+running/);
   assert.doesNotMatch(view.lastFrame(), /Available lifecycle actions:/);
   await chooseVisibleAction(view, "Show technical details");
   assert.match(view.lastFrame(), /Available lifecycle actions: Stop server, Destroy server/);
@@ -313,8 +313,8 @@ test("Instances multi-select preserves the exact target set and uses host bulk a
   await chooseVisibleAction(view, "Add to bulk selection");
 
   assert.match(view.lastFrame(), /Selected servers \(2\)/);
-  assert.match(view.lastFrame(), /Server #1 · running/);
-  assert.match(view.lastFrame(), /Server #2 · running/);
+  assert.match(view.lastFrame(), /Server #1\s+running/);
+  assert.match(view.lastFrame(), /Server #2\s+running/);
   assert.doesNotMatch(view.lastFrame(), /instance:a|instance:b|provider=alpha|provider=beta|remote-a|remote-b/);
   await chooseVisibleAction(view, "stop 2 selected servers");
   assert.deepEqual(mutations, [
@@ -440,12 +440,12 @@ test("instance selection is preserved by canonical ID across reorder and narrow 
   await openServersRoute(view);
   view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /> Server B · stopped/);
+  assert.match(view.lastFrame(), /> Server B\s+stopped/);
 
   view.rerender(shell({ width: 60, readSnapshot: reordered, readStatus: "ready" }));
   await tick();
   assert.match(view.lastFrame(), /Home › Servers/);
-  assert.match(view.lastFrame(), /> Server B · stopped/);
+  assert.match(view.lastFrame(), /> Server B\s+stopped/);
   await chooseVisibleAction(view, "Show technical details");
   assert.match(view.lastFrame(), /Provider: fixture/);
   assert.match(view.lastFrame(), /Management: discovered/);
@@ -487,7 +487,7 @@ test("discovered instances expose adoption and reversible provider actions but n
 
   await openServersRoute(view);
 
-  assert.match(view.lastFrame(), /> Imported server · running/);
+  assert.match(view.lastFrame(), /> Imported server\s+running/);
   view.stdin.write("\r");
   await tick();
   assert.match(view.lastFrame(), /Adopt for EasyServer management/);
@@ -556,7 +556,7 @@ test("disappearing selected instance never silently retargets lifecycle input", 
   await openServersRoute(view);
   view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /> Server B · stopped/);
+  assert.match(view.lastFrame(), /> Server B\s+stopped/);
 
   view.rerender(
     shell({
@@ -577,7 +577,7 @@ test("disappearing selected instance never silently retargets lifecycle input", 
 
   view.stdin.write("\u001b[B");
   await tick();
-  assert.match(view.lastFrame(), /> Server A · stopped/);
+  assert.match(view.lastFrame(), /> Server A\s+stopped/);
   await chooseVisibleAction(view, "Start server");
   assert.deepEqual(mutations, [
     { kind: "action", instanceId: "instance:a", action: "instance.start" },

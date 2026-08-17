@@ -151,7 +151,7 @@ test("50-server inventory stays focused and actionable across real release termi
   await view.flush();
 
   await openServersRoute(view);
-  assert.match(view.lastFrame(), /> \[ \] Server 01 · running/);
+  assert.match(view.lastFrame(), /> \[ \] Server 01\s+running/);
   assert.match(view.lastFrame(), /↓ \d+ more servers/);
   assert.ok(
     view.lastFrame().split("\n").length <= 20,
@@ -183,14 +183,14 @@ test("50-server inventory stays focused and actionable across real release termi
     view.stdin.write("\u001b[B");
     await tick();
   }
-  assert.match(view.lastFrame(), /> \[ \] Server 25 · running/);
+  assert.match(view.lastFrame(), /> \[ \] Server 25\s+running/);
   assert.match(view.lastFrame(), /↑ \d+ more servers/);
   assert.match(view.lastFrame(), /↓ \d+ more servers/);
   assert.ok(view.lastFrame().split("\n").length <= 20);
 
   view.stdout.resize(80, 24);
   await tick();
-  assert.match(view.lastFrame(), /> \[ \] Server 25 · running/);
+  assert.match(view.lastFrame(), /> \[ \] Server 25\s+running/);
   assert.ok(view.lastFrame().split("\n").length <= 24);
   view.stdin.write("\r");
   await tick();
@@ -202,14 +202,14 @@ test("50-server inventory stays focused and actionable across real release termi
     view.stdin.write("\u001b[B");
     await tick();
   }
-  assert.match(view.lastFrame(), /> \[ \] Server 50 · stopped/);
+  assert.match(view.lastFrame(), /> \[ \] Server 50\s+stopped/);
   assert.match(view.lastFrame(), /↑ \d+ more servers/);
   assert.doesNotMatch(view.lastFrame(), /↓ \d+ more servers/);
   assert.ok(view.lastFrame().split("\n").length <= 24);
 
   view.stdout.resize(120, 40);
   await tick();
-  assert.match(view.lastFrame(), /> \[ \] Server 50 · stopped/);
+  assert.match(view.lastFrame(), /> \[ \] Server 50\s+stopped/);
   assert.ok(view.lastFrame().split("\n").length <= 40);
   view.stdin.write("\r");
   await tick();
@@ -337,14 +337,14 @@ test("degraded server notice stays secondary without overflowing the narrow serv
   await openServersRoute(view);
   assert.match(view.lastFrame(), /Some providers are unavailable/);
   assert.match(view.lastFrame(), /offline-provider · provider-unavailable/);
-  assert.match(view.lastFrame(), /> Degraded 01 · running/);
+  assert.match(view.lastFrame(), /> Degraded 01\s+running/);
   assert.ok(view.lastFrame().split("\n").length <= 16);
 
   for (let index = 0; index < 15; index += 1) {
     view.stdin.write("\u001b[B");
     await tick();
   }
-  assert.match(view.lastFrame(), /> Degraded 16 · running/);
+  assert.match(view.lastFrame(), /> Degraded 16\s+running/);
   assert.ok(view.lastFrame().split("\n").length <= 16);
 });
 
@@ -579,7 +579,7 @@ test("TuiApp refreshes provider state after registration mutation succeeds", asy
   assert.deepEqual(mutations, [
     { kind: "add-plugin", source: "@fixture/provider" },
   ]);
-  assert.match(view.lastFrame(), /> Fixture Provider · ready/);
+  assert.match(view.lastFrame(), /> Fixture Provider\s+ready/);
 });
 
 test("Providers enable and disable the selected configured plugin by source", async () => {
@@ -887,7 +887,7 @@ test("Providers explain credential eligibility for providers without usable desc
   );
 
   await openProvidersRoute(view);
-  assert.match(view.lastFrame(), /> Disabled Provider · disabled/);
+  assert.match(view.lastFrame(), /> Disabled Provider\s+disabled/);
 
   view.stdin.write("\r");
   await tick();
@@ -1016,7 +1016,7 @@ test("TuiApp never exposes credential values while mutating and refreshes readin
   await tick();
   await tick();
   await tick();
-  assert.match(view.lastFrame(), /> Credential Provider · ready/);
+  assert.match(view.lastFrame(), /> Credential Provider\s+ready/);
   assert.doesNotMatch(view.lastFrame(), new RegExp(secret));
 });
 
@@ -1277,7 +1277,7 @@ test("TuiApp runs a generic provider workflow through host confirmation and navi
   await tick();
   await tick();
   assert.match(view.lastFrame(), /Home › Servers/);
-  assert.match(view.lastFrame(), /> Server · running/);
+  assert.match(view.lastFrame(), /> Server\s+running/);
   assert.doesNotMatch(view.lastFrame(), /EasyServer ID: instance:nebula-42/);
   assert.equal(closeCalls, 0);
 

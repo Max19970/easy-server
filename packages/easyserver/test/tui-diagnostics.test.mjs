@@ -488,7 +488,7 @@ test("provider readiness and operation failures expose a direct privacy-safe Dia
     }),
   );
   await openProviders(providerView);
-  assert.match(providerView.lastFrame(), /fixture-provider · credentials-missing/);
+  assert.match(providerView.lastFrame(), /fixture-provider\s+credentials-missing/);
 
   cleanup();
   let diagnosticRoute;

@@ -7,6 +7,7 @@ import {
   tuiResourceColor,
 } from "./tui-appearance.js";
 import { tuiFocusWindowWithinRows } from "./tui-focus.js";
+import { tuiResourceRow } from "./tui-layout.js";
 import type {
   TuiProviderCandidateReadItem,
   TuiProviderWorkflowReadItem,
@@ -108,6 +109,7 @@ export function NewInstanceSurface({
 export function ProvidersSurface({
   snapshot,
   height,
+  width,
   candidatePicker,
   sourceInput,
   credentialFlow,
@@ -119,6 +121,7 @@ export function ProvidersSurface({
 }: {
   readonly snapshot: TuiReadSnapshot;
   readonly height: number;
+  readonly width: number;
   readonly candidatePicker?: ProviderCandidatePickerView;
   readonly sourceInput?: string;
   readonly credentialFlow?: ProviderCredentialFlowView;
@@ -288,15 +291,18 @@ export function ProvidersSurface({
       {snapshot.providers.items.map((provider) => {
         const selected = provider.source === selectedSource;
         return (
-          <Box key={`${provider.source}:${provider.pluginId ?? "unloaded"}`} flexDirection="column" marginBottom={1}>
+          <Box key={`${provider.source}:${provider.pluginId ?? "unloaded"}`} flexDirection="column">
             <Text
               bold={selected}
               color={selected
                 ? tuiFocusColor(appearance, true)
                 : tuiResourceColor(appearance, provider.state === "loaded" ? provider.readiness : provider.state)}
             >
-              {selected ? "> " : "  "}{provider.displayName ?? provider.pluginId ?? provider.providerId ?? provider.source}
-              {` · ${provider.state === "loaded" ? provider.readiness : provider.state}`}
+              {tuiResourceRow({
+                marker: selected ? "> " : "  ",
+                primary: provider.displayName ?? provider.pluginId ?? provider.providerId ?? provider.source,
+                state: provider.state === "loaded" ? provider.readiness : provider.state,
+              }, width)}
             </Text>
             {!selected || !showDetails ? null : (
               <Box flexDirection="column" marginLeft={2}>
