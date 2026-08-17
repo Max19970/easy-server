@@ -1,6 +1,6 @@
 {
   "name": "@easyai101/easyserver-plugin-vastai",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "EasyServer Provider Plugin for Vast.ai.",
   "easyserver": {
     "kind": "provider-plugin",

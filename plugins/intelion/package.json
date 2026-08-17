@@ -1,6 +1,6 @@
 {
   "name": "@easyai101/easyserver-plugin-intelion",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "EasyServer Provider Plugin for Intelion.cloud.",
   "easyserver": {
     "kind": "provider-plugin",

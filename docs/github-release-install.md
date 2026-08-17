@@ -24,13 +24,13 @@ The authoritative platform and Secret Store boundary is [Supported platforms](su
 
 ## Download the release assets
 
-For release `v0.2.2`, download the artifact for your platform plus the common checksum manifest:
+For release `v0.2.3`, download the artifact for your platform plus the common checksum manifest:
 
 ```text
-easyserver-0.2.2-windows-x64.zip
-easyserver-0.2.2-linux-x64.tar.gz
-easyserver-0.2.2-macos-arm64.tar.gz
-easyserver-0.2.2-SHA256SUMS.txt
+easyserver-0.2.3-windows-x64.zip
+easyserver-0.2.3-linux-x64.tar.gz
+easyserver-0.2.3-macos-arm64.tar.gz
+easyserver-0.2.3-SHA256SUMS.txt
 ```
 
 The checksum manifest contains one SHA-256 entry for every portable artifact.
@@ -42,8 +42,8 @@ The checksum manifest contains one SHA-256 entry for every portable artifact.
 Run this in Windows PowerShell from the directory containing the ZIP and checksum manifest:
 
 ```powershell
-$artifact = 'easyserver-0.2.2-windows-x64.zip'
-$line = Get-Content .\easyserver-0.2.2-SHA256SUMS.txt |
+$artifact = 'easyserver-0.2.3-windows-x64.zip'
+$line = Get-Content .\easyserver-0.2.3-SHA256SUMS.txt |
   Where-Object { $_ -match "  $([regex]::Escape($artifact))$" } |
   Select-Object -Single
 if (-not $line) { throw 'EasyServer release checksum entry is missing' }
@@ -62,15 +62,15 @@ if ($actual -ne $expected) { throw 'EasyServer release checksum mismatch' }
 ### Ubuntu
 
 ```sh
-artifact='easyserver-0.2.2-linux-x64.tar.gz'
-grep "  $artifact$" easyserver-0.2.2-SHA256SUMS.txt | sha256sum --check -
+artifact='easyserver-0.2.3-linux-x64.tar.gz'
+grep "  $artifact$" easyserver-0.2.3-SHA256SUMS.txt | sha256sum --check -
 ```
 
 ### macOS
 
 ```sh
-artifact='easyserver-0.2.2-macos-arm64.tar.gz'
-expected=$(awk -v name="$artifact" '$2 == name { print $1 }' easyserver-0.2.2-SHA256SUMS.txt)
+artifact='easyserver-0.2.3-macos-arm64.tar.gz'
+expected=$(awk -v name="$artifact" '$2 == name { print $1 }' easyserver-0.2.3-SHA256SUMS.txt)
 actual=$(shasum -a 256 "$artifact" | awk '{ print $1 }')
 [ -n "$expected" ] && [ "$actual" = "$expected" ] || { echo 'EasyServer release checksum mismatch' >&2; exit 1; }
 ```
@@ -82,9 +82,9 @@ Do not continue with an artifact whose checksum does not match the published man
 ### Windows
 
 ```powershell
-$easyserver = Join-Path $PWD 'easyserver-0.2.2-windows-x64'
+$easyserver = Join-Path $PWD 'easyserver-0.2.3-windows-x64'
 New-Item -ItemType Directory -Force $easyserver | Out-Null
-Expand-Archive .\easyserver-0.2.2-windows-x64.zip -DestinationPath $easyserver -Force
+Expand-Archive .\easyserver-0.2.3-windows-x64.zip -DestinationPath $easyserver -Force
 & "$easyserver\easyserver.cmd" --version
 & "$easyserver\easyserver.cmd" plugins list
 ```
@@ -98,9 +98,9 @@ Run the TUI with:
 ### Ubuntu
 
 ```sh
-easyserver="$PWD/easyserver-0.2.2-linux-x64"
+easyserver="$PWD/easyserver-0.2.3-linux-x64"
 mkdir -p "$easyserver"
-tar -xzf easyserver-0.2.2-linux-x64.tar.gz -C "$easyserver"
+tar -xzf easyserver-0.2.3-linux-x64.tar.gz -C "$easyserver"
 "$easyserver/bin/easyserver" --version
 "$easyserver/bin/easyserver" plugins list
 ```
@@ -114,9 +114,9 @@ Run the TUI with:
 ### macOS
 
 ```sh
-easyserver="$PWD/easyserver-0.2.2-macos-arm64"
+easyserver="$PWD/easyserver-0.2.3-macos-arm64"
 mkdir -p "$easyserver"
-tar -xzf easyserver-0.2.2-macos-arm64.tar.gz -C "$easyserver"
+tar -xzf easyserver-0.2.3-macos-arm64.tar.gz -C "$easyserver"
 "$easyserver/bin/easyserver" --version
 "$easyserver/bin/easyserver" plugins list
 ```
@@ -127,7 +127,7 @@ Run the TUI with:
 "$easyserver/bin/easyserver"
 ```
 
-A fresh `0.2.2` bundle on every platform reports version `0.2.2` and:
+A fresh `0.2.3` bundle on every platform reports version `0.2.3` and:
 
 ```text
 No provider plugins configured.
@@ -144,14 +144,14 @@ Provider Plugins are opt-in packages. Install them into the **same extracted Eas
 Vast.ai:
 
 ```powershell
-npm install --global --prefix $easyserver @easyai101/easyserver-plugin-vastai@0.2.2
+npm install --global --prefix $easyserver @easyai101/easyserver-plugin-vastai@0.2.3
 & "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-vastai
 ```
 
 Intelion.cloud:
 
 ```powershell
-npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion@0.2.2
+npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion@0.2.3
 & "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-intelion
 ```
 
@@ -160,14 +160,14 @@ npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion@
 Vast.ai:
 
 ```sh
-npm install --global --prefix "$easyserver" @easyai101/easyserver-plugin-vastai@0.2.2
+npm install --global --prefix "$easyserver" @easyai101/easyserver-plugin-vastai@0.2.3
 "$easyserver/bin/easyserver" plugins add @easyai101/easyserver-plugin-vastai
 ```
 
 Intelion.cloud:
 
 ```sh
-npm install --global --prefix "$easyserver" @easyai101/easyserver-plugin-intelion@0.2.2
+npm install --global --prefix "$easyserver" @easyai101/easyserver-plugin-intelion@0.2.3
 "$easyserver/bin/easyserver" plugins add @easyai101/easyserver-plugin-intelion
 ```
 

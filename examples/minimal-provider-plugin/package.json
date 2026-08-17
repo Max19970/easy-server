@@ -1,6 +1,6 @@
 {
   "name": "@easyai101/easyserver-example-provider",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "description": "Minimal EasyServer Provider Plugin example.",
   "easyserver": {

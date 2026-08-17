@@ -530,7 +530,7 @@ test("no-argument non-TTY invocation fails without terminal control output", () 
 test("prints version", () => {
   const result = run("--version");
   assert.equal(result.status, 0);
-  assert.equal(result.stdout, "0.2.2\n");
+  assert.equal(result.stdout, "0.2.3\n");
 });
 
 test("global --json emits version and help through the stable success envelope", () => {
@@ -544,7 +544,7 @@ test("global --json emits version and help through the stable success envelope",
   assert.deepEqual(JSON.parse(version.stdout), {
     schemaVersion: 1,
     ok: true,
-    data: { version: "0.2.2" },
+    data: { version: "0.2.3" },
   });
   assert.equal(version.stderr, "");
 
@@ -725,7 +725,7 @@ test("command mode never initializes the React or Ink runtime", () => {
 
   const versionResult = runWithoutTuiRuntime("--version");
   assert.equal(versionResult.status, 0, versionResult.stderr);
-  assert.equal(versionResult.stdout, "0.2.2\n");
+  assert.equal(versionResult.stdout, "0.2.3\n");
 
   const namedCommandResult = runWithoutTuiRuntime("plugins", "list");
   assert.equal(namedCommandResult.status, 0, namedCommandResult.stderr);
@@ -763,7 +763,7 @@ test("doctor emits a privacy-safe troubleshooting payload", async () => {
   assert.equal(result.status, 0, result.stderr);
   const report = JSON.parse(result.stdout);
   assert.equal(report.schemaVersion, 1);
-  assert.equal(report.easyserver.version, "0.2.2");
+  assert.equal(report.easyserver.version, "0.2.3");
   assert.equal(report.state.configuredPlugins, 1);
   assert.equal(report.state.credentialBindings, 1);
   assert.equal(report.state.instanceBindings, 1);

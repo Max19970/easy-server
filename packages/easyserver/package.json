@@ -1,6 +1,6 @@
 {
   "name": "@easyai101/easyserver",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Provider-independent CLI for acquiring, managing and locally accessing rented compute.",
   "license": "MIT",
   "type": "module",
