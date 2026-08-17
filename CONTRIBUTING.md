@@ -14,6 +14,14 @@ Install the repository dependencies:
 npm ci
 ```
 
+For focused package work, run that workspace's standard test entry point, for example:
+
+```powershell
+npm test --workspace=@easyai101/easyserver
+```
+
+Workspace-local `npm test` builds the current package source first (and rebuilds the current SDK where required) before running tests against compiled ESM output. Do not rely on a pre-existing ignored `dist` tree when judging focused changes.
+
 Run the full deterministic release-level repository check before submitting a substantial change:
 
 ```powershell

@@ -41,7 +41,8 @@
     "prepack": "npm run build",
     "pretypecheck": "npm run build --workspace=@easyai101/easyserver-plugin-sdk",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test test/*.test.mjs",
+    "test": "npm run build && npm run test:compiled",
+    "test:compiled": "node --test test/*.test.mjs",
     "start": "node dist/cli.js"
   },
   "dependencies": {
