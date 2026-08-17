@@ -1,6 +1,11 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { escapeTerminalText } from "./terminal-text.js";
+import {
+  tuiAppearance,
+  tuiFocusColor,
+  tuiResourceColor,
+} from "./tui-appearance.js";
 import { tuiFocusWindowWithinRows } from "./tui-focus.js";
 import type {
   TuiProviderCandidateReadItem,
@@ -45,10 +50,13 @@ export type ProviderCredentialFlowView =
 export function NewInstanceSurface({
   snapshot,
   selectedWorkflowKey,
+  colorEnabled,
 }: {
   readonly snapshot: TuiReadSnapshot;
   readonly selectedWorkflowKey?: string;
+  readonly colorEnabled: boolean;
 }): React.ReactElement {
+  const appearance = tuiAppearance(colorEnabled);
   if (snapshot.providerWorkflows.status === "failed") {
     return (
       <Box flexDirection="column">
@@ -79,7 +87,7 @@ export function NewInstanceSurface({
         const selected = key === selectedWorkflowKey;
         return (
           <Box key={key} flexDirection="column" marginTop={1}>
-            <Text bold={selected}>
+            <Text bold={selected} color={tuiFocusColor(appearance, selected)}>
               {selected ? "> " : "  "}
               {workflow.providerId} · {workflow.featureDisplayName} · {workflow.commandName}
               {workflow.presentation.kind === "interactive-flow" ? " · interactive" : " · CLI only"}
@@ -107,6 +115,7 @@ export function ProvidersSurface({
   showDetails,
   canRegister,
   canAddInstalled,
+  colorEnabled,
 }: {
   readonly snapshot: TuiReadSnapshot;
   readonly height: number;
@@ -117,7 +126,9 @@ export function ProvidersSurface({
   readonly showDetails: boolean;
   readonly canRegister: boolean;
   readonly canAddInstalled: boolean;
+  readonly colorEnabled: boolean;
 }): React.ReactElement {
+  const appearance = tuiAppearance(colorEnabled);
   if (candidatePicker !== undefined) {
     const focusedCandidate = candidatePicker.items[candidatePicker.cursor];
     const fixedRows = 2 + (focusedCandidate?.description === undefined ? 0 : 1);
@@ -137,7 +148,12 @@ export function ProvidersSurface({
             {candidatePicker.items.slice(window.start, window.end).map((candidate, visibleIndex) => {
               const index = window.start + visibleIndex;
               return (
-                <Text key={candidate.source} bold={index === candidatePicker.cursor} wrap="truncate">
+                <Text
+                  key={candidate.source}
+                  bold={index === candidatePicker.cursor}
+                  color={tuiFocusColor(appearance, index === candidatePicker.cursor)}
+                  wrap="truncate"
+                >
                   {index === candidatePicker.cursor ? "> " : "  "}{candidate.displayName}
                 </Text>
               );
@@ -199,11 +215,11 @@ export function ProvidersSurface({
             )}
             <Box marginTop={1} flexDirection="column">
               <Text bold>Actions</Text>
-              <Text bold={credentialFlow.cursor === 0}>
+              <Text bold={credentialFlow.cursor === 0} color={tuiFocusColor(appearance, credentialFlow.cursor === 0)}>
                 {credentialFlow.cursor === 0 ? "> " : "  "}Set or rotate
               </Text>
               {selectedCredential?.configured ? (
-                <Text bold={credentialFlow.cursor === 1}>
+                <Text bold={credentialFlow.cursor === 1} color={tuiFocusColor(appearance, credentialFlow.cursor === 1)}>
                   {credentialFlow.cursor === 1 ? "> " : "  "}Remove credential
                 </Text>
               ) : null}
@@ -221,7 +237,10 @@ export function ProvidersSurface({
           <Text>↑/↓ choose credential · Enter actions · Esc back</Text>
           {provider.credentials.items.map((credential) => (
             <Box key={credential.name} flexDirection="column" marginTop={1}>
-              <Text bold={credential.name === credentialFlow.selectedName}>
+              <Text
+                bold={credential.name === credentialFlow.selectedName}
+                color={tuiFocusColor(appearance, credential.name === credentialFlow.selectedName)}
+              >
                 {credential.name === credentialFlow.selectedName ? "> " : "  "}
                 {credential.name} · {credential.required ? "required" : "optional"} · {credential.configured ? "configured" : "missing"}
               </Text>
@@ -270,7 +289,12 @@ export function ProvidersSurface({
         const selected = provider.source === selectedSource;
         return (
           <Box key={`${provider.source}:${provider.pluginId ?? "unloaded"}`} flexDirection="column" marginBottom={1}>
-            <Text bold={selected}>
+            <Text
+              bold={selected}
+              color={selected
+                ? tuiFocusColor(appearance, true)
+                : tuiResourceColor(appearance, provider.state === "loaded" ? provider.readiness : provider.state)}
+            >
               {selected ? "> " : "  "}{provider.displayName ?? provider.pluginId ?? provider.providerId ?? provider.source}
               {` · ${provider.state === "loaded" ? provider.readiness : provider.state}`}
             </Text>

@@ -10,6 +10,12 @@ import {
   type ConnectionFailureCause,
 } from "./connection-failure.js";
 import { escapeTerminalText } from "./terminal-text.js";
+import {
+  tuiAppearance,
+  tuiFocusColor,
+  tuiResourceColor,
+  type TuiAppearance,
+} from "./tui-appearance.js";
 import { tuiFocusWindowWithinRows } from "./tui-focus.js";
 import type {
   TuiEndpointIntentReadItem,
@@ -64,6 +70,7 @@ export interface ConnectionsSurfaceProps {
   readonly selectedEndpointIntentName?: string;
   readonly selectedConnectionTarget?: TuiConnectionTarget;
   readonly showDetails: boolean;
+  readonly colorEnabled: boolean;
 }
 
 export function ConnectionsSurface({
@@ -78,7 +85,9 @@ export function ConnectionsSurface({
   selectedEndpointIntentName,
   selectedConnectionTarget,
   showDetails,
+  colorEnabled,
 }: ConnectionsSurfaceProps): React.ReactElement {
+  const appearance = tuiAppearance(colorEnabled);
   if (flow !== undefined) {
     const instances =
       snapshot.instances.status === "ready" ? snapshot.instances.items : [];
@@ -119,7 +128,14 @@ export function ConnectionsSurface({
                     <Text>↑ {instanceWindow.hiddenBefore} more servers</Text>
                   ) : null}
                   {instances.slice(instanceWindow.start, instanceWindow.end).map((instance, visibleIndex) => (
-                    <Text key={instance.id} bold={instance.id === flow.instanceId} wrap="truncate">
+                    <Text
+                      key={instance.id}
+                      bold={instance.id === flow.instanceId}
+                      color={instance.id === flow.instanceId
+                        ? tuiFocusColor(appearance, true)
+                        : tuiResourceColor(appearance, instance.freshness === "fresh" ? instance.state : instance.freshness)}
+                      wrap="truncate"
+                    >
                       {instance.id === flow.instanceId ? "> " : "  "}
                       {serverListLabel(instance, instanceWindow.start + visibleIndex, instances)} · {instance.state ?? "status unavailable"}
                     </Text>
@@ -155,7 +171,11 @@ export function ConnectionsSurface({
                 </Text>
               ) : (
                 flow.accessMethods.map((method, index) => (
-                  <Text key={method.id} bold={method.id === flow.accessMethodId}>
+                  <Text
+                    key={method.id}
+                    bold={method.id === flow.accessMethodId}
+                    color={tuiFocusColor(appearance, method.id === flow.accessMethodId)}
+                  >
                     {method.id === flow.accessMethodId ? "> " : "  "}
                     {escapeTerminalText(method.id)} · {escapeTerminalText(method.kind)} · {method.mode}
                     {index === 0 ? " · default" : ""}
@@ -325,7 +345,12 @@ export function ConnectionsSurface({
                 selectedConnectionTarget?.kind === connection.kind &&
                 selectedConnectionTarget.id === connection.id;
               return (
-                <Text key={`${connection.kind}:${connection.id}`} bold={selectedRow} wrap="truncate">
+                <Text
+                  key={`${connection.kind}:${connection.id}`}
+                  bold={selectedRow}
+                  color={selectedRow ? tuiFocusColor(appearance, true) : tuiResourceColor(appearance, connection.state)}
+                  wrap="truncate"
+                >
                   {selectedRow ? "> " : "  "}
                   {connection.endpoint === undefined
                     ? "Local port unavailable"
@@ -358,7 +383,7 @@ export function ConnectionsSurface({
             </Box>
           )}
           {selectedPersistent === undefined ? null : (
-            <PersistentSessionDetail session={selectedPersistent} />
+            <PersistentSessionDetail session={selectedPersistent} appearance={appearance} />
           )}
           <Box marginTop={1} flexDirection="column">
             <Text bold>Saved background connection definitions</Text>
@@ -375,6 +400,7 @@ export function ConnectionsSurface({
                     key={intent.operationName}
                     intent={intent}
                     selected={intent.operationName === selectedIntent?.operationName}
+                    appearance={appearance}
                   />
                 ))}
                 {selectedIntent === undefined ? null : (
@@ -391,14 +417,16 @@ export function ConnectionsSurface({
 
 function PersistentSessionDetail({
   session,
+  appearance,
 }: {
   readonly session: TuiPersistentSessionReadItem;
+  readonly appearance: TuiAppearance;
 }): React.ReactElement {
   return (
     <Box marginTop={1} flexDirection="column">
       <Text bold>Persistent Session detail</Text>
       <Text>Session ID: {session.id}</Text>
-      <Text>State: {session.state}</Text>
+      <Text color={tuiResourceColor(appearance, session.state)}>State: {session.state}</Text>
       <Text>Instance: {session.instanceId}</Text>
       <Text>Remote target: {session.remoteHost}:{session.remotePort}</Text>
       <Text>Requested local port: {session.requestedLocalPort ?? "dynamic"}</Text>
@@ -416,16 +444,21 @@ function PersistentSessionDetail({
 function EndpointIntentLine({
   intent,
   selected,
+  appearance,
 }: {
   readonly intent: TuiEndpointIntentReadItem;
   readonly selected: boolean;
+  readonly appearance: TuiAppearance;
 }): React.ReactElement {
   const realization =
     intent.state === "live" && intent.endpoint !== undefined
       ? `live endpoint=${intent.endpoint.host}:${intent.endpoint.port}`
       : intent.state;
   return (
-    <Text bold={selected}>
+    <Text
+      bold={selected}
+      color={selected ? tuiFocusColor(appearance, true) : tuiResourceColor(appearance, intent.state)}
+    >
       {selected ? "> " : "  "}{intent.name} · {intent.enabled ? "enabled" : "disabled"} · {realization}
       {intent.state === "error" ? ` · ${intent.failure?.code ?? "failure"}` : ""}
     </Text>

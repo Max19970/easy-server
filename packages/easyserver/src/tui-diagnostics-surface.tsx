@@ -1,6 +1,10 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { DiagnosticsReport } from "./diagnostics.js";
+import {
+  tuiAppearance,
+  tuiResourceColor,
+} from "./tui-appearance.js";
 
 export interface TuiDiagnosticsSummary {
   readonly version: string;
@@ -43,7 +47,8 @@ export function DiagnosticsSurface({
   width,
   colorEnabled,
 }: DiagnosticsSurfaceProps): React.ReactElement {
-  const muted = colorEnabled ? "gray" : undefined;
+  const appearance = tuiAppearance(colorEnabled);
+  const muted = appearance.muted;
   if (diagnostics.status === "idle") {
     return (
       <Box flexDirection="column">
@@ -103,11 +108,15 @@ export function DiagnosticsSurface({
     <Box flexDirection="column">
       <Text bold>Support summary</Text>
       <Text>EasyServer: v{summary.version}</Text>
-      <Text>Local state: {diagnosticsStateLabel(summary.stateStatus)}</Text>
+      <Text color={tuiResourceColor(appearance, summary.stateStatus === "ok" ? "ready" : summary.stateStatus === "empty" ? "stopped" : "error")}>
+        Local state: {diagnosticsStateLabel(summary.stateStatus)}
+      </Text>
       <Text>
         Providers: {summary.configuredPlugins} configured{summary.failedPlugins > 0 ? ` · ${summary.failedPlugins} need attention` : " · no reported failures"}
       </Text>
-      <Text>Connection service: {diagnosticsDaemonLabel(summary.daemonStatus)}</Text>
+      <Text color={tuiResourceColor(appearance, summary.daemonStatus)}>
+        Connection service: {diagnosticsDaemonLabel(summary.daemonStatus)}
+      </Text>
       <Text>SSH tools: client {summary.ssh} · key scan {summary.sshKeyscan}</Text>
       <Box marginTop={1} flexDirection="column">
         <Text>

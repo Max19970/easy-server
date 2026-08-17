@@ -6,6 +6,11 @@ import {
   PROVIDER_CAPABILITIES,
   type AvailableAction,
 } from "@easyai101/easyserver-plugin-sdk";
+import {
+  tuiAppearance,
+  tuiFocusColor,
+  tuiResourceColor,
+} from "./tui-appearance.js";
 import { tuiFocusWindowWithinRows } from "./tui-focus.js";
 import type {
   TuiInstanceReadItem,
@@ -30,6 +35,7 @@ export interface InstancesSurfaceProps {
   readonly bulkSelectedInstanceIds: readonly string[];
   readonly canMutate: boolean;
   readonly canBulkMutate: boolean;
+  readonly colorEnabled: boolean;
 }
 
 export function InstancesSurface({
@@ -40,7 +46,9 @@ export function InstancesSurface({
   bulkSelectedInstanceIds,
   canMutate,
   canBulkMutate,
+  colorEnabled,
 }: InstancesSurfaceProps): React.ReactElement {
+  const appearance = tuiAppearance(colorEnabled);
   if (snapshot.instances.status === "failed") {
     return (
       <Box flexDirection="column">
@@ -100,7 +108,14 @@ export function InstancesSurface({
         <Box flexDirection="column">
           {serverWindow.showBefore ? <Text>↑ {serverWindow.hiddenBefore} more servers</Text> : null}
           {items.slice(serverWindow.start, serverWindow.end).map((instance, visibleIndex) => (
-            <Text key={instance.id} bold={instance.id === selected?.id} wrap="truncate">
+            <Text
+              key={instance.id}
+              bold={instance.id === selected?.id}
+              color={instance.id === selected?.id
+                ? tuiFocusColor(appearance, true)
+                : tuiResourceColor(appearance, instance.freshness === "fresh" ? instance.state : instance.freshness)}
+              wrap="truncate"
+            >
               {instance.id === selected?.id ? "> " : "  "}
               {canBulkMutate ? (marked.has(instance.id) ? "[x] " : "[ ] ") : ""}
               {serverListLabel(instance, serverWindow.start + visibleIndex, items)} · {instance.state ?? "status unavailable"}
@@ -131,11 +146,11 @@ export function InstancesSurface({
           <Text>EasyServer ID: {selected.id}</Text>
           <Text>Provider: {selected.providerId}</Text>
           <Text>Provider ID: {selected.providerExternalId}</Text>
-          <Text>Normalized state: {selected.state ?? "unobserved"}</Text>
+          <Text color={tuiResourceColor(appearance, selected.state)}>Normalized state: {selected.state ?? "unobserved"}</Text>
           {selected.rawState === undefined ? null : (
             <Text>Provider state: {String(selected.rawState)}</Text>
           )}
-          <Text>Freshness: {selected.freshness}</Text>
+          <Text color={tuiResourceColor(appearance, selected.freshness)}>Freshness: {selected.freshness}</Text>
           {selected.observedAt === undefined ? null : (
             <Text>Last observed: {selected.observedAt}</Text>
           )}

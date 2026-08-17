@@ -6,6 +6,11 @@ import {
   useInput,
   useWindowSize,
 } from "ink";
+import {
+  tuiAppearance,
+  tuiFocusColor,
+  type TuiAppearance,
+} from "./tui-appearance.js";
 import type {
   ProviderInteractiveEvent,
   ProviderInteractiveField,
@@ -319,8 +324,9 @@ export function ProviderInteractiveSurface({
     }
   });
 
-  const accent = colorEnabled ? "cyan" : undefined;
-  const muted = colorEnabled ? "gray" : undefined;
+  const appearance = tuiAppearance(colorEnabled);
+  const accent = appearance.accent;
+  const muted = appearance.muted;
   const choiceField =
     choiceFieldId === undefined || screen.kind !== "form"
       ? undefined
@@ -367,6 +373,7 @@ export function ProviderInteractiveSurface({
                     field={field}
                     focused={index === cursor}
                     draft={draft?.fieldId === field.id ? draft.value : undefined}
+                    appearance={appearance}
                   />
                 );
               })}
@@ -395,7 +402,12 @@ export function ProviderInteractiveSurface({
                 const index = contentWindow.start + visibleIndex;
                 const focused = index === cursor;
                 return (
-                  <Text key={`${item.label}:${index}`} bold={focused} wrap="truncate">
+                  <Text
+                    key={`${item.label}:${index}`}
+                    bold={focused}
+                    color={tuiFocusColor(appearance, focused)}
+                    wrap="truncate"
+                  >
                     {focused ? "> " : "  "}{safe(item.label)}: {safe(item.value)}
                   </Text>
                 );
@@ -407,7 +419,12 @@ export function ProviderInteractiveSurface({
         )}
       </Box>
       {activeFieldDetail === undefined ? null : (
-        <Text color={muted} wrap="truncate">{activeFieldDetail}</Text>
+        <Text
+          color={activeField?.validation?.state === "invalid" ? appearance.danger : activeField?.validation?.state === "pending" ? appearance.warning : muted}
+          wrap="truncate"
+        >
+          {activeFieldDetail}
+        </Text>
       )}
       {actions.length === 0 ? null : (
         <Box flexDirection="column">
@@ -418,7 +435,7 @@ export function ProviderInteractiveSurface({
               <Text
                 key={action.id}
                 bold={focused}
-                color={focused ? accent : undefined}
+                color={tuiFocusColor(appearance, focused)}
                 wrap="truncate"
               >
                 {focused ? "> " : "  "}{safe(action.label)}
@@ -442,14 +459,16 @@ function FieldLine({
   field,
   focused,
   draft,
+  appearance,
 }: {
   readonly field: ProviderInteractiveField;
   readonly focused: boolean;
   readonly draft?: string;
+  readonly appearance: TuiAppearance;
 }): React.ReactElement {
   const value = draft ?? fieldDisplayValue(field);
   return (
-    <Text bold={focused} wrap="truncate">
+    <Text bold={focused} color={tuiFocusColor(appearance, focused)} wrap="truncate">
       {focused ? "> " : "  "}{safe(field.label)}{field.required ? " *" : ""}: {safe(value)}
     </Text>
   );
@@ -515,8 +534,9 @@ function ChoicePicker({
         : [field.value]
       : field.value ?? [],
   );
-  const muted = colorEnabled ? "gray" : undefined;
-  const accent = colorEnabled ? "cyan" : undefined;
+  const appearance = tuiAppearance(colorEnabled);
+  const muted = appearance.muted;
+  const accent = appearance.accent;
 
   const visualWrap = screenReader ? "wrap" : "truncate-middle";
 
@@ -539,7 +559,7 @@ function ChoicePicker({
             <Text
               key={choice.id}
               bold={focused}
-              color={focused ? accent : undefined}
+              color={tuiFocusColor(appearance, focused)}
               wrap={visualWrap}
             >
               {focused ? "> " : "  "}{selected.has(choice.id) ? "[x] " : "[ ] "}{safe(choice.label)}
@@ -580,7 +600,8 @@ function TableView({
   readonly colorEnabled: boolean;
 }): React.ReactElement {
   const selected = new Set(screen.selectedRowIds);
-  const muted = colorEnabled ? "gray" : undefined;
+  const appearance = tuiAppearance(colorEnabled);
+  const muted = appearance.muted;
   return (
     <Box flexDirection="column">
       <Text wrap="truncate">{screen.columns.map((column) => safe(column.label)).join(" · ")}</Text>
@@ -588,7 +609,12 @@ function TableView({
       {screen.rows.slice(windowStart, windowEnd).map((row, visibleIndex) => {
         const index = windowStart + visibleIndex;
         return (
-          <Text key={row.id} bold={index === cursor} wrap="truncate">
+          <Text
+            key={row.id}
+            bold={index === cursor}
+            color={tuiFocusColor(appearance, index === cursor)}
+            wrap="truncate"
+          >
             {index === cursor ? "> " : "  "}{selected.has(row.id) ? "[x] " : "[ ] "}
             {screen.columns
               .map((column) => safe(String(row.cells[column.id] ?? "")))

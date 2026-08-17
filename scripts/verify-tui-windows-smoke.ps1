@@ -14,6 +14,7 @@ param(
 
   [switch]$ResizeToNarrow,
   [switch]$NoColor,
+  [switch]$ExpectColor,
   [switch]$ScreenReader,
   [switch]$Relaunch,
   [string]$ExpectedText = "EasyServer"
@@ -324,11 +325,15 @@ process.exit(second.status ?? 1);
   if (-not $text.Contains($ExpectedText)) {
     throw "TUI smoke did not render expected text: $ExpectedText"
   }
-  if ($NoColor -and $text -match ([char]27 + '\[(?:3[0-9]|9[0-7])m')) {
+  $foregroundColorPattern = [char]27 + '\[(?:3[0-9]|9[0-7])m'
+  if ($NoColor -and $text -match $foregroundColorPattern) {
     throw "NO_COLOR smoke observed ANSI foreground color output."
   }
+  if ($ExpectColor -and $text -notmatch $foregroundColorPattern) {
+    throw "Color-enabled smoke did not observe semantic ANSI foreground styling."
+  }
 
-  Write-Output "TUI Windows smoke passed: mode=$ExitMode columns=$Columns rows=$Rows narrow=$ResizeToNarrow noColor=$NoColor screenReader=$ScreenReader"
+  Write-Output "TUI Windows smoke passed: mode=$ExitMode columns=$Columns rows=$Rows narrow=$ResizeToNarrow noColor=$NoColor expectColor=$ExpectColor screenReader=$ScreenReader"
 }
 finally {
   if ($null -ne $windowProcess) {

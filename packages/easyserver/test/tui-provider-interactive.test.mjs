@@ -128,6 +128,47 @@ test("generic provider form edits provider-owned fields without domain-specific 
   assert.equal(closed, 0);
 });
 
+test("generic provider validation keeps explicit invalid and pending text semantics", async () => {
+  const view = render(
+    React.createElement(ProviderInteractiveSurface, {
+      colorEnabled: false,
+      screen: {
+        kind: "form",
+        id: "validation",
+        title: "Validate provider setup",
+        fields: [
+          {
+            kind: "text",
+            id: "region",
+            label: "Region",
+            required: true,
+            value: "invalid-region",
+            validation: { state: "invalid", message: "Region is unavailable" },
+          },
+          {
+            kind: "text",
+            id: "image",
+            label: "Image",
+            required: true,
+            value: "checking",
+            validation: { state: "pending" },
+          },
+        ],
+        actions: [],
+      },
+      onEvent() {},
+      onClose() {},
+    }),
+  );
+
+  assert.match(view.lastFrame(), /> Region \*/);
+  assert.match(view.lastFrame(), /Invalid: Region is unavailable/);
+  view.stdin.write("\u001b[B");
+  await tick();
+  assert.match(view.lastFrame(), /> Image \*/);
+  assert.match(view.lastFrame(), /Validating…/);
+});
+
 test("generic optional numeric fields can be cleared back to undefined", async () => {
   const events = [];
   const view = render(

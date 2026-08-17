@@ -8,6 +8,11 @@ import {
   useInput,
   useWindowSize,
 } from "ink";
+import {
+  tuiAppearance,
+  tuiFocusColor,
+  type TuiAppearance,
+} from "./tui-appearance.js";
 import { TuiOperationDrawer } from "./tui-operation-drawer.js";
 import { ProviderInteractiveSurface } from "./tui-provider-interactive.js";
 import {
@@ -1942,8 +1947,9 @@ export function TuiShell({
     }
   });
 
-  const accent = colorEnabled ? "cyan" : undefined;
-  const muted = colorEnabled ? "gray" : undefined;
+  const appearance = tuiAppearance(colorEnabled);
+  const accent = appearance.accent;
+  const muted = appearance.muted;
   const actionMenuMaxRows = Math.max(4, routeContentRows - 2);
   const actionMenuRows = actionMenuOpen
     ? contextActionMenuRenderedRows(
@@ -1997,7 +2003,7 @@ export function TuiShell({
           <HelpPanel colorEnabled={colorEnabled} />
         </Box>
       ) : activeRoute.id === "overview" ? (
-        <HomeSurface cursor={Math.min(focusedIndex, homeDestinations.length - 1)} colorEnabled={colorEnabled} />
+        <HomeSurface cursor={Math.min(focusedIndex, homeDestinations.length - 1)} appearance={appearance} />
       ) : (
         <Box marginTop={1} flexDirection="column" flexGrow={1} minHeight={0}>
           <Text color={muted}>{routeBreadcrumb(activeRoute.id)}</Text>
@@ -2006,8 +2012,8 @@ export function TuiShell({
           <Box marginTop={1} flexDirection="column" flexGrow={1} minHeight={0}>
             {readSnapshot !== undefined && readStatus === "stale" ? (
               <Box flexDirection="column" marginBottom={1}>
-                <Text bold>Some information could not be refreshed.</Text>
-                <Text>Showing the previous snapshot; open Actions to try again.</Text>
+                <Text bold color={appearance.warning}>Some information could not be refreshed.</Text>
+                <Text color={appearance.warning}>Showing the previous snapshot; open Actions to try again.</Text>
               </Box>
             ) : null}
             <RouteSurface
@@ -2110,15 +2116,15 @@ export function TuiShell({
   );
 }
 
-function HomeSurface({ cursor, colorEnabled }: { readonly cursor: number; readonly colorEnabled: boolean }): React.ReactElement {
-  const muted = colorEnabled ? "gray" : undefined;
+function HomeSurface({ cursor, appearance }: { readonly cursor: number; readonly appearance: TuiAppearance }): React.ReactElement {
+  const muted = appearance.muted;
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text bold>What do you want to do?</Text>
       <Box flexDirection="column" marginTop={1}>
         {homeDestinations.map((destination, index) => (
           <Box key={destination.routeId} flexDirection="column" marginBottom={index === homeDestinations.length - 1 ? 0 : 1}>
-            <Text bold={index === cursor}>
+            <Text bold={index === cursor} color={tuiFocusColor(appearance, index === cursor)}>
               {index === cursor ? "> " : "  "}{destination.label}
             </Text>
             <Text color={muted}>  {destination.description}</Text>
@@ -2130,14 +2136,15 @@ function HomeSurface({ cursor, colorEnabled }: { readonly cursor: number; readon
 }
 
 function SettingsSurface({ cursor, colorEnabled }: { readonly cursor: number; readonly colorEnabled: boolean }): React.ReactElement {
-  const muted = colorEnabled ? "gray" : undefined;
+  const appearance = tuiAppearance(colorEnabled);
+  const muted = appearance.muted;
   return (
     <Box flexDirection="column">
       <Text>Choose what you want to configure or inspect.</Text>
       <Box flexDirection="column" marginTop={1}>
         {settingsDestinations.map((destination, index) => (
           <Box key={destination.routeId} flexDirection="column" marginBottom={index === settingsDestinations.length - 1 ? 0 : 1}>
-            <Text bold={index === cursor}>
+            <Text bold={index === cursor} color={tuiFocusColor(appearance, index === cursor)}>
               {index === cursor ? "> " : "  "}{destination.label}
             </Text>
             <Text color={muted}>  {destination.description}</Text>
@@ -2177,8 +2184,9 @@ function ContextActionMenu({
   readonly colorEnabled: boolean;
   readonly maxRows?: number;
 }): React.ReactElement {
-  const accent = colorEnabled ? "cyan" : undefined;
-  const muted = colorEnabled ? "gray" : undefined;
+  const appearance = tuiAppearance(colorEnabled);
+  const accent = appearance.accent;
+  const muted = appearance.muted;
   const window = tuiFocusWindowWithinRows(
     cursor,
     actions.length,
@@ -2327,7 +2335,7 @@ function RouteSurface({
         <ProviderInteractiveSurface
           key={`${rent.interactiveScreen.kind}:${rent.interactiveScreen.id}`}
           screen={rent.interactiveScreen}
-          colorEnabled={false}
+          colorEnabled={colorEnabled}
           disabled={rent.interactiveDisabled}
           height={height}
           screenReader={screenReader}
@@ -2340,6 +2348,7 @@ function RouteSurface({
       <NewInstanceSurface
         snapshot={snapshot}
         selectedWorkflowKey={rent.selectedWorkflowKey}
+        colorEnabled={colorEnabled}
       />
     );
   }
@@ -2353,6 +2362,7 @@ function RouteSurface({
         bulkSelectedInstanceIds={servers.bulkSelectedInstanceIds}
         canMutate={servers.canMutate}
         canBulkMutate={servers.canBulkMutate}
+        colorEnabled={colorEnabled}
       />
     );
   }
@@ -2370,6 +2380,7 @@ function RouteSurface({
         selectedEndpointIntentName={connections.selectedEndpointIntentName}
         selectedConnectionTarget={connections.selectedTarget}
         showDetails={connections.showDetails}
+        colorEnabled={colorEnabled}
       />
     );
   }
@@ -2384,6 +2395,7 @@ function RouteSurface({
       showDetails={providers.showDetails}
       canRegister={providers.canRegister}
       canAddInstalled={providers.canAddInstalled}
+      colorEnabled={colorEnabled}
     />
   );
 }
@@ -2440,7 +2452,7 @@ function operationActionForInput(
 }
 
 function HelpPanel({ colorEnabled }: { readonly colorEnabled: boolean }): React.ReactElement {
-  const accent = colorEnabled ? "cyan" : undefined;
+  const accent = tuiAppearance(colorEnabled).accent;
   return (
     <Box
       flexDirection="column"

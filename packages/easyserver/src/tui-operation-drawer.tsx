@@ -1,6 +1,12 @@
 import React from "react";
 import { Box, Text } from "ink";
 import {
+  tuiAppearance,
+  tuiFocusColor,
+  tuiResourceColor,
+  tuiToneColor,
+} from "./tui-appearance.js";
+import {
   assertTuiOperationPresentation,
   type TuiOperationPresentation,
 } from "./tui-operation-model.js";
@@ -22,15 +28,8 @@ export function TuiOperationDrawer({
 }: TuiOperationDrawerProps): React.ReactElement {
   assertTuiOperationPresentation(operation);
 
-  const toneColor = colorEnabled
-    ? operation.tone === "success"
-      ? "green"
-      : operation.tone === "warning"
-        ? "yellow"
-        : operation.tone === "danger"
-          ? "red"
-          : "cyan"
-    : undefined;
+  const appearance = tuiAppearance(colorEnabled);
+  const toneColor = tuiToneColor(appearance, operation.tone);
   const affectedResources =
     operation.interaction?.kind === "mutation-confirmation"
       ? operation.interaction.affectedResources
@@ -48,7 +47,7 @@ export function TuiOperationDrawer({
     <Box flexDirection="column" borderStyle="single" borderColor={toneColor} paddingX={1}>
       <Box justifyContent="space-between">
         <Text bold color={toneColor}>{operation.title}</Text>
-        <Text>{phaseLabel(operation)}</Text>
+        <Text color={toneColor}>{phaseLabel(operation)}</Text>
       </Box>
 
       {operation.detail === undefined || operation.interaction?.kind === "mutation-confirmation"
@@ -76,7 +75,7 @@ export function TuiOperationDrawer({
         <Box flexDirection="column" marginTop={1}>
           <Text bold>Server results</Text>
           {operation.instanceResults.map((item) => (
-            <Text key={item.instanceId} wrap="wrap">
+            <Text key={item.instanceId} wrap="wrap" color={tuiResourceColor(appearance, item.status)}>
               {item.instanceId} · {item.status}
               {item.error === undefined
                 ? ""
@@ -96,7 +95,7 @@ export function TuiOperationDrawer({
         <Box flexDirection="column" marginTop={1}>
           <Text bold>Provider output</Text>
           {operation.providerOutput.map((line, index) => (
-            <Text key={`${index}:${line.stream}`}>
+            <Text key={`${index}:${line.stream}`} color={line.stream === "error" ? appearance.danger : undefined}>
               {line.stream === "error" ? "! " : "  "}{line.text}
             </Text>
           ))}
@@ -119,7 +118,12 @@ export function TuiOperationDrawer({
         <Box marginTop={1} flexDirection="column">
           <Text bold>Actions</Text>
           {operation.actions.map((action, index) => (
-            <Text key={action.kind} bold={index === selectedActionIndex} wrap="truncate">
+            <Text
+              key={action.kind}
+              bold={index === selectedActionIndex}
+              color={tuiFocusColor(appearance, index === selectedActionIndex)}
+              wrap="truncate"
+            >
               {index === selectedActionIndex ? "> " : "  "}{action.label}
             </Text>
           ))}
