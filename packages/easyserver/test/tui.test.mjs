@@ -297,7 +297,7 @@ test("screen-reader runtime stays linear and preserves task navigation and help 
   assert.match(stdout.text(), /Rent a server/);
   assert.match(stdout.text(), /My servers/);
   assert.match(stdout.text(), /Settings & Support/);
-  assert.match(stdout.text(), /Commands: Up and Down move; Enter selects; Escape goes back/);
+  assert.match(stdout.text(), /Commands: Up and Down move; Enter opens; question mark opens help; Ctrl\+C quits/);
 
   let offset = stdout.text().length;
   stdin.write("\u001b[B");
@@ -3781,7 +3781,8 @@ test("screen-reader server Connect stays linear without exposing internal connec
   await chooseVisibleAction(view, "Connect");
   assert.match(view.lastFrame(), /App\/service port on the server/);
   assert.match(view.lastFrame(), /not the SSH port/i);
-  assert.match(view.lastFrame(), /Commands: Up and Down move; Enter selects; Escape goes back/);
+  assert.match(view.lastFrame(), /Enter continue · Backspace edit · Esc back/);
+  assert.doesNotMatch(view.lastFrame(), /Commands: Up and Down move/);
   assert.doesNotMatch(view.lastFrame(), /instance:connect|fixture|ssh-default|Access Method|Endpoint|daemon|Session/);
 
   await typeText(view, "8188");
@@ -4587,6 +4588,87 @@ test("TuiApp loads and refreshes read data through an injected loader", async ()
   assert.match(view.lastFrame(), /> fixture · ready/);
 });
 
+test("routine TUI navigation stays quiet and uses one contextual hint across release terminal sizes", async (t) => {
+  const snapshot = readSnapshot({
+    instances: {
+      status: "ready",
+      complete: true,
+      providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+      items: [
+        {
+          id: "instance:quiet-a",
+          name: "Quiet A",
+          providerId: "fixture",
+          providerExternalId: "remote-a",
+          management: "managed",
+          freshness: "fresh",
+          state: "running",
+          availableActions: [],
+        },
+        {
+          id: "instance:quiet-b",
+          name: "Quiet B",
+          providerId: "fixture",
+          providerExternalId: "remote-b",
+          management: "managed",
+          freshness: "fresh",
+          state: "stopped",
+          availableActions: [],
+        },
+      ],
+    },
+  });
+
+  for (const [width, height] of [[60, 20], [80, 24], [120, 40]]) {
+    await t.test(`${width}x${height}`, async () => {
+      const view = render(shell({ width, height, readSnapshot: snapshot, readStatus: "ready" }));
+      await openServersRoute(view);
+      let frame = view.lastFrame();
+      assert.doesNotMatch(frame, /Opened Servers|Selected Quiet|Choose an action|Closed actions/);
+      assert.equal((frame.match(/Enter actions/g) ?? []).length, 1);
+      assert.match(frame, /> Quiet A · running/);
+      assert.match(frame, /Quiet B · stopped/);
+      assert.ok(frame.split("\n").length <= height);
+
+      view.stdin.write("\u001b[B");
+      await tick();
+      frame = view.lastFrame();
+      assert.match(frame, /> Quiet B · stopped/);
+      assert.doesNotMatch(frame, /Selected Quiet B/);
+
+      view.stdin.write("\r");
+      await tick();
+      frame = view.lastFrame();
+      assert.match(frame, /Actions/);
+      assert.doesNotMatch(frame, /Choose an action/);
+      view.stdin.write("\u001b");
+      await flushEscape();
+      frame = view.lastFrame();
+      assert.doesNotMatch(frame, /Closed actions/);
+      assert.equal((frame.match(/Enter actions/g) ?? []).length, 1);
+    });
+  }
+});
+
+test("screen-reader keeps material stale-state notice while routine narration stays absent", async () => {
+  const view = render(
+    shell({
+      width: 60,
+      height: 20,
+      screenReader: true,
+      readSnapshot: readSnapshot(),
+      readStatus: "stale",
+    }),
+  );
+
+  await openServersRoute(view);
+  const frame = view.lastFrame();
+  assert.match(frame, /Some information could not be refreshed/);
+  assert.match(frame, /Showing the previous snapshot/);
+  assert.match(frame, /Enter opens Actions/);
+  assert.doesNotMatch(frame, /Opened Servers|Choose an action|Closed actions/);
+});
+
 test("TUI v2 Home exposes task-first navigation without a permanent sidebar", async () => {
   const view = render(shell({ width: 100 }));
 
@@ -4669,6 +4751,6 @@ test("TUI screen-reader mode renders the task-first Home as a calm linear summar
   assert.match(view.lastFrame(), /Settings & Support/);
   assert.match(
     view.lastFrame(),
-    /Commands: Up and Down move; Enter selects; Escape goes back; question mark opens help; Ctrl\+C\s+quits\./,
+    /Commands: Up and Down move; Enter opens; question mark opens help; Ctrl\+C\s+quits\./,
   );
 });

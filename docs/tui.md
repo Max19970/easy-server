@@ -29,7 +29,7 @@ The normal keyboard vocabulary is intentionally small:
 - `?` — keyboard help;
 - `Ctrl+C` — request exit.
 
-Ordinary flows do not require route-specific letter keys, number shortcuts, or Left/Right action toggles.
+Ordinary flows do not require route-specific letter keys, number shortcuts, or Left/Right action toggles. Routine route/focus changes are communicated by the visible location and focus itself; the shell keeps one contextual keyboard hint and reserves status text for feedback that can change the next decision.
 
 ## Add and configure a provider
 

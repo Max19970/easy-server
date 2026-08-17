@@ -470,7 +470,7 @@ export function TuiShell({
   const [helpOpen, setHelpOpen] = useState(false);
   const [diagnosticsReportOpen, setDiagnosticsReportOpen] = useState(false);
   const [diagnosticsScroll, setDiagnosticsScroll] = useState(0);
-  const [status, setStatus] = useState("Ready.");
+  const [status, setStatus] = useState<string | undefined>();
   const [providerSourceInput, setProviderSourceInput] = useState<string | undefined>();
   const [providerCandidatePickerOpen, setProviderCandidatePickerOpen] = useState(false);
   const [providerCandidateCursor, setProviderCandidateCursor] = useState(0);
@@ -711,7 +711,7 @@ export function TuiShell({
     setActiveIndex(instancesIndex);
     setFocusedIndex(Math.max(0, homeIndex));
     setContentFocused(true);
-    setStatus(`Opened ${navigateToInstanceId}.`);
+    setStatus(undefined);
     onInstanceNavigationHandled?.();
   }, [navigateToInstanceId, readSnapshot, onInstanceNavigationHandled]);
 
@@ -728,7 +728,7 @@ export function TuiShell({
     setContentFocused(routeId !== "overview");
     setActionMenuOpen(false);
     setActionCursor(0);
-    setStatus(message ?? `Opened ${routes[index]?.label ?? "Home"}.`);
+    setStatus(message);
     if (routeId === "diagnostics") {
       onRefresh?.("diagnostics");
     }
@@ -826,13 +826,10 @@ export function TuiShell({
     const target = connectionTargets[nextIndex];
     if (target?.kind === "foreground") {
       setSelectedForegroundConnectionId(target.id);
-      setStatus("Selected local connection.");
     } else if (target?.kind === "persistent") {
       setSelectedPersistentSessionId(target.id);
-      setStatus("Selected background local connection.");
     } else if (target?.kind === "intent") {
       setSelectedEndpointIntentName(target.id);
-      setStatus("Selected saved connection definition in Technical details.");
     }
   };
 
@@ -1135,12 +1132,12 @@ export function TuiShell({
     if (id === "provider-add-installed") {
       setProviderCandidateCursor(0);
       setProviderCandidatePickerOpen(true);
-      setStatus("Choose an installed provider to add.");
+      setStatus(undefined);
       return;
     }
     if (id === "provider-add-advanced") {
       setProviderSourceInput("");
-      setStatus("Advanced provider registration: enter a module or path.");
+      setStatus(undefined);
       return;
     }
     if (id === "provider-credentials" && selectedProvider !== undefined) {
@@ -1151,7 +1148,7 @@ export function TuiShell({
           providerSource: selectedProvider.source,
           selectedName: firstCredential.name,
         });
-        setStatus(`Managing credentials for ${selectedProvider.source}.`);
+        setStatus(undefined);
       }
       return;
     }
@@ -1283,7 +1280,6 @@ export function TuiShell({
     if (id === "diagnostics-view" && diagnostics.status === "ready") {
       setDiagnosticsScroll(0);
       setDiagnosticsReportOpen(true);
-      setStatus("Opened the privacy-safe diagnostics report.");
       return;
     }
     if (id === "diagnostics-copy" && diagnostics.status === "ready") {
@@ -1462,7 +1458,7 @@ export function TuiShell({
       }
       if (key.escape) {
         setProviderCandidatePickerOpen(false);
-        setStatus("Installed provider picker closed.");
+        setStatus(undefined);
         return;
       }
       if (key.downArrow && providerCandidateItems.length > 0) {
@@ -1494,7 +1490,7 @@ export function TuiShell({
     if (providerSourceInput !== undefined) {
       if (key.escape) {
         setProviderSourceInput(undefined);
-        setStatus("Provider registration cancelled.");
+        setStatus(undefined);
         return;
       }
       if (key.return) {
@@ -1525,7 +1521,7 @@ export function TuiShell({
       if (providerCredentialFlow.kind === "picker") {
         if (key.escape) {
           setProviderCredentialFlow(undefined);
-          setStatus("Credential setup closed.");
+          setStatus(undefined);
           return;
         }
         const currentIndex = Math.max(
@@ -1560,7 +1556,7 @@ export function TuiShell({
               credentialName: selected.name,
               cursor: 0,
             });
-            setStatus(`Choose what to do with credential ${selected.name}.`);
+            setStatus(undefined);
           }
         }
         return;
@@ -1577,7 +1573,7 @@ export function TuiShell({
             providerSource: providerCredentialFlow.providerSource,
             selectedName: providerCredentialFlow.credentialName,
           });
-          setStatus("Returned to credential selection.");
+          setStatus(undefined);
           return;
         }
         if (key.downArrow || key.upArrow) {
@@ -1620,7 +1616,7 @@ export function TuiShell({
           credentialName: providerCredentialFlow.credentialName,
           cursor: 0,
         });
-        setStatus("Credential value entry cancelled.");
+        setStatus(undefined);
         return;
       }
       if (key.return) {
@@ -1662,13 +1658,13 @@ export function TuiShell({
         const previousStep = previousForegroundConnectionStep(foregroundConnectionFlow);
         if (previousStep === undefined) {
           setForegroundConnectionFlow(undefined);
-          setStatus("Local connection setup cancelled.");
+          setStatus(undefined);
         } else {
           setForegroundConnectionFlow({
             ...foregroundConnectionFlow,
             step: previousStep,
           });
-          setStatus("Returned to the previous connection step.");
+          setStatus(undefined);
         }
         return;
       }
@@ -1940,7 +1936,7 @@ export function TuiShell({
       if (key.escape) {
         setDiagnosticsReportOpen(false);
         setDiagnosticsScroll(0);
-        setStatus("Returned to Diagnostics summary.");
+        setStatus(undefined);
         return;
       }
       if (!screenReader && key.downArrow) {
@@ -1971,7 +1967,6 @@ export function TuiShell({
       if (key.escape) {
         setActionMenuOpen(false);
         setActionCursor(0);
-        setStatus("Closed actions.");
         return;
       }
       if (contextActions.length === 0) {
@@ -1997,8 +1992,7 @@ export function TuiShell({
     }
 
     if (contentFocused && key.escape) {
-      const parent = parentRoute(activeRoute.id);
-      openRoute(parent, `Back to ${routes.find((route) => route.id === parent)?.label ?? "Home"}.`);
+      openRoute(parentRoute(activeRoute.id));
       return;
     }
 
@@ -2023,7 +2017,6 @@ export function TuiShell({
         const next = inventoryItems[nextIndex];
         if (next !== undefined) {
           setSelectedInstanceId(next.id);
-          setStatus(`Selected ${serverListLabel(next, nextIndex, inventoryItems)}.`);
         }
         return;
       }
@@ -2040,7 +2033,6 @@ export function TuiShell({
         const next = providerItems[nextIndex];
         if (next !== undefined) {
           setSelectedProviderSource(next.source);
-          setStatus(`Selected ${next.displayName ?? next.providerId ?? next.source}.`);
         }
         return;
       }
@@ -2057,7 +2049,6 @@ export function TuiShell({
         const next = workflowItems[nextIndex];
         if (next !== undefined) {
           setSelectedWorkflowKey(workflowKey(next));
-          setStatus(`Selected ${next.providerId} acquisition flow.`);
         }
         return;
       }
@@ -2096,7 +2087,6 @@ export function TuiShell({
       if (contextActions.length > 0) {
         setActionMenuOpen(true);
         setActionCursor(0);
-        setStatus(`Choose an action for ${activeRoute.label}.`);
       }
       return;
     }
@@ -2172,7 +2162,6 @@ export function TuiShell({
       const next = persistentSessions[nextIndex];
       if (next !== undefined) {
         setSelectedPersistentSessionId(next.id);
-        setStatus(`Selected persistent Session ${next.id}.`);
       }
       return;
     }
@@ -2214,7 +2203,6 @@ export function TuiShell({
       const next = endpointIntents[nextIndex];
       if (next !== undefined) {
         setSelectedEndpointIntentName(next.operationName);
-        setStatus(`Selected persisted Endpoint intent ${next.name}.`);
       }
       return;
     }
@@ -2300,9 +2288,6 @@ export function TuiShell({
       const next = foregroundConnections[nextIndex];
       if (next !== undefined) {
         setSelectedForegroundConnectionId(next.id);
-        setStatus(
-          `Selected foreground Endpoint ${next.endpoint.host}:${next.endpoint.port}.`,
-        );
       }
       return;
     }
@@ -2343,7 +2328,6 @@ export function TuiShell({
       const next = workflowItems[nextIndex];
       if (next !== undefined) {
         setSelectedWorkflowKey(workflowKey(next));
-        setStatus(`Selected ${next.providerId}/${next.commandName}.`);
       }
       return;
     }
@@ -2388,7 +2372,6 @@ export function TuiShell({
       const next = inventoryItems[nextIndex];
       if (next !== undefined) {
         setSelectedInstanceId(next.id);
-        setStatus(`Selected ${next.id}.`);
       }
       return;
     }
@@ -2515,6 +2498,13 @@ export function TuiShell({
       )
     : 0;
   const routeSurfaceRows = Math.max(1, routeContentRows - actionMenuRows);
+  const surfaceOwnsInteractionHint =
+    providerInteractiveScreen !== undefined ||
+    providerCandidatePickerView !== undefined ||
+    providerSourceInput !== undefined ||
+    providerCredentialFlowView !== undefined ||
+    foregroundConnectionFlow !== undefined ||
+    diagnosticsReportOpen;
 
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>
@@ -2611,15 +2601,6 @@ export function TuiShell({
                 colorEnabled={colorEnabled}
                 maxRows={actionMenuMaxRows}
               />
-            ) : contentFocused &&
-              providerInteractiveScreen === undefined &&
-              providerCandidatePickerView === undefined &&
-              providerSourceInput === undefined &&
-              providerCredentialFlowView === undefined &&
-              !diagnosticsReportOpen ? (
-              <Box marginTop={1}>
-                <Text color={muted}>Enter actions · Esc back</Text>
-              </Box>
             ) : null}
           </Box>
         </Box>
@@ -2642,13 +2623,21 @@ export function TuiShell({
 
       {operationOwnsViewport || actionMenuOpen ? null : (
         <Box marginTop={1} flexDirection="column">
-          {status === "Ready." ? null : (
+          {status === undefined ? null : (
             <Text color={muted} aria-label={`Status: ${status}`} wrap="truncate">{status}</Text>
           )}
-          {screenReader ? (
-            <Text>Commands: Up and Down move; Enter selects; Escape goes back; question mark opens help; Ctrl+C quits.</Text>
+          {surfaceOwnsInteractionHint ? null : screenReader ? (
+            <Text>
+              {activeRoute.id === "overview"
+                ? "Commands: Up and Down move; Enter opens; question mark opens help; Ctrl+C quits."
+                : "Commands: Up and Down move; Enter opens Actions; Escape goes back; question mark opens help; Ctrl+C quits."}
+            </Text>
           ) : (
-            <Text color={muted}>↑/↓ move · Enter select · Esc back · ? help · Ctrl+C quit</Text>
+            <Text color={muted}>
+              {activeRoute.id === "overview"
+                ? "↑/↓ move · Enter open · ? help · Ctrl+C quit"
+                : "↑/↓ move · Enter actions · Esc back · ? help · Ctrl+C quit"}
+            </Text>
           )}
         </Box>
       )}
