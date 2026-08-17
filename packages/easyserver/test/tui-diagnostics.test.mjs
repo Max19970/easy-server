@@ -12,6 +12,7 @@ import { TuiApp, TuiShell } from "../dist/tui.js";
 import { presentOperationError } from "../dist/tui-operation-model.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+const flushEscape = () => new Promise((resolve) => setTimeout(resolve, 30));
 
 async function chooseVisibleAction(view, label, { open = true } = {}) {
   if (open) {
@@ -140,8 +141,19 @@ function longSafeReport() {
 }
 
 async function openDiagnostics(view) {
-  view.stdin.write("g");
+  for (let index = 0; index < 3; index += 1) {
+    view.stdin.write("\u001b");
+    await flushEscape();
+  }
+  for (let index = 0; index < 3; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  view.stdin.write("\r");
   await tick();
+  view.stdin.write("\u001b[B");
+  await tick();
+  view.stdin.write("\r");
   await tick();
   await tick();
 }
@@ -320,7 +332,7 @@ test("screen-reader mode exposes the complete long Diagnostics payload and remed
   assert.match(view.lastFrame(), /"version": "0\.2\.0-test"/);
   assert.match(view.lastFrame(), /"ssh": "unavailable"/);
   assert.match(view.lastFrame(), /fixture-plugin-70/);
-  assert.match(view.lastFrame(), /Commands: Up and Down move; Enter selects; Escape goes back/);
+  assert.match(view.lastFrame(), /Enter — copy this exact report · Esc — back to summary/);
 
   view.stdin.write("\u001b");
   await new Promise((resolve) => setTimeout(resolve, 30));
@@ -329,7 +341,7 @@ test("screen-reader mode exposes the complete long Diagnostics payload and remed
 
   await openDiagnostics(view);
   await chooseVisibleAction(view, "Open Connections");
-  assert.match(view.lastFrame(), /Opened Connections/);
+  assert.match(view.lastFrame(), /Home › Connections/);
 });
 
 test("Diagnostics collection failures stay generic and never echo the raw error", async () => {
@@ -412,8 +424,7 @@ test("connection-flow failures can open Diagnostics without discarding the guide
   await tick();
   await tick();
   await openConnections(view);
-  view.stdin.write("n");
-  await tick();
+  await chooseVisibleAction(view, "New local connection");
   view.stdin.write("\r");
   await tick();
   view.stdin.write("\r");
@@ -497,8 +508,19 @@ test("provider readiness and operation failures expose a direct privacy-safe Dia
     }),
   );
   assert.match(failureView.lastFrame(), /after closing this result, open Diagnostics before sharing raw logs/);
-  failureView.stdin.write("g");
+  assert.match(failureView.lastFrame(), /Dismiss/);
+  failureView.rerender(
+    React.createElement(TuiShell, {
+      colorEnabled: false,
+      readSnapshot: readSnapshot(),
+      readStatus: "ready",
+      onRefresh(routeId) {
+        diagnosticRoute = routeId;
+      },
+    }),
+  );
   await tick();
+  await openDiagnostics(failureView);
   assert.equal(diagnosticRoute, "diagnostics");
   assert.match(failureView.lastFrame(), /Home › Settings & Support › Diagnostics/);
 });

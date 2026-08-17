@@ -749,12 +749,10 @@ test("50-server inventory stays focused and actionable across real release termi
     `60x20 server frame overflowed:\n${view.lastFrame()}`,
   );
 
-  view.stdin.write(" ");
-  await tick();
+  await chooseVisibleAction(view, "Add to bulk selection");
   view.stdin.write("\u001b[B");
   await tick();
-  view.stdin.write(" ");
-  await tick();
+  await chooseVisibleAction(view, "Add to bulk selection");
   assert.match(view.lastFrame(), /Selected servers \(2\)/);
   assert.ok(view.lastFrame().split("\n").length <= 20);
 
@@ -2152,12 +2150,10 @@ test("Instances multi-select preserves the exact target set and uses host bulk a
   }));
 
   await openServersRoute(view);
-  view.stdin.write(" ");
+  await chooseVisibleAction(view, "Add to bulk selection");
+  view.stdin.write("\u001b[B");
   await tick();
-  view.stdin.write("j");
-  await tick();
-  view.stdin.write(" ");
-  await tick();
+  await chooseVisibleAction(view, "Add to bulk selection");
 
   assert.match(view.lastFrame(), /Selected servers \(2\)/);
   assert.match(view.lastFrame(), /Server #1 · running/);
@@ -2227,12 +2223,10 @@ test("bulk mutation failure drawer hides canonical and provider identity", async
   await tick();
   await tick();
   await openServersRoute(view);
-  view.stdin.write(" ");
-  await tick();
+  await chooseVisibleAction(view, "Add to bulk selection");
   view.stdin.write("\u001b[B");
   await tick();
-  view.stdin.write(" ");
-  await tick();
+  await chooseVisibleAction(view, "Add to bulk selection");
   await chooseVisibleAction(view, "stop 2 selected servers");
   await tick();
   await tick();
@@ -4128,8 +4122,8 @@ test("advanced background connection retry preserves one idempotency key across 
   await tick();
   await tick();
   await openConnectionsRoute(view);
-  view.stdin.write("p");
-  await tick();
+  await chooseVisibleAction(view, "Show technical details");
+  await chooseVisibleAction(view, "Advanced: new background connection");
   assert.match(view.lastFrame(), /Advanced background connection/);
   view.stdin.write("\r");
   await tick();
@@ -4690,6 +4684,79 @@ test("TUI v2 Home exposes task-first navigation without a permanent sidebar", as
 
   await chooseVisibleAction(view, "Refresh servers");
   assert.match(view.lastFrame(), /Refresh requested for Servers\./);
+});
+
+test("retained refresh shortcut uses the same semantic availability as visible Actions", async () => {
+  const refreshes = [];
+  const view = render(
+    shell({
+      width: 100,
+      readSnapshot: readSnapshot(),
+      readStatus: "ready",
+      onRefresh(routeId) {
+        refreshes.push(routeId);
+      },
+    }),
+  );
+
+  view.stdin.write("r");
+  await tick();
+  assert.deepEqual(refreshes, [], "Home has no Refresh action, so r must be inert");
+
+  await openServersRoute(view);
+  await chooseVisibleAction(view, "Refresh servers");
+  assert.deepEqual(refreshes, ["instances"]);
+
+  view.stdin.write("r");
+  await tick();
+  assert.deepEqual(refreshes, ["instances", "instances"]);
+});
+
+test("removed route shortcuts cannot bypass visible server action availability", async () => {
+  const mutations = [];
+  const snapshot = readSnapshot({
+    instances: {
+      status: "ready",
+      complete: true,
+      providerOutcomes: [{ providerId: "fixture", status: "fresh" }],
+      items: [
+        {
+          id: "instance:shortcut-guard",
+          name: "Guarded server",
+          providerId: "fixture",
+          providerExternalId: "remote-guard",
+          management: "managed",
+          freshness: "fresh",
+          state: "stopped",
+          availableActions: ["instance.start"],
+        },
+      ],
+    },
+  });
+  const view = render(
+    shell({
+      width: 100,
+      readSnapshot: snapshot,
+      readStatus: "ready",
+      onInstanceMutation(mutation) {
+        mutations.push(mutation);
+      },
+    }),
+  );
+
+  await openServersRoute(view);
+  view.stdin.write("1");
+  await tick();
+  assert.deepEqual(mutations, []);
+
+  await chooseVisibleAction(view, "Start server");
+  assert.deepEqual(mutations, [
+    {
+      kind: "action",
+      instanceId: "instance:shortcut-guard",
+      action: "instance.start",
+    },
+  ]);
 });
 
 test("TUI v2 arrows clamp task focus and Escape follows the page hierarchy", async () => {

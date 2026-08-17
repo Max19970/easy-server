@@ -130,8 +130,40 @@ interface TuiRoute {
   readonly body: string;
 }
 
+type TuiContextActionId =
+  | "refresh"
+  | "new-instance"
+  | "providers"
+  | "connections"
+  | "instance-details"
+  | "instance-connect"
+  | "instance-adopt"
+  | "instance-mark"
+  | "bulk-clear"
+  | "provider-details"
+  | "provider-add-installed"
+  | "provider-add-advanced"
+  | "provider-credentials"
+  | "provider-toggle"
+  | "connection-details"
+  | "connection-new-foreground"
+  | "connection-new-persistent"
+  | "daemon-toggle"
+  | "connection-retry-foreground"
+  | "connection-edit-service-port"
+  | "connection-close-foreground"
+  | "connection-close-persistent"
+  | "intent-toggle"
+  | "intent-host-trust"
+  | "intent-retry"
+  | "intent-remove"
+  | "diagnostics-view"
+  | "diagnostics-copy"
+  | `instance-action:${AvailableAction}`
+  | `bulk-action:${AvailableAction}`;
+
 interface TuiContextAction {
-  readonly id: string;
+  readonly id: TuiContextActionId;
   readonly label: string;
 }
 
@@ -577,23 +609,11 @@ export function TuiShell({
   const missingBulkSelectedInstanceIds = bulkSelectedInstanceIds.filter(
     (instanceId) => !inventoryItems.some((instance) => instance.id === instanceId),
   );
-  const effectiveSelectedForegroundConnectionId =
-    selectedForegroundConnectionId !== undefined &&
-    foregroundConnections.some(
-      (connection) => connection.id === selectedForegroundConnectionId,
-    )
-      ? selectedForegroundConnectionId
-      : undefined;
   const persistentSessions =
     readSnapshot?.daemon.status === "running" &&
     readSnapshot.daemon.sessions.status === "ready"
       ? readSnapshot.daemon.sessions.items ?? []
       : [];
-  const effectiveSelectedPersistentSessionId =
-    selectedPersistentSessionId !== undefined &&
-    persistentSessions.some((session) => session.id === selectedPersistentSessionId)
-      ? selectedPersistentSessionId
-      : undefined;
   const endpointIntents =
     readSnapshot?.daemon.status === "running" &&
     readSnapshot.daemon.endpointIntents.status === "ready"
@@ -1059,7 +1079,7 @@ export function TuiShell({
     return actions;
   })();
 
-  const runContextAction = (id: string): void => {
+  const executeContextAction = (id: TuiContextActionId): void => {
     setActionMenuOpen(false);
     setActionCursor(0);
     if (id === "refresh") {
@@ -1287,6 +1307,14 @@ export function TuiShell({
         setStatus(copied ? "Copied reviewed diagnostics report." : "Diagnostics report could not be copied."),
       );
     }
+  };
+
+  const dispatchContextAction = (id: TuiContextActionId): boolean => {
+    if (!contextActions.some((action) => action.id === id)) {
+      return false;
+    }
+    executeContextAction(id);
+    return true;
   };
 
   const runForegroundConnectionRequest = (
@@ -1670,11 +1698,8 @@ export function TuiShell({
       }
 
       if (foregroundConnectionFlow.step === "instance") {
-        if (
-          (input === "j" || input === "k" || key.downArrow || key.upArrow) &&
-          inventoryItems.length > 0
-        ) {
-          const forwards = input === "j" || key.downArrow;
+        if ((key.downArrow || key.upArrow) && inventoryItems.length > 0) {
+          const forwards = key.downArrow;
           const currentIndex = Math.max(
             0,
             inventoryItems.findIndex(
@@ -1803,10 +1828,10 @@ export function TuiShell({
 
       if (foregroundConnectionFlow.step === "access-method") {
         if (
-          (input === "j" || input === "k" || key.downArrow || key.upArrow) &&
+          (key.downArrow || key.upArrow) &&
           foregroundConnectionFlow.accessMethods.length > 0
         ) {
-          const forwards = input === "j" || key.downArrow;
+          const forwards = key.downArrow;
           const currentIndex = Math.max(
             0,
             foregroundConnectionFlow.accessMethods.findIndex(
@@ -1984,7 +2009,7 @@ export function TuiShell({
       if (key.return) {
         const action = contextActions[Math.min(actionCursor, contextActions.length - 1)];
         if (action !== undefined) {
-          runContextAction(action.id);
+          dispatchContextAction(action.id);
         }
         return;
       }
@@ -2114,359 +2139,8 @@ export function TuiShell({
       return;
     }
 
-    if (input === "g") {
-      openRoute("diagnostics", "Opened privacy-safe Diagnostics.");
-      return;
-    }
-
-    if (activeRoute.id === "sessions" && input === "n") {
-      beginConnectionFlow("foreground");
-      return;
-    }
-
-    if (activeRoute.id === "sessions" && input === "p") {
-      beginConnectionFlow("persistent", { advanced: true });
-      return;
-    }
-
-    if (activeRoute.id === "sessions" && input === "d") {
-      setForegroundConnectionBusy(true);
-      const action =
-        readSnapshot?.daemon.status === "running" ? onStopDaemon : onStartDaemon;
-      if (action === undefined) {
-        setForegroundConnectionBusy(false);
-        setStatus("Daemon lifecycle management is unavailable in this TUI session.");
-        return;
-      }
-      void action().then(() => setForegroundConnectionBusy(false));
-      return;
-    }
-
-    if (
-      activeRoute.id === "sessions" &&
-      persistentSessions.length > 0 &&
-      (input === "J" || input === "K")
-    ) {
-      const currentIndex = persistentSessions.findIndex(
-        (session) => session.id === effectiveSelectedPersistentSessionId,
-      );
-      const nextIndex =
-        currentIndex < 0
-          ? input === "J"
-            ? 0
-            : persistentSessions.length - 1
-          : input === "J"
-            ? (currentIndex + 1) % persistentSessions.length
-            : (currentIndex - 1 + persistentSessions.length) %
-              persistentSessions.length;
-      const next = persistentSessions[nextIndex];
-      if (next !== undefined) {
-        setSelectedPersistentSessionId(next.id);
-      }
-      return;
-    }
-
-    if (
-      activeRoute.id === "sessions" &&
-      input === "c" &&
-      effectiveSelectedPersistentSessionId !== undefined &&
-      onClosePersistentSession !== undefined
-    ) {
-      const sessionId = effectiveSelectedPersistentSessionId;
-      setForegroundConnectionBusy(true);
-      void onClosePersistentSession(sessionId).then((closed) => {
-        setForegroundConnectionBusy(false);
-        if (closed) {
-          setSelectedPersistentSessionId(undefined);
-          setStatus(`Closed persistent Session ${sessionId}.`);
-        }
-      });
-      return;
-    }
-
-    if (
-      activeRoute.id === "sessions" &&
-      endpointIntents.length > 0 &&
-      (input === "[" || input === "]")
-    ) {
-      const currentIndex = endpointIntents.findIndex(
-        (intent) => intent.operationName === effectiveSelectedEndpointIntentName,
-      );
-      const nextIndex =
-        currentIndex < 0
-          ? input === "]"
-            ? 0
-            : endpointIntents.length - 1
-          : input === "]"
-            ? (currentIndex + 1) % endpointIntents.length
-            : (currentIndex - 1 + endpointIntents.length) % endpointIntents.length;
-      const next = endpointIntents[nextIndex];
-      if (next !== undefined) {
-        setSelectedEndpointIntentName(next.operationName);
-      }
-      return;
-    }
-
-    if (
-      activeRoute.id === "sessions" &&
-      input === "e" &&
-      effectiveSelectedEndpointIntentName !== undefined &&
-      onSetEndpointIntentEnabled !== undefined
-    ) {
-      const selected = endpointIntents.find(
-        (intent) => intent.operationName === effectiveSelectedEndpointIntentName,
-      );
-      if (selected === undefined) {
-        return;
-      }
-      setForegroundConnectionBusy(true);
-      const enabled = !selected.enabled;
-      void onSetEndpointIntentEnabled(selected.operationName, enabled).then((changed) => {
-        setForegroundConnectionBusy(false);
-        if (changed) {
-          setStatus(`${enabled ? "Enabled" : "Disabled"} Endpoint intent ${selected.name}.`);
-        }
-      });
-      return;
-    }
-
-    if (
-      activeRoute.id === "sessions" &&
-      input === "t" &&
-      effectiveSelectedEndpointIntentName !== undefined &&
-      onRetryEndpointIntent !== undefined
-    ) {
-      const selected = endpointIntents.find(
-        (intent) => intent.operationName === effectiveSelectedEndpointIntentName,
-      );
-      if (selected?.state !== "error") {
-        setStatus("Retry is available only for a persisted Endpoint intent in Error state.");
-        return;
-      }
-      setForegroundConnectionBusy(true);
-      void onRetryEndpointIntent(selected.operationName).then((retried) => {
-        setForegroundConnectionBusy(false);
-        if (retried) {
-          setStatus(`Retry requested for Endpoint intent ${selected.name}.`);
-        }
-      });
-      return;
-    }
-
-    if (
-      activeRoute.id === "sessions" &&
-      input === "X" &&
-      effectiveSelectedEndpointIntentName !== undefined &&
-      onRemoveEndpointIntent !== undefined
-    ) {
-      const selected = endpointIntents.find(
-        (intent) => intent.operationName === effectiveSelectedEndpointIntentName,
-      );
-      if (selected !== undefined) {
-        onRemoveEndpointIntent(selected);
-      }
-      return;
-    }
-
-    if (
-      activeRoute.id === "sessions" &&
-      foregroundConnections.length > 0 &&
-      (input === "j" || input === "k")
-    ) {
-      const currentIndex = foregroundConnections.findIndex(
-        (connection) => connection.id === effectiveSelectedForegroundConnectionId,
-      );
-      const nextIndex =
-        currentIndex < 0
-          ? input === "j"
-            ? 0
-            : foregroundConnections.length - 1
-          : input === "j"
-            ? (currentIndex + 1) % foregroundConnections.length
-            : (currentIndex - 1 + foregroundConnections.length) %
-              foregroundConnections.length;
-      const next = foregroundConnections[nextIndex];
-      if (next !== undefined) {
-        setSelectedForegroundConnectionId(next.id);
-      }
-      return;
-    }
-
-    if (
-      activeRoute.id === "sessions" &&
-      input === "x" &&
-      effectiveSelectedForegroundConnectionId !== undefined &&
-      onCloseForegroundConnection !== undefined
-    ) {
-      const connectionId = effectiveSelectedForegroundConnectionId;
-      setForegroundConnectionBusy(true);
-      void onCloseForegroundConnection(connectionId).then((closed) => {
-        setForegroundConnectionBusy(false);
-        if (closed) {
-          setSelectedForegroundConnectionId(undefined);
-          setStatus("Foreground Endpoint closed.");
-        }
-      });
-      return;
-    }
-
-    if (
-      activeRoute.id === "new-instance" &&
-      workflowItems.length > 0 &&
-      (input === "j" || input === "k")
-    ) {
-      const currentIndex = Math.max(
-        0,
-        workflowItems.findIndex(
-          (workflow) => workflowKey(workflow) === effectiveSelectedWorkflowKey,
-        ),
-      );
-      const nextIndex =
-        input === "j"
-          ? (currentIndex + 1) % workflowItems.length
-          : (currentIndex - 1 + workflowItems.length) % workflowItems.length;
-      const next = workflowItems[nextIndex];
-      if (next !== undefined) {
-        setSelectedWorkflowKey(workflowKey(next));
-      }
-      return;
-    }
-
-    if (
-      activeRoute.id === "new-instance" &&
-      key.return &&
-      effectiveSelectedWorkflowKey !== undefined
-    ) {
-      const selected = workflowItems.find(
-        (workflow) => workflowKey(workflow) === effectiveSelectedWorkflowKey,
-      );
-      if (selected !== undefined) {
-        if (selected.presentation.kind === "interactive-flow") {
-          onOpenProviderWorkflow?.(selected);
-          setStatus(`Opening ${selected.providerId}/${selected.commandName}.`);
-        } else {
-          setStatus(
-            `${selected.providerId} does not expose a guided TUI flow for this operation. Open Advanced provider tools for manual operations.`,
-          );
-        }
-      }
-      return;
-    }
-
-    if (
-      activeRoute.id === "instances" &&
-      inventoryItems.length > 0 &&
-      (input === "j" || input === "k")
-    ) {
-      const currentIndex = inventoryItems.findIndex(
-        (instance) => instance.id === effectiveSelectedInstanceId,
-      );
-      const nextIndex =
-        currentIndex < 0
-          ? input === "j"
-            ? 0
-            : inventoryItems.length - 1
-          : input === "j"
-            ? (currentIndex + 1) % inventoryItems.length
-            : (currentIndex - 1 + inventoryItems.length) % inventoryItems.length;
-      const next = inventoryItems[nextIndex];
-      if (next !== undefined) {
-        setSelectedInstanceId(next.id);
-      }
-      return;
-    }
-
-    if (
-      activeRoute.id === "instances" &&
-      input === "0" &&
-      bulkSelectedInstanceIds.length > 0
-    ) {
-      setBulkSelectedInstanceIds([]);
-      setStatus("Cleared bulk instance targets.");
-      return;
-    }
-
-    if (
-      activeRoute.id === "instances" &&
-      input === " " &&
-      effectiveSelectedInstanceId !== undefined &&
-      onBulkInstanceMutation !== undefined
-    ) {
-      const selected = inventoryItems.find(
-        (instance) => instance.id === effectiveSelectedInstanceId,
-      );
-      if (selected === undefined) {
-        return;
-      }
-      const selectedIndex = inventoryItems.findIndex((instance) => instance.id === selected.id);
-      const selectedLabel = serverListLabel(selected, selectedIndex, inventoryItems);
-      if (selected.freshness !== "fresh") {
-        setStatus(`Cannot select ${selectedLabel}; refresh stale or unobserved state first.`);
-        return;
-      }
-      setBulkSelectedInstanceIds((current) =>
-        current.includes(selected.id)
-          ? current.filter((instanceId) => instanceId !== selected.id)
-          : [...current, selected.id],
-      );
-      setStatus(
-        bulkSelectedInstanceIds.includes(selected.id)
-          ? `Removed ${selectedLabel} from selected servers.`
-          : `Added ${selectedLabel} to selected servers.`,
-      );
-      return;
-    }
-
-    if (
-      activeRoute.id === "instances" &&
-      bulkSelectedInstanceIds.length > 0 &&
-      /^[1-9]$/.test(input)
-    ) {
-      if (onBulkInstanceMutation === undefined) {
-        return;
-      }
-      if (missingBulkSelectedInstanceIds.length > 0) {
-        setStatus(
-          `Bulk targets changed during refresh; clear or reselect ${missingBulkSelectedInstanceIds.join(", ")}.`,
-        );
-        return;
-      }
-      if (bulkSelectedInstances.some((instance) => instance.freshness !== "fresh")) {
-        setStatus("Bulk targets include stale state; refresh before dispatching a mutation.");
-        return;
-      }
-      const action = bulkAvailableInstanceActions(bulkSelectedInstances)[Number(input) - 1];
-      if (action !== undefined) {
-        const mutation = {
-          instanceIds: [...bulkSelectedInstanceIds],
-          action,
-        } satisfies TuiBulkInstanceMutation;
-        onBulkInstanceMutation(mutation);
-        setStatus(bulkInstanceMutationStatus(mutation));
-      }
-      return;
-    }
-
-    if (
-      activeRoute.id === "instances" &&
-      effectiveSelectedInstanceId !== undefined &&
-      onInstanceMutation !== undefined
-    ) {
-      const selected = inventoryItems.find(
-        (instance) => instance.id === effectiveSelectedInstanceId,
-      );
-      const mutation =
-        selected === undefined ? undefined : instanceMutationForInput(selected, input);
-      if (mutation !== undefined) {
-        onInstanceMutation(mutation);
-        setStatus(instanceMutationStatus(mutation));
-        return;
-      }
-    }
-
     if (input === "r") {
-      setStatus(`Refresh requested for ${activeRoute.label}.`);
-      onRefresh?.(activeRoute.id);
+      dispatchContextAction("refresh");
       return;
     }
 
@@ -4489,26 +4163,6 @@ function bulkActionSupportCount(
   return instances.filter((instance) =>
     availableInstanceActions(instance).includes(action),
   ).length;
-}
-
-function instanceMutationForInput(
-  instance: TuiInstanceReadItem,
-  input: string,
-): TuiInstanceMutation | undefined {
-  if (
-    input === "a" &&
-    instance.freshness === "fresh" &&
-    instance.management === "discovered"
-  ) {
-    return { kind: "adopt", instanceId: instance.id };
-  }
-  if (!/^[1-9]$/.test(input)) {
-    return undefined;
-  }
-  const action = availableInstanceActions(instance)[Number(input) - 1];
-  return action === undefined
-    ? undefined
-    : { kind: "action", instanceId: instance.id, action };
 }
 
 function instanceMutationStatus(mutation: TuiInstanceMutation): string {
