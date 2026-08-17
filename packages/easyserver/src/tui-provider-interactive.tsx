@@ -336,6 +336,7 @@ export function ProviderInteractiveSurface({
         cursor={choiceCursor}
         height={terminalRows}
         colorEnabled={colorEnabled}
+        screenReader={screenReader}
       />
     );
   }
@@ -474,6 +475,7 @@ function ChoicePicker({
   cursor,
   height,
   colorEnabled,
+  screenReader,
 }: {
   readonly field: Extract<ProviderInteractiveField, {
     readonly kind: "single-choice" | "multiple-choice";
@@ -481,21 +483,31 @@ function ChoicePicker({
   readonly cursor: number;
   readonly height: number;
   readonly colorEnabled: boolean;
+  readonly screenReader: boolean;
 }): React.ReactElement {
   const choices = field.choices.filter((choice) => !choice.disabled);
-  const focusedChoice =
-    choices.length === 0
-      ? undefined
-      : choices[Math.max(0, Math.min(cursor, choices.length - 1))];
+  const clampedCursor =
+    choices.length === 0 ? 0 : Math.max(0, Math.min(cursor, choices.length - 1));
+  const focusedChoice = choices[clampedCursor];
   const fixedRows =
     2 +
     (field.description === undefined ? 0 : 1) +
     (focusedChoice?.description === undefined ? 0 : 1);
-  const window = tuiFocusWindowWithinRows(
-    cursor,
-    choices.length,
-    Math.max(1, height - fixedRows),
-  );
+  const window = screenReader
+    ? {
+        cursor: clampedCursor,
+        start: 0,
+        end: choices.length,
+        hiddenBefore: 0,
+        hiddenAfter: 0,
+        showBefore: false,
+        showAfter: false,
+      }
+    : tuiFocusWindowWithinRows(
+        clampedCursor,
+        choices.length,
+        Math.max(1, height - fixedRows),
+      );
   const selected = new Set(
     field.kind === "single-choice"
       ? field.value === undefined
@@ -506,11 +518,17 @@ function ChoicePicker({
   const muted = colorEnabled ? "gray" : undefined;
   const accent = colorEnabled ? "cyan" : undefined;
 
+  const visualWrap = screenReader ? "wrap" : "truncate-middle";
+
   return (
-    <Box flexDirection="column" height={height} overflowY="hidden">
-      <Text bold color={accent} wrap="truncate">Choose {safe(field.label)}</Text>
+    <Box
+      flexDirection="column"
+      height={screenReader ? undefined : height}
+      overflowY={screenReader ? undefined : "hidden"}
+    >
+      <Text bold color={accent} wrap={visualWrap}>Choose {safe(field.label)}</Text>
       {field.description === undefined ? null : (
-        <Text color={muted} wrap="truncate">{safe(field.description)}</Text>
+        <Text color={muted} wrap={visualWrap}>{safe(field.description)}</Text>
       )}
       <Box flexDirection="column">
         {window.showBefore ? <Text color={muted}>↑ {window.hiddenBefore} more</Text> : null}
@@ -518,7 +536,12 @@ function ChoicePicker({
           const index = window.start + visibleIndex;
           const focused = index === window.cursor;
           return (
-            <Text key={choice.id} bold={focused} color={focused ? accent : undefined}>
+            <Text
+              key={choice.id}
+              bold={focused}
+              color={focused ? accent : undefined}
+              wrap={visualWrap}
+            >
               {focused ? "> " : "  "}{selected.has(choice.id) ? "[x] " : "[ ] "}{safe(choice.label)}
             </Text>
           );
@@ -526,7 +549,7 @@ function ChoicePicker({
         {window.showAfter ? <Text color={muted}>↓ {window.hiddenAfter} more</Text> : null}
       </Box>
       {focusedChoice?.description === undefined ? null : (
-        <Text wrap="truncate">{safe(focusedChoice.description)}</Text>
+        <Text wrap={visualWrap}>{safe(focusedChoice.description)}</Text>
       )}
       <Box>
         <Text color={muted} wrap="truncate">

@@ -5,6 +5,7 @@ import { cleanup, render } from "ink-testing-library";
 import { ProviderInteractiveSurface } from "../dist/tui-provider-interactive.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+const flushEscape = () => new Promise((resolve) => setTimeout(resolve, 30));
 const frameRows = (view) => view.lastFrame().split("\n").length;
 
 test.afterEach(() => cleanup());
@@ -382,6 +383,124 @@ test("generic provider forms and choice pickers honor the supplied row budget", 
   assert.match(view.lastFrame(), /↑ \d+ more/);
   assert.match(view.lastFrame(), /↓ \d+ more/);
   assert.ok(frameRows(view) <= 12);
+});
+
+test("choice picker is complete for screen readers and preserves multiple selection semantics", async () => {
+  const events = [];
+  const choices = Array.from({ length: 13 }, (_, index) => ({
+    id: `choice-${index + 1}`,
+    label: `Choice ${index + 1}`,
+    ...(index === 12 ? { disabled: true } : {}),
+  }));
+  const screen = {
+    kind: "form",
+    id: "screen-reader-choices",
+    title: "Accessible choices",
+    fields: [
+      {
+        kind: "multiple-choice",
+        id: "targets",
+        label: "Targets",
+        required: false,
+        choices,
+        value: ["choice-2"],
+      },
+    ],
+    actions: [],
+  };
+  const view = render(
+    React.createElement(ProviderInteractiveSurface, {
+      colorEnabled: false,
+      height: 8,
+      screenReader: true,
+      screen,
+      onEvent(event) {
+        events.push(event);
+      },
+      onClose() {},
+    }),
+  );
+
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /Choose Targets/);
+  assert.match(view.lastFrame(), /Choice 1/);
+  assert.match(view.lastFrame(), /> \[x\] Choice 2/);
+  assert.match(view.lastFrame(), /Choice 12/);
+  assert.doesNotMatch(view.lastFrame(), /Choice 13/);
+  assert.doesNotMatch(view.lastFrame(), /\d+ more/);
+
+  view.stdin.write("\u001b[B");
+  await tick();
+  view.stdin.write("\r");
+  await tick();
+  assert.deepEqual(events.at(-1), {
+    kind: "field-change",
+    fieldId: "targets",
+    value: ["choice-2", "choice-3"],
+  });
+  assert.match(view.lastFrame(), /Choose Targets/);
+  view.stdin.write("\u001b");
+  await flushEscape();
+  assert.doesNotMatch(view.lastFrame(), /Choose Targets/);
+});
+
+test("visual choice picker keeps long provider labels bounded across resize", async () => {
+  const hostileLabel = `Provider GPU \u001b[31m${"X".repeat(240)}`;
+  const choices = Array.from({ length: 50 }, (_, index) => ({
+    id: `gpu-${index + 1}`,
+    label: `${hostileLabel}-${index + 1}`,
+    description: `Provider description ${index + 1}`,
+  }));
+  const screen = {
+    kind: "form",
+    id: "long-choices",
+    title: "Long provider choices",
+    fields: [
+      {
+        kind: "single-choice",
+        id: "gpu",
+        label: "GPU",
+        required: false,
+        choices,
+      },
+    ],
+    actions: [],
+  };
+  const renderSurface = (height) =>
+    React.createElement(ProviderInteractiveSurface, {
+      colorEnabled: false,
+      height,
+      screen,
+      onEvent() {},
+      onClose() {},
+    });
+  const view = render(renderSurface(20));
+  Object.defineProperty(view.stdout, "columns", { value: 60, configurable: true });
+  view.stdout.emit("resize");
+  await tick();
+
+  view.stdin.write("\r");
+  await tick();
+  assert.match(view.lastFrame(), /> \[ \] Provider GPU \\u001b\[31m/);
+  assert.match(view.lastFrame(), /↓ \d+ more/);
+  assert.match(view.lastFrame(), /↑\/↓ move · Enter choose · Esc back/);
+  assert.ok(frameRows(view) <= 20, `start frame exceeded height: ${frameRows(view)}`);
+
+  for (let index = 0; index < 24; index += 1) {
+    view.stdin.write("\u001b[B");
+    await tick();
+  }
+  assert.match(view.lastFrame(), /> \[ \] Provider GPU \\u001b\[31m.*-25/);
+  assert.match(view.lastFrame(), /↑ \d+ more/);
+  assert.match(view.lastFrame(), /↓ \d+ more/);
+  assert.ok(frameRows(view) <= 20, `middle frame exceeded height: ${frameRows(view)}`);
+
+  view.rerender(renderSurface(16));
+  await tick();
+  assert.match(view.lastFrame(), /> \[ \] Provider GPU \\u001b\[31m.*-25/);
+  assert.match(view.lastFrame(), /↑\/↓ move · Enter choose · Esc back/);
+  assert.ok(frameRows(view) <= 16, `resized frame exceeded height: ${frameRows(view)}`);
 });
 
 test("generic provider tables keep focused rows inside a bounded terminal viewport", async () => {
