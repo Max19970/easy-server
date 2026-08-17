@@ -6,7 +6,7 @@ You do not need to learn EasyServer's daemon, saved connection model, internal I
 
 ## Before you begin
 
-EasyServer `0.2.x` is currently qualified for **Windows 11 x64** with **Node.js 24.18.1**. SSH-backed connections use the system OpenSSH client.
+EasyServer `0.2.0` is qualified for **Windows 11 x64**. Starting with `0.2.1`, the qualified client targets are **Windows 11 x64**, **Ubuntu 24.04 x64**, and **macOS 15 arm64**, with **Node.js 24.18.1**. SSH-backed connections use the system OpenSSH client.
 
 Check the full requirements in [Supported platforms](supported-platforms.md) if your environment differs from the qualified release setup.
 

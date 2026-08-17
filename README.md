@@ -34,7 +34,7 @@ EasyServer manages the compute and connection boundary. It does **not** install 
 
 ## Install and try it
 
-EasyServer `0.2.x` is currently qualified for **Windows 11 x64** with **Node.js 24.18.1**. See [Supported platforms](docs/supported-platforms.md) for the exact support boundary.
+Starting with EasyServer **0.2.1**, the `0.2.x` line is release-qualified on **Windows 11 x64**, **Ubuntu 24.04 x64**, and **macOS 15 arm64** with **Node.js 24.18.1**. EasyServer `0.2.0` remains historically Windows-only. See [Supported platforms](docs/supported-platforms.md) for the exact support boundary and Secret Store prerequisites.
 
 Install the core CLI and one provider plugin:
 
