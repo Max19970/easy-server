@@ -9,9 +9,34 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build and publish verified Windows release
-    runs-on: windows-latest
+  release-targets:
+    name: Resolve release targets
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+
+    steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.1
+          package-manager-cache: false
+
+      - name: Resolve authoritative release matrix
+        id: targets
+        shell: bash
+        run: echo "matrix=$(node scripts/release-targets.mjs --github-matrix)" >> "$GITHUB_OUTPUT"
+
+  build-portable:
+    name: Build portable (${{ matrix.name }})
+    needs: release-targets
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.release-targets.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Check out tagged commit
@@ -29,68 +54,165 @@ jobs:
       - name: Verify tag matches package version
         run: node -e "const version = require('./package.json').version; const expected = 'v' + version; if (process.env.GITHUB_REF_NAME !== expected) throw new Error('Release tag must equal ' + expected);"
 
+      - name: Verify runner matches release target
+        run: node scripts/release-targets.mjs --verify-current ${{ matrix.id }}
+
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify public-release prerequisites
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $visibility = gh repo view $env:GITHUB_REPOSITORY --json visibility --jq .visibility
-          if ($visibility -ne "PUBLIC") {
-            throw "The GitHub repository must be public before creating the public release"
-          }
+      - name: Typecheck
+        run: npm run typecheck
 
-          $version = node -p "require('./package.json').version"
-          $packages = @(
-            "@easyai101/easyserver-plugin-sdk",
-            "@easyai101/easyserver",
-            "@easyai101/easyserver-plugin-vastai",
-            "@easyai101/easyserver-plugin-intelion"
-          )
-          foreach ($package in $packages) {
-            $published = npm view "$package@$version" version --json | ConvertFrom-Json
-            if ($LASTEXITCODE -ne 0 -or $published -ne $version) {
-              throw "$package@$version must be published before the GitHub Release is created"
-            }
-          }
+      - name: Test
+        run: npm test
 
-      - name: Run deterministic release gate
-        run: npm run release:check
+      - name: Verify Windows TUI terminal surface
+        if: matrix.platform == 'win32'
+        run: npm run verify:tui-windows
+
+      - name: Verify publishable tarballs
+        run: npm pack --workspaces --dry-run
+
+      - name: Verify packaged install
+        run: npm run verify:packaged-install
+
+      - name: Build and verify native portable artifact
+        run: npm run release:artifacts
 
       - name: Verify OS keyring integration
         run: npm run verify:os-keyring
 
-      - name: Publish GitHub Release with the verified assets
-        shell: pwsh
+      - name: Upload verified portable artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.id }}
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-release:
+    name: Publish verified cross-platform release
+    needs: build-portable
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.1
+          package-manager-cache: false
+
+      - name: Use release npm version
+        run: npm install --global npm@11.16.0
+
+      - name: Install dependencies for release-note rendering
+        run: npm ci
+
+      - name: Verify public-release prerequisites
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = $env:GITHUB_REF_NAME
-          $refs = @(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
-          if ($LASTEXITCODE -ne 0 -or $refs.Count -eq 0) {
-            throw "Remote release tag $tag is missing"
-          }
+          visibility=$(gh repo view "$GITHUB_REPOSITORY" --json visibility --jq .visibility)
+          if [ "$visibility" != "PUBLIC" ]; then
+            echo "The GitHub repository must be public before creating the public release" >&2
+            exit 1
+          fi
 
-          $peeled = $refs | Where-Object { $_ -match '\^\{\}$' } | Select-Object -First 1
-          $target = if ($peeled) { $peeled } else { $refs[0] }
-          $remoteSha = ($target -split '\s+')[0]
-          if ($remoteSha -ne $env:GITHUB_SHA) {
-            throw "Remote release tag moved after this workflow started"
-          }
+          version=$(node -p "require('./package.json').version")
+          for package in \
+            @easyai101/easyserver-plugin-sdk \
+            @easyai101/easyserver \
+            @easyai101/easyserver-plugin-vastai \
+            @easyai101/easyserver-plugin-intelion
+          do
+            published=$(npm view "$package@$version" version --json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s)))")
+            if [ "$published" != "$version" ]; then
+              echo "$package@$version must be published before the GitHub Release is created" >&2
+              exit 1
+            fi
+          done
 
-          $version = node -p "require('./package.json').version"
-          $zip = "dist/release/easyserver-$version-windows-x64.zip"
-          $checksums = "dist/release/easyserver-$version-SHA256SUMS.txt"
-          $notes = "docs/releases/$tag.md"
-          if (-not (Test-Path -LiteralPath $notes)) {
-            throw "Release notes must exist at $notes before the release tag is created"
-          }
-          $renderedNotes = Join-Path $env:RUNNER_TEMP "$tag-release-notes.md"
-          node scripts/render-release-notes.mjs $notes $renderedNotes $env:GITHUB_REPOSITORY $env:GITHUB_SHA
-          if ($LASTEXITCODE -ne 0) {
-            throw "Release notes could not be rendered for GitHub"
-          }
+      - name: Verify release tag is immutable
+        shell: bash
+        run: |
+          tag="$GITHUB_REF_NAME"
+          refs=$(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
+          if [ -z "$refs" ]; then
+            echo "Remote release tag $tag is missing" >&2
+            exit 1
+          fi
+          remote_sha=$(printf '%s\n' "$refs" | awk '/\^\{\}$/ {print $1; found=1} END {if (!found) print $1}' | head -n1)
+          if [ "$remote_sha" != "$GITHUB_SHA" ]; then
+            echo "Remote release tag moved after this workflow started" >&2
+            exit 1
+          fi
 
-          gh release create $tag $zip $checksums --verify-tag --title "EasyServer $tag" --notes-file $renderedNotes
+      - name: Download all verified portable artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: dist/release
+          merge-multiple: true
+
+      - name: Verify complete asset set and write checksums
+        run: node scripts/verify-release-assets.mjs --write-checksums dist/release
+
+      - name: Publish GitHub Release with verified assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          notes="docs/releases/$tag.md"
+          if [ ! -f "$notes" ]; then
+            echo "Release notes must exist at $notes before the release tag is created" >&2
+            exit 1
+          fi
+          rendered_notes="$RUNNER_TEMP/$tag-release-notes.md"
+          node scripts/render-release-notes.mjs "$notes" "$rendered_notes" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+          gh release create "$tag" dist/release/* --verify-tag --title "EasyServer $tag" --notes-file "$rendered_notes"
+
+          gh release view "$tag" --json assets --jq '.assets[].name' > "$RUNNER_TEMP/$tag-assets.txt"
+          node scripts/verify-release-assets.mjs --published-names "$RUNNER_TEMP/$tag-assets.txt"
+
+  public-smoke:
+    name: Public release smoke (${{ matrix.name }})
+    needs: [release-targets, publish-release]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.release-targets.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.1
+          package-manager-cache: false
+
+      - name: Use release npm version
+        run: npm install --global npm@11.16.0
+
+      - name: Verify runner matches release target
+        run: node scripts/release-targets.mjs --verify-current ${{ matrix.id }}
+
+      - name: Download published platform artifact and checksum manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          artifact="easyserver-$version-${{ matrix.id }}${{ matrix.archiveExtension }}"
+          checksum="easyserver-$version-SHA256SUMS.txt"
+          mkdir -p published-release
+          gh release download "$GITHUB_REF_NAME" --pattern "$artifact" --pattern "$checksum" --dir published-release
+
+      - name: Verify downloaded public release
+        run: node scripts/verify-published-release.mjs published-release

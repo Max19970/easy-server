@@ -35,7 +35,7 @@ Or for Intelion.cloud:
 npm install --global @easyai101/easyserver-plugin-intelion
 ```
 
-A clean core install contains no providers by default. If you prefer the portable Windows ZIP instead of a global core install, follow [Install from GitHub Releases](github-release-install.md); plugins must be installed into that extracted EasyServer prefix.
+A clean core install contains no providers by default. Starting with `0.2.2`, every qualified platform also has a portable GitHub Release artifact; follow [Install from GitHub Releases](github-release-install.md) and install plugins into that extracted EasyServer prefix.
 
 ## 2. Open the TUI
 

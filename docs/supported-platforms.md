@@ -2,7 +2,7 @@
 
 EasyServer's `0.2.x` support matrix is versioned. **EasyServer 0.2.0 was qualified only for Windows 11 x64. Starting with 0.2.1, Ubuntu 24.04 x64 and macOS 15 arm64 join Windows 11 x64 as release-qualified client targets.**
 
-Support is intentionally exact: installability on a nearby operating system or architecture is not treated as equivalent release evidence. The newly qualified Ubuntu and macOS targets are continuously exercised with package installation, the full test gate, a real OS Secret Store round trip, and real system OpenSSH/`ssh-keyscan` prerequisite checks. Windows 11 x64 retains its previously established support contract; its automated release gate continuously covers the full test suite, packaged installation, release artifact, TUI surface, and real OS keyring integration.
+Support is intentionally exact: installability on a nearby operating system or architecture is not treated as equivalent release evidence. The qualified targets are continuously exercised with package installation, the full test gate, a real OS Secret Store round trip, and applicable system OpenSSH/`ssh-keyscan` prerequisite checks. Windows additionally exercises its terminal-specific TUI surface. Starting with `0.2.2`, every qualified target also builds and smokes its own native portable GitHub Release artifact before publication.
 
 ## Supported matrix
 
@@ -71,18 +71,22 @@ npm install --global @easyai101/easyserver
 
 Provider Plugins are separate opt-in packages installed into the same package environment. See [Getting started](getting-started.md).
 
-## Portable GitHub Release ZIP
+## Portable GitHub Release artifacts
 
-The portable GitHub Release ZIP remains a **Windows x64-only** distribution:
+Starting with `0.2.2`, direct GitHub Release distribution covers every qualified client target:
 
 ```text
 easyserver-<version>-windows-x64.zip
+easyserver-<version>-linux-x64.tar.gz
+easyserver-<version>-macos-arm64.tar.gz
 easyserver-<version>-SHA256SUMS.txt
 ```
 
-The ZIP contains the core CLI/runtime dependencies but not Node.js or Provider Plugins. It is not a native standalone executable. Ubuntu and macOS users should use the npm package path above.
+Each platform artifact contains the core CLI/runtime dependencies but not Node.js or Provider Plugins. These are portable npm-prefix bundles, not native standalone executables. The single SHA-256 manifest covers all three platform artifacts, and the release workflow refuses publication unless the complete qualified target set is built and verified.
 
-Follow [Install from GitHub Releases](github-release-install.md) for checksum verification, extraction, and prefix-aware plugin installation on Windows.
+Historical releases remain unchanged: `v0.2.1` and earlier keep their originally published asset sets. Cross-platform portable assets begin with `v0.2.2`.
+
+Follow [Install from GitHub Releases](github-release-install.md) for checksum verification, extraction, and prefix-aware Provider Plugin installation on Windows, Ubuntu, and macOS.
 
 ## Not supported by the current `0.2.x` contract
 

@@ -14,9 +14,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  release-check:
-    name: Release check (Windows x64)
-    runs-on: windows-latest
+  release-targets:
+    name: Resolve release targets
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
 
     steps:
       - name: Check out repository
@@ -28,44 +30,18 @@ jobs:
           node-version: 24.18.1
           package-manager-cache: false
 
-      - name: Use release npm version
-        run: npm install --global npm@11.16.0
+      - name: Resolve authoritative release matrix
+        id: targets
+        shell: bash
+        run: echo "matrix=$(node scripts/release-targets.mjs --github-matrix)" >> "$GITHUB_OUTPUT"
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Test
-        run: npm test
-
-      - name: Verify Windows TUI terminal surface
-        run: npm run verify:tui-windows
-
-      - name: Verify publishable tarballs
-        run: npm pack --workspaces --dry-run
-
-      - name: Verify packaged install
-        run: npm run verify:packaged-install
-
-      - name: Verify GitHub Release artifact
-        run: npm run release:artifacts
-
-      - name: Verify OS keyring integration
-        run: npm run verify:os-keyring
-
-  unix-qualification:
+  release-check:
     name: Release check (${{ matrix.name }})
+    needs: release-targets
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: Ubuntu 24.04 x64
-            os: ubuntu-24.04
-          - name: macOS 15 arm64
-            os: macos-15
-    runs-on: ${{ matrix.os }}
+      matrix: ${{ fromJSON(needs.release-targets.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Check out repository
@@ -80,10 +56,20 @@ jobs:
       - name: Use release npm version
         run: npm install --global npm@11.16.0
 
-      - name: Record platform and OpenSSH prerequisites
+      - name: Verify runner matches release target
+        run: node scripts/release-targets.mjs --verify-current ${{ matrix.id }}
+
+      - name: Record Windows OpenSSH prerequisites
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          ssh -V
+          Get-Command ssh-keyscan | Select-Object -ExpandProperty Source
+
+      - name: Record Unix OpenSSH prerequisites
+        if: matrix.platform != 'win32'
         shell: bash
         run: |
-          node -p '"node-platform=" + process.platform + " node-arch=" + process.arch'
           uname -a
           ssh -V
           command -v ssh-keyscan
@@ -97,11 +83,18 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Verify Windows TUI terminal surface
+        if: matrix.platform == 'win32'
+        run: npm run verify:tui-windows
+
       - name: Verify publishable tarballs
         run: npm pack --workspaces --dry-run
 
       - name: Verify packaged install
         run: npm run verify:packaged-install
+
+      - name: Verify native portable release artifact
+        run: npm run release:artifacts
 
       - name: Verify OS keyring integration
         run: npm run verify:os-keyring

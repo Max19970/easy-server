@@ -24,7 +24,7 @@ Provider packages are opt-in. A clean EasyServer installation contains no Provid
 
 ## Install and operate EasyServer
 
-- [Install from GitHub Releases](github-release-install.md) — verify and run the portable Windows ZIP, then add plugins to that extracted installation when needed.
+- [Install from GitHub Releases](github-release-install.md) — verify and run the portable artifact for Windows, Ubuntu, or macOS, then add plugins to that extracted installation when needed.
 - [Package lifecycle](package-lifecycle.md) — compatible upgrades, reinstalls, missing plugins, uninstall, and clean removal.
 - [Support and maintenance](support-and-maintenance.md) — where to report bugs, what information is useful, and what the project currently supports.
 

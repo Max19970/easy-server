@@ -22,7 +22,7 @@
     "verify:os-keyring": "npm run build --workspace=@easyai101/easyserver && node scripts/verify-os-keyring.mjs",
     "verify:security": "npm run build && node --test packages/easyserver/test/secret-store.test.mjs packages/easyserver/test/plugin-credentials.test.mjs packages/easyserver/test/state-store.test.mjs packages/easyserver/test/local-daemon.test.mjs packages/easyserver/test/ssh-access-adapter.test.mjs packages/easyserver/test/connection-gateway.test.mjs && node --test plugins/vastai/test/provider.test.mjs plugins/intelion/test/provider.test.mjs plugins/intelion/test/access.test.mjs",
     "release:artifacts": "node scripts/build-release-artifacts.mjs",
-    "release:check": "npm run typecheck && npm test && npm run verify:tui-windows && npm pack --workspaces --dry-run && npm run verify:packaged-install && npm run release:artifacts",
+    "release:check": "npm run typecheck && npm test && npm pack --workspaces --dry-run && npm run verify:packaged-install && npm run release:artifacts && npm run verify:os-keyring",
     "easyserver": "npm run start --workspace=@easyai101/easyserver --"
   },
   "devDependencies": {

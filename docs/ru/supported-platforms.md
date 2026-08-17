@@ -4,7 +4,7 @@
 
 Матрица поддержки EasyServer `0.2.x` зависит от версии. **EasyServer 0.2.0 был квалифицирован только для Windows 11 x64. Начиная с 0.2.1, к Windows 11 x64 как release-qualified client targets добавляются Ubuntu 24.04 x64 и macOS 15 arm64.**
 
-Граница поддержки намеренно точная: устанавливаемость на похожей ОС или архитектуре не считается эквивалентным свидетельством поддержки. Новые квалифицированные targets Ubuntu и macOS непрерывно проверяются в CI: установка пакетов, полный test gate, реальный round trip через OS Secret Store и реальные системные проверки OpenSSH/`ssh-keyscan`. Windows 11 x64 сохраняет ранее установленный контракт поддержки; его автоматизированный release gate непрерывно проверяет полный test suite, packaged install, release artifact, TUI surface и реальную OS keyring integration.
+Граница поддержки намеренно точная: устанавливаемость на похожей ОС или архитектуре не считается эквивалентным свидетельством поддержки. Квалифицированные targets непрерывно проверяются в CI: установка пакетов, полный test gate, реальный round trip через OS Secret Store и применимые системные проверки OpenSSH/`ssh-keyscan`. На Windows дополнительно проверяется terminal-specific TUI surface. Начиная с `0.2.2`, каждый квалифицированный target также собирает и проверяет собственный native portable GitHub Release artifact до публикации.
 
 ## Матрица поддержки
 
@@ -73,18 +73,22 @@ npm install --global @easyai101/easyserver
 
 Provider Plugins — отдельные opt-in packages, устанавливаемые в то же package environment. См. [Начало работы](getting-started.md).
 
-## Portable GitHub Release ZIP
+## Portable-артефакты GitHub Release
 
-Portable GitHub Release ZIP остаётся дистрибутивом **только для Windows x64**:
+Начиная с `0.2.2`, прямая дистрибуция через GitHub Release покрывает каждый квалифицированный client target:
 
 ```text
 easyserver-<version>-windows-x64.zip
+easyserver-<version>-linux-x64.tar.gz
+easyserver-<version>-macos-arm64.tar.gz
 easyserver-<version>-SHA256SUMS.txt
 ```
 
-ZIP содержит core CLI/runtime dependencies, но не Node.js и не Provider Plugins. Это не самостоятельный native executable. Пользователям Ubuntu и macOS следует использовать npm package path выше.
+Каждый платформенный артефакт содержит core CLI/runtime dependencies, но не Node.js и не Provider Plugins. Это переносимые npm-prefix bundles, а не самостоятельные native executables. Единый SHA-256 manifest покрывает все три платформенных артефакта, а release workflow запрещает публикацию, если полный набор квалифицированных targets не был собран и проверен.
 
-Следуйте [Установке из GitHub Releases](github-release-install.md) для проверки checksum, распаковки и prefix-aware установки плагинов на Windows.
+Исторические релизы не меняются: `v0.2.1` и более ранние версии сохраняют исходный набор опубликованных assets. Кроссплатформенные portable assets начинаются с `v0.2.2`.
+
+Следуйте [Установке из GitHub Releases](github-release-install.md) для проверки checksum, распаковки и prefix-aware установки Provider Plugins на Windows, Ubuntu и macOS.
 
 ## Что не поддерживается текущим контрактом `0.2.x`
 

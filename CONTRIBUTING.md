@@ -20,7 +20,9 @@ Run the full deterministic release-level repository check before submitting a su
 npm run release:check
 ```
 
-That check covers typechecking, tests, publishable package shapes, packaged installation, the supported Windows TUI surface, and the release artifact build/verification path.
+That check covers typechecking, tests, publishable package shapes, packaged installation, the current platform's portable release artifact, and real OS keyring integration. CI additionally exercises the Windows terminal-specific TUI surface and runs the same portable-artifact contract on every qualified release target.
+
+`scripts/release-targets.mjs` is the authoritative portable-release target set. When platform qualification changes, update that contract together with the support/install documentation; CI and tag publication derive their build matrix from it, so a supported target cannot silently exist without a required artifact.
 
 Ordinary development and pull-request validation must not require real provider credentials or paid resources. Live first-party provider acceptance is a maintainer release activity, not a normal contributor prerequisite.
 

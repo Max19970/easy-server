@@ -10,9 +10,13 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  releaseAssetName,
+  releaseTargetForRuntime,
+} from "./release-targets.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WINDOWS_STATUS_DLL_INIT_FAILED = 0xc0000142;
@@ -20,22 +24,25 @@ const PROCESS_START_ATTEMPTS = 5;
 const PROCESS_START_RETRY_DELAY_MS = 1_000;
 const npmCli = process.env.npm_execpath;
 assert.ok(npmCli, "release artifacts must be built through npm");
-assert.equal(process.platform, "win32", "release artifacts are qualified on Windows only");
-assert.equal(process.arch, "x64", "release artifacts are qualified for x64 only");
 
+const target = releaseTargetForRuntime();
 const rootManifest = JSON.parse(
   await readFile(join(repositoryRoot, "package.json"), "utf8"),
 );
 const version = rootManifest.version;
 assert.match(version, /^\d+\.\d+\.\d+$/u, "workspace version must be a release version");
 
-const bundleName = `easyserver-${version}-windows-x64`;
-const zipName = `${bundleName}.zip`;
-const checksumName = `easyserver-${version}-SHA256SUMS.txt`;
+const bundleName = `easyserver-${version}-${target.id}`;
+const artifactName = releaseAssetName(version, target);
 const releaseDirectory = join(repositoryRoot, "dist", "release");
 const temporaryRoot = await mkdtemp(join(tmpdir(), "easyserver-release-artifacts-"));
 
-await rm(releaseDirectory, { recursive: true, force: true });
+await rm(releaseDirectory, {
+  recursive: true,
+  force: true,
+  maxRetries: 5,
+  retryDelay: 250,
+});
 await mkdir(releaseDirectory, { recursive: true });
 
 try {
@@ -46,45 +53,45 @@ try {
 
   const sdkTarball = pack("packages/plugin-sdk", packDirectory);
   const cliTarball = pack("packages/easyserver", packDirectory);
+  const vastTarball = pack("plugins/vastai", packDirectory);
+  const intelionTarball = pack("plugins/intelion", packDirectory);
   installPortablePrefix(bundleDirectory, sdkTarball, cliTarball);
 
-  await rm(join(bundleDirectory, "node_modules", ".package-lock.json"), {
+  await rm(join(globalNodeModules(bundleDirectory), ".package-lock.json"), {
     force: true,
   });
-  await rm(join(bundleDirectory, "easyserver"), { force: true });
+  if (process.platform === "win32") {
+    await rm(join(bundleDirectory, "easyserver"), { force: true });
+  }
   await copyFile(join(repositoryRoot, "LICENSE"), join(bundleDirectory, "LICENSE"));
   await writeFile(
     join(bundleDirectory, "README.txt"),
     [
-      `EasyServer ${version} portable Windows x64 bundle`,
+      `EasyServer ${version} portable ${target.name} bundle`,
       "",
       "Requires Node.js 24.18.1 on PATH. Node.js is not bundled.",
-      "Run easyserver.cmd --help to get started.",
+      `Run ${portableCommand()} --help to get started.`,
       "Provider Plugins are not bundled and remain opt-in.",
       "",
       "Documentation: https://github.com/Max19970/easy-server",
       "",
-    ].join("\r\n"),
+    ].join(process.platform === "win32" ? "\r\n" : "\n"),
     "utf8",
   );
 
   verifyPortablePrefix(bundleDirectory);
 
-  const zipPath = join(releaseDirectory, zipName);
-  compressDirectory(bundleDirectory, zipPath);
-  assert.equal(existsSync(zipPath), true, "portable release ZIP must be created");
+  const artifactPath = join(releaseDirectory, artifactName);
+  createArchive(bundleDirectory, artifactPath);
+  assert.equal(existsSync(artifactPath), true, "portable release archive must be created");
 
-  const checksum = sha256(await readFile(zipPath));
-  const checksumPath = join(releaseDirectory, checksumName);
-  await writeFile(checksumPath, `${checksum}  ${zipName}\n`, "utf8");
-
-  await verifyReleaseArchive(zipPath, checksumPath);
+  await verifyReleaseArchive(artifactPath, vastTarball, intelionTarball);
 
   process.stdout.write(
     [
-      "GitHub Release artifact verification passed.",
-      `ZIP: dist/release/${zipName}`,
-      `SHA-256: dist/release/${checksumName}`,
+      `GitHub Release artifact verification passed for ${target.name}.`,
+      `Artifact: dist/release/${artifactName}`,
+      `SHA-256: ${sha256(await readFile(artifactPath))}`,
       "",
     ].join("\n"),
   );
@@ -108,7 +115,7 @@ function pack(packageDirectory, destination) {
   return join(destination, packed[0].filename);
 }
 
-function installPortablePrefix(prefix, sdkTarball, cliTarball) {
+function installPortablePrefix(prefix, ...tarballs) {
   runNpm(
     [
       "install",
@@ -118,21 +125,17 @@ function installPortablePrefix(prefix, sdkTarball, cliTarball) {
       "--omit=dev",
       "--no-audit",
       "--no-fund",
-      sdkTarball,
-      cliTarball,
+      ...tarballs,
     ],
     repositoryRoot,
   );
 }
 
 function verifyPortablePrefix(prefix) {
+  const executable = installedExecutable(prefix);
+  assert.equal(existsSync(executable), true, "portable bundle must expose the easyserver executable");
   assert.equal(
-    existsSync(join(prefix, "easyserver.cmd")),
-    true,
-    "portable bundle must expose easyserver.cmd",
-  );
-  assert.equal(
-    existsSync(join(prefix, "node.exe")),
+    existsSync(process.platform === "win32" ? join(prefix, "node.exe") : join(prefix, "bin", "node")),
     false,
     "portable bundle must not imply that Node.js is bundled",
   );
@@ -152,21 +155,12 @@ function verifyPortablePrefix(prefix) {
   );
 }
 
-async function verifyReleaseArchive(zipPath, checksumPath) {
-  const checksumLine = (await readFile(checksumPath, "utf8")).trim();
-  const [expectedHash, expectedFilename] = checksumLine.split(/\s+/u);
-  assert.equal(expectedFilename, basename(zipPath), "checksum must name the release ZIP");
-  assert.equal(
-    expectedHash,
-    sha256(await readFile(zipPath)),
-    "release ZIP checksum must verify",
-  );
-
+async function verifyReleaseArchive(archivePath, vastTarball, intelionTarball) {
   const extractionDirectory = join(temporaryRoot, "extracted");
   const outsideDirectory = join(temporaryRoot, "outside-cwd");
   await mkdir(extractionDirectory, { recursive: true });
   await mkdir(outsideDirectory, { recursive: true });
-  expandArchive(zipPath, extractionDirectory);
+  extractArchive(archivePath, extractionDirectory);
 
   verifyPortablePrefix(extractionDirectory);
   verifyPortableTui(extractionDirectory);
@@ -176,28 +170,55 @@ async function verifyReleaseArchive(zipPath, checksumPath) {
     EASYSERVER_DAEMON_FILE: join(outsideDirectory, "daemon.json"),
   };
   assert.equal(
-    runPortableExecutable(extractionDirectory, ["--version"], outsideDirectory, environment)
-      .stdout,
+    normalizeNewlines(
+      runPortableExecutable(extractionDirectory, ["--version"], outsideDirectory, environment).stdout,
+    ),
     `${version}\n`,
   );
   assert.match(
-    runPortableExecutable(extractionDirectory, ["--help"], outsideDirectory, environment)
-      .stdout,
+    runPortableExecutable(extractionDirectory, ["--help"], outsideDirectory, environment).stdout,
     /EasyServer/u,
   );
   assert.equal(
-    runPortableExecutable(
-      extractionDirectory,
-      ["plugins", "list"],
-      outsideDirectory,
-      environment,
-    ).stdout,
+    normalizeNewlines(
+      runPortableExecutable(
+        extractionDirectory,
+        ["plugins", "list"],
+        outsideDirectory,
+        environment,
+      ).stdout,
+    ),
     "No provider plugins configured.\n",
   );
+
+  installPortablePrefix(extractionDirectory, vastTarball, intelionTarball);
+  runPortableExecutable(
+    extractionDirectory,
+    ["plugins", "add", "@easyai101/easyserver-plugin-vastai"],
+    outsideDirectory,
+    environment,
+  );
+  runPortableExecutable(
+    extractionDirectory,
+    ["plugins", "add", "@easyai101/easyserver-plugin-intelion"],
+    outsideDirectory,
+    environment,
+  );
+  const plugins = runPortableExecutable(
+    extractionDirectory,
+    ["plugins", "list"],
+    outsideDirectory,
+    environment,
+  ).stdout;
+  assert.match(plugins, /loaded\s+vastai\s+provider=vastai/u);
+  assert.match(plugins, /loaded\s+intelion\s+provider=intelion/u);
 }
 
 function verifyPortableTui(prefix) {
-  const executable = join(prefix, "easyserver.cmd");
+  if (process.platform !== "win32") {
+    return;
+  }
+  const executable = installedExecutable(prefix);
   const smokeScript = join(repositoryRoot, "scripts", "verify-tui-windows-smoke.ps1");
   runPowerShell(
     [
@@ -210,16 +231,30 @@ function verifyPortableTui(prefix) {
   );
 }
 
-function compressDirectory(source, destination) {
-  runPowerShell(
-    `Compress-Archive -Path '${powerShellLiteral(join(source, "*"))}' -DestinationPath '${powerShellLiteral(destination)}' -CompressionLevel Optimal -Force`,
-  );
+function createArchive(source, destination) {
+  if (process.platform === "win32") {
+    runPowerShell(
+      [
+        "Add-Type -AssemblyName System.IO.Compression.FileSystem;",
+        `[IO.Compression.ZipFile]::CreateFromDirectory('${powerShellLiteral(source)}', '${powerShellLiteral(destination)}', [IO.Compression.CompressionLevel]::Optimal, $false)`,
+      ].join(" "),
+    );
+    return;
+  }
+  run("tar", ["-czf", destination, "-C", source, "."], repositoryRoot);
 }
 
-function expandArchive(archive, destination) {
-  runPowerShell(
-    `Expand-Archive -LiteralPath '${powerShellLiteral(archive)}' -DestinationPath '${powerShellLiteral(destination)}' -Force`,
-  );
+function extractArchive(archive, destination) {
+  if (process.platform === "win32") {
+    runPowerShell(
+      [
+        "Add-Type -AssemblyName System.IO.Compression.FileSystem;",
+        `[IO.Compression.ZipFile]::ExtractToDirectory('${powerShellLiteral(archive)}', '${powerShellLiteral(destination)}')`,
+      ].join(" "),
+    );
+    return;
+  }
+  run("tar", ["-xzf", archive, "-C", destination], repositoryRoot);
 }
 
 function runPowerShell(command) {
@@ -236,12 +271,31 @@ function powerShellLiteral(value) {
   return value.replaceAll("'", "''");
 }
 
+function portableCommand() {
+  return process.platform === "win32" ? "easyserver.cmd" : "bin/easyserver";
+}
+
+function installedExecutable(prefix) {
+  return process.platform === "win32"
+    ? join(prefix, "easyserver.cmd")
+    : join(prefix, "bin", "easyserver");
+}
+
+function globalNodeModules(prefix) {
+  return process.platform === "win32"
+    ? join(prefix, "node_modules")
+    : join(prefix, "lib", "node_modules");
+}
+
 function runNpm(args, cwd) {
   return run(process.execPath, [npmCli, ...args], cwd);
 }
 
 function runPortableExecutable(prefix, args, cwd, env) {
-  const executable = join(prefix, "easyserver.cmd");
+  const executable = installedExecutable(prefix);
+  if (process.platform !== "win32") {
+    return run(executable, args, cwd, env);
+  }
   const command = `"${executable}" ${args.map(quoteCmdArgument).join(" ")}`;
   const result = spawnSyncForVerification(command, [], {
     cwd,
@@ -260,7 +314,7 @@ function quoteCmdArgument(value) {
 
 function packagePath(prefix, packageName) {
   const [scope, name] = packageName.split("/");
-  return join(prefix, "node_modules", scope, name);
+  return join(globalNodeModules(prefix), scope, name);
 }
 
 function assertPackagePresent(prefix, packageName) {
@@ -281,6 +335,10 @@ function assertPackageAbsent(prefix, packageName) {
 
 function sha256(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
+}
+
+function normalizeNewlines(value) {
+  return value.replaceAll("\r\n", "\n");
 }
 
 function run(command, args, cwd, env = process.env) {
