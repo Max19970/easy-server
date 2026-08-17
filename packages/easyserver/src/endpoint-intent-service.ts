@@ -12,6 +12,10 @@ import type {
   OpenEndpointResult,
 } from "./connection-gateway.js";
 import {
+  connectionFailureDetails,
+  type ConnectionFailureCause,
+} from "./connection-failure.js";
+import {
   sshHostTrustEvidence,
   type SshHostTrustEvidence,
 } from "./host-trust.js";
@@ -41,6 +45,7 @@ export interface CreateEndpointIntentRequest {
 export interface EndpointIntentFailure {
   readonly code: string;
   readonly message: string;
+  readonly connectionCause?: ConnectionFailureCause;
   readonly hostTrust?: SshHostTrustEvidence;
 }
 
@@ -566,7 +571,12 @@ function intentFailure(error: unknown): EndpointIntentFailure {
     };
   }
   if (isNormalizedError(error)) {
-    return { code: error.code, message: error.message };
+    const failure = connectionFailureDetails(error);
+    return {
+      code: error.code,
+      message: error.message,
+      ...(failure === undefined ? {} : { connectionCause: failure.cause }),
+    };
   }
   return { code: "plugin-failure", message: "Endpoint intent realization failed" };
 }

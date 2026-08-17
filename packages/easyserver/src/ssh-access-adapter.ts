@@ -24,6 +24,10 @@ import {
   FilesystemLockCancelledError,
   FilesystemLockTimeoutError,
 } from "./filesystem-lock.js";
+import {
+  normalizedConnectionError,
+  normalizedConnectionException,
+} from "./connection-failure.js";
 import { SshCredentialMaterialManager } from "./ssh-credential-material.js";
 
 interface CommandSpec {
@@ -163,9 +167,10 @@ export class OpenSshAccessAdapter implements AccessAdapter {
       selected.keyType !== trust.keyType ||
       selected.fingerprint !== trust.fingerprint
     ) {
-      throw normalizedError(
+      throw normalizedConnectionError(
         "authentication",
         `SSH host key changed before trust confirmation for ${trust.host}:${trust.port}`,
+        "ssh-host-identity-changed-before-confirmation",
       );
     }
 
@@ -176,9 +181,10 @@ export class OpenSshAccessAdapter implements AccessAdapter {
         return;
       }
       if (known.length > 0) {
-        throw normalizedError(
+        throw normalizedConnectionError(
           "authentication",
           `SSH host key mismatch for ${trust.host}:${trust.port}`,
+          "ssh-host-identity-mismatch",
         );
       }
 
@@ -220,9 +226,10 @@ export class OpenSshAccessAdapter implements AccessAdapter {
     }
 
     if (!known.some((knownKey) => scanned.some((scannedKey) => sameHostKey(knownKey, scannedKey)))) {
-      throw normalizedError(
+      throw normalizedConnectionError(
         "authentication",
         `SSH host key mismatch for ${method.ssh.host}:${method.ssh.port}`,
+        "ssh-host-identity-mismatch",
       );
     }
   }
@@ -573,9 +580,10 @@ async function scanHostKeys(
           failures,
           "No configured SSH key discovery path could read a host key",
         );
-  throw normalizedError(
+  throw normalizedConnectionError(
     "provider-unavailable",
     "EasyServer could not obtain the SSH host fingerprint. The SSH endpoint may not be ready, or the local SSH tools could not complete host-key discovery.",
+    "ssh-fingerprint-unavailable",
     cause,
   );
 }
@@ -905,9 +913,10 @@ async function closeChild(
 }
 
 function localOpenSshFailure(cause: unknown): Error {
-  return normalizedSshError(
+  return normalizedConnectionException(
     "plugin-failure",
     "Local OpenSSH client could not be started. Install or enable OpenSSH Client and retry.",
+    "local-openssh-unavailable",
     cause,
   );
 }
@@ -920,51 +929,58 @@ function openSshExitFailure(code: number | null, stderr: string): Error {
     }`,
   );
   if (/Permission denied \([^)]*publickey[^)]*\)/iu.test(diagnostic)) {
-    return normalizedSshError(
+    return normalizedConnectionException(
       "authentication",
       "SSH public-key authentication was rejected by the server.",
+      "ssh-public-key-rejected",
       cause,
     );
   }
   if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/iu.test(diagnostic)) {
-    return normalizedSshError(
+    return normalizedConnectionException(
       "authentication",
       "SSH host identity no longer matches the trusted host key.",
+      "ssh-host-identity-mismatch",
       cause,
     );
   }
   if (/open failed: administratively prohibited|administratively prohibited: open failed/iu.test(diagnostic)) {
-    return normalizedSshError(
+    return normalizedConnectionException(
       "unsupported-operation",
       "SSH connected, but this server does not permit TCP forwarding.",
+      "tcp-forwarding-forbidden",
       cause,
     );
   }
   if (/open failed: connect failed: Connection refused/iu.test(diagnostic)) {
-    return normalizedSshError(
+    return normalizedConnectionException(
       "provider-unavailable",
       "SSH connected, but the requested service port is not accepting connections yet.",
+      "remote-service-unavailable",
       cause,
     );
   }
   if (/open failed: connect failed:/iu.test(diagnostic)) {
-    return normalizedSshError(
+    return normalizedConnectionException(
       "provider-unavailable",
       "SSH connected, but the requested service could not be reached from the server.",
+      "remote-service-unavailable",
       cause,
     );
   }
   if (/Permission denied/iu.test(diagnostic)) {
-    return normalizedSshError(
+    return normalizedConnectionException(
       "authentication",
       "SSH authentication was rejected by the server.",
+      "ssh-authentication-rejected",
       cause,
     );
   }
   if (/Connection closed by [^\s]+ port \d+/iu.test(diagnostic)) {
-    return normalizedSshError(
+    return normalizedConnectionException(
       "provider-unavailable",
       "The SSH route closed before TCP forwarding was established.",
+      "ssh-transport-closed",
       cause,
     );
   }
@@ -973,25 +989,19 @@ function openSshExitFailure(code: number | null, stderr: string): Error {
       diagnostic,
     )
   ) {
-    return normalizedSshError(
+    return normalizedConnectionException(
       "provider-unavailable",
       "SSH on the server is not ready or reachable yet.",
+      "ssh-not-ready",
       cause,
     );
   }
-  return normalizedSshError(
+  return normalizedConnectionException(
     "plugin-failure",
     "OpenSSH connection failed unexpectedly.",
+    "unexpected-ssh-transport",
     cause,
   );
-}
-
-function normalizedSshError(
-  code: Parameters<typeof normalizedError>[0],
-  message: string,
-  cause: unknown,
-): Error {
-  return Object.assign(new Error(message), normalizedError(code, message, cause));
 }
 
 function isErrno(error: unknown, code: string): boolean {

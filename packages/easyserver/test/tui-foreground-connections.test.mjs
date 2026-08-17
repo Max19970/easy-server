@@ -4,6 +4,7 @@ import {
   hostTrustRequiredError,
   normalizedError,
 } from "@easyai101/easyserver-plugin-sdk";
+import { normalizedConnectionError } from "../dist/connection-failure.js";
 import { TuiForegroundConnectionOperations } from "../dist/tui-foreground-connections.js";
 
 const INSTANCE_ID = "instance:550e8400-e29b-41d4-a716-446655440000";
@@ -119,9 +120,10 @@ test("late foreground transport failure stays visible until dismissed without re
     { signal: new AbortController().signal },
   );
   session.fail(
-    normalizedError(
+    normalizedConnectionError(
       "authentication",
-      "SSH public-key authentication was rejected by the server.",
+      "wording intentionally changed",
+      "ssh-public-key-rejected",
     ),
   );
   await new Promise((resolve) => setImmediate(resolve));
@@ -130,10 +132,13 @@ test("late foreground transport failure stays visible until dismissed without re
   assert.deepEqual(operations.list()[0], {
     ...connection,
     state: "failed",
-    failure: normalizedError(
-      "authentication",
-      "SSH public-key authentication was rejected by the server.",
-    ),
+    failure: {
+      ...normalizedError(
+        "authentication",
+        "SSH public-key authentication was rejected by the server.",
+      ),
+      connectionCause: "ssh-public-key-rejected",
+    },
   });
   assert.equal(changes, 2);
 
@@ -171,7 +176,11 @@ test("late foreground failure preserves the privacy-safe SSH transport category"
     { signal: new AbortController().signal },
   );
   session.fail(
-    normalizedError("plugin-failure", "OpenSSH connection failed unexpectedly."),
+    normalizedConnectionError(
+      "plugin-failure",
+      "wording intentionally changed",
+      "unexpected-ssh-transport",
+    ),
   );
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -256,9 +265,10 @@ test("late failed foreground connection retries the exact retained request and r
     { signal: new AbortController().signal },
   );
   firstSession.fail(
-    normalizedError(
+    normalizedConnectionError(
       "provider-unavailable",
-      "SSH connected, but the requested service port is not accepting connections yet.",
+      "wording intentionally changed",
+      "remote-service-unavailable",
     ),
   );
   await new Promise((resolve) => setImmediate(resolve));

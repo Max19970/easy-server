@@ -12,6 +12,7 @@ import {
   normalizedError,
 } from "@easyai101/easyserver-plugin-sdk";
 import { retryWithHostTrust } from "../dist/connect-command.js";
+import { normalizedConnectionError } from "../dist/connection-failure.js";
 import { acquireFilesystemLock } from "../dist/filesystem-lock.js";
 import { JsonStateStore } from "../dist/state-store.js";
 import {
@@ -865,7 +866,11 @@ test("failed Endpoint intent restoration is actionable and can recover on retry"
     gateway: {
       async openEndpoint(...args) {
         if (blocked && args[5] === "blocked-method") {
-          throw normalizedError("conflict", "Requested local port is occupied");
+          throw normalizedConnectionError(
+            "conflict",
+            "wording intentionally changed",
+            "local-bind-conflict",
+          );
         }
         return baseGateway.openEndpoint(...args);
       },
@@ -879,7 +884,8 @@ test("failed Endpoint intent restoration is actionable and can recover on retry"
     const failed = await waitForIntentState(client, "recoverable", "error");
     assert.deepEqual(failed.failure, {
       code: "conflict",
-      message: "Requested local port is occupied",
+      message: "wording intentionally changed",
+      connectionCause: "local-bind-conflict",
     });
     assert.equal("endpoint" in failed, false);
     const sibling = await waitForIntentState(client, "healthy-sibling", "live");

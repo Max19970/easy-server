@@ -7,6 +7,10 @@ import {
   type OperationContext,
 } from "@easyai101/easyserver-plugin-sdk";
 import { retryWithHostTrust, type ConfirmHostTrust } from "./connect-command.js";
+import {
+  connectionFailureDetails,
+  type ConnectionFailureCause,
+} from "./connection-failure.js";
 import type {
   AccessMethodDescriptor,
   ConnectionSession,
@@ -40,7 +44,9 @@ export interface TuiForegroundConnection {
   };
   readonly accessMethod: AccessMethodDescriptor;
   readonly state: TuiForegroundConnectionState;
-  readonly failure?: NormalizedError;
+  readonly failure?: NormalizedError & {
+    readonly connectionCause?: ConnectionFailureCause;
+  };
 }
 
 export interface TuiForegroundConnectionInteraction {
@@ -222,28 +228,54 @@ export class TuiForegroundConnectionOperations {
   }
 }
 
-function foregroundConnectionFailure(error: unknown): NormalizedError {
+function foregroundConnectionFailure(
+  error: unknown,
+): NormalizedError & { readonly connectionCause?: ConnectionFailureCause } {
+  const failure = connectionFailureDetails(error);
   if (!isNormalizedError(error)) {
     return normalizedError(
       "plugin-failure",
       "The local connection ended unexpectedly.",
     );
   }
-  const safeMessage = [
-    "SSH public-key authentication was rejected by the server.",
-    "SSH authentication was rejected by the server.",
-    "SSH host identity no longer matches the trusted host key.",
-    "SSH on the server is not ready or reachable yet.",
-    "SSH connected, but the requested service port is not accepting connections yet.",
-    "SSH connected, but the requested service could not be reached from the server.",
-    "SSH connected, but this server does not permit TCP forwarding.",
-    "The SSH route closed before TCP forwarding was established.",
-    "OpenSSH connection failed unexpectedly.",
-    "Local OpenSSH client could not be started. Install or enable OpenSSH Client and retry.",
-  ].includes(error.message)
-    ? error.message
-    : "The local connection ended unexpectedly.";
-  return normalizedError(error.code, safeMessage);
+  return {
+    ...normalizedError(
+      error.code,
+      safeConnectionFailureMessage(failure?.cause),
+    ),
+    ...(failure === undefined ? {} : { connectionCause: failure.cause }),
+  };
+}
+
+function safeConnectionFailureMessage(cause: ConnectionFailureCause | undefined): string {
+  switch (cause) {
+    case "ssh-public-key-rejected":
+      return "SSH public-key authentication was rejected by the server.";
+    case "ssh-authentication-rejected":
+      return "SSH authentication was rejected by the server.";
+    case "ssh-host-identity-mismatch":
+      return "SSH host identity no longer matches the trusted host key.";
+    case "ssh-host-identity-changed-before-confirmation":
+      return "SSH host identity changed before trust confirmation.";
+    case "ssh-fingerprint-unavailable":
+      return "EasyServer could not obtain the SSH host fingerprint.";
+    case "ssh-not-ready":
+      return "SSH on the server is not ready or reachable yet.";
+    case "tcp-forwarding-forbidden":
+      return "SSH connected, but this server does not permit TCP forwarding.";
+    case "remote-service-unavailable":
+      return "SSH connected, but the requested service could not be reached from the server.";
+    case "ssh-transport-closed":
+      return "The SSH route closed before TCP forwarding was established.";
+    case "local-openssh-unavailable":
+      return "Local OpenSSH client could not be started. Install or enable OpenSSH Client and retry.";
+    case "unexpected-ssh-transport":
+      return "OpenSSH connection failed unexpectedly.";
+    case "local-bind-conflict":
+      return "The requested local port is already in use.";
+    default:
+      return "The local connection ended unexpectedly.";
+  }
 }
 
 export function createDefaultTuiForegroundConnectionOperations(

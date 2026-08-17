@@ -12,6 +12,7 @@ import {
   isHostTrustRequiredError,
   parseAccessMethods,
 } from "@easyai101/easyserver-plugin-sdk";
+import { connectionFailureDetails } from "../dist/connection-failure.js";
 import { OpenSshAccessAdapter } from "../dist/ssh-access-adapter.js";
 
 const fakeKeyscan = fileURLToPath(
@@ -331,6 +332,7 @@ test("missing local SSH discovery tools report that no fingerprint could be obta
       ),
       (error) =>
         error?.code === "provider-unavailable" &&
+        connectionFailureDetails(error)?.cause === "ssh-fingerprint-unavailable" &&
         error.message ===
           "EasyServer could not obtain the SSH host fingerprint. The SSH endpoint may not be ready, or the local SSH tools could not complete host-key discovery.",
     );
@@ -726,6 +728,7 @@ test("abrupt OpenSSH child exit fails the channel without exposing raw remote ou
       channel.stream.write(Buffer.alloc(256 * 1024));
       const [error] = await streamError;
       assert.equal(error.code, "plugin-failure");
+      assert.equal(connectionFailureDetails(error)?.cause, "unexpected-ssh-transport");
       assert.equal(error.message, "OpenSSH connection failed unexpectedly.");
       assert.doesNotMatch(error.message, /fixture abrupt SSH exit/);
       await assert.rejects(
@@ -786,6 +789,7 @@ test("OpenSSH public-key rejection is a safe authentication failure", async () =
     try {
       const [error] = await once(channel.stream, "error");
       assert.equal(error.code, "authentication");
+      assert.equal(connectionFailureDetails(error)?.cause, "ssh-public-key-rejected");
       assert.equal(
         error.message,
         "SSH public-key authentication was rejected by the server.",
@@ -915,6 +919,7 @@ test("OpenSSH remote service refusal is distinct from SSH readiness failure", as
     try {
       const [error] = await once(channel.stream, "error");
       assert.equal(error.code, "provider-unavailable");
+      assert.equal(connectionFailureDetails(error)?.cause, "remote-service-unavailable");
       assert.equal(
         error.message,
         "SSH connected, but the requested service port is not accepting connections yet.",
@@ -978,6 +983,7 @@ test("OpenSSH forwarding policy rejection is distinct from SSH login failure", a
     try {
       const [error] = await once(channel.stream, "error");
       assert.equal(error.code, "unsupported-operation");
+      assert.equal(connectionFailureDetails(error)?.cause, "tcp-forwarding-forbidden");
       assert.equal(
         error.message,
         "SSH connected, but this server does not permit TCP forwarding.",
@@ -1035,6 +1041,7 @@ test("OpenSSH remote target timeout is distinct from SSH readiness failure", asy
     try {
       const [error] = await once(channel.stream, "error");
       assert.equal(error.code, "provider-unavailable");
+      assert.equal(connectionFailureDetails(error)?.cause, "remote-service-unavailable");
       assert.equal(
         error.message,
         "SSH connected, but the requested service could not be reached from the server.",

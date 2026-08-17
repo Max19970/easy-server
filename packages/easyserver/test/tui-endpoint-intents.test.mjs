@@ -90,7 +90,11 @@ const intents = [
     remoteHost: "127.0.0.1",
     remotePort: 7860,
     requestedLocalPort: 47860,
-    failure: { code: "conflict", message: "Requested local port 47860 is occupied" },
+    failure: {
+      code: "conflict",
+      message: "wording intentionally changed",
+      connectionCause: "local-bind-conflict",
+    },
   },
   {
     name: "trust",
@@ -101,7 +105,7 @@ const intents = [
     remotePort: 22,
     failure: {
       code: "host-trust-required",
-      message: "SSH host trust required; fingerprint SHA256:fixture",
+      message: "wording intentionally changed; trust evidence is structured",
       hostTrust: {
         target: { host: "ssh.example.test", port: 2222 },
         key: { type: "ssh-ed25519", fingerprint: "SHA256:fixture" },
@@ -270,7 +274,8 @@ test("saved-connection SSH authentication remediation never blames provider cred
   await assertRemediation(
     {
       code: "authentication",
-      message: "SSH public-key authentication was rejected by the server.",
+      message: "wording intentionally changed",
+      connectionCause: "ssh-public-key-rejected",
     },
     /matching SSH private key/,
     /configure or rotate the required provider credential/i,
@@ -278,7 +283,8 @@ test("saved-connection SSH authentication remediation never blames provider cred
   await assertRemediation(
     {
       code: "authentication",
-      message: "SSH host key mismatch for ssh.example.test:2222",
+      message: "wording intentionally changed again",
+      connectionCause: "ssh-host-identity-mismatch",
     },
     /server was replaced or reinstalled/i,
     /configure or rotate the required provider credential/i,

@@ -10,6 +10,7 @@ import {
   type TcpForwardTarget,
 } from "@easyai101/easyserver-plugin-sdk";
 import { AccessAdapterRegistry } from "./access-adapter-registry.js";
+import { normalizedConnectionError } from "./connection-failure.js";
 import { HostOperationRunner } from "./host-operation.js";
 import {
   providerOperationContext,
@@ -548,9 +549,10 @@ async function listenLoopback(
       server.off("listening", onListening);
       if (localPort !== undefined && errorCode(error) === "EADDRINUSE") {
         reject(
-          normalizedError(
+          normalizedConnectionError(
             "conflict",
             `Local Endpoint port is already in use: ${localPort}`,
+            "local-bind-conflict",
             error,
           ),
         );

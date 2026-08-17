@@ -17,6 +17,7 @@ import {
   type LocalDaemonDescriptor,
   type PersistentConnectionSession,
 } from "./local-daemon.js";
+import type { ConnectionFailureCause } from "./connection-failure.js";
 import type { EndpointIntentStatus } from "./endpoint-intent-service.js";
 import type { SshHostTrustEvidence } from "./host-trust.js";
 import type { PluginStatus } from "./plugin-host.js";
@@ -149,6 +150,7 @@ export interface TuiEndpointIntentReadItem {
   readonly failure?: {
     readonly code: string;
     readonly message: string;
+    readonly connectionCause?: ConnectionFailureCause;
     readonly hostTrust?: SshHostTrustEvidence;
   };
 }
@@ -629,6 +631,9 @@ function projectEndpointIntent(intent: EndpointIntentStatus): TuiEndpointIntentR
           failure: {
             code: escapeTerminalText(intent.failure.code),
             message: escapeTerminalText(intent.failure.message),
+            ...(intent.failure.connectionCause === undefined
+              ? {}
+              : { connectionCause: intent.failure.connectionCause }),
             ...(intent.failure.hostTrust === undefined
               ? {}
               : {

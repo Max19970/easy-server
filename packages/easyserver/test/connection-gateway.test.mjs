@@ -8,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { AccessAdapterRegistry } from "../dist/access-adapter-registry.js";
 import { ConnectionGateway } from "../dist/connection-gateway.js";
+import { connectionFailureDetails } from "../dist/connection-failure.js";
 import { HostOperationRunner } from "../dist/host-operation.js";
 import { PluginHost } from "../dist/plugin-host.js";
 import { ProviderRegistry } from "../dist/provider-registry.js";
@@ -370,6 +371,7 @@ test("occupied explicit local Endpoint port is a normalized conflict", async () 
       ),
       (error) =>
         error?.code === "conflict" &&
+        connectionFailureDetails(error)?.cause === "local-bind-conflict" &&
         error.message === `Local Endpoint port is already in use: ${occupied.port}`,
     );
     assert.equal(transportCloses, 1);

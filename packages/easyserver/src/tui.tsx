@@ -87,6 +87,7 @@ import {
   wrapDiagnosticsText,
   type TuiDiagnosticsView,
 } from "./tui-diagnostics-surface.js";
+import { connectionFailureDetails } from "./connection-failure.js";
 import {
   connectionContextActions,
   diagnosticsContextActions,
@@ -2772,9 +2773,7 @@ export function TuiApp({
         setPendingHostTrustConfirmation(undefined);
         setForegroundConnections([...foregroundConnectionOperations.list()]);
         const localPortConflict =
-          isNormalizedError(error) &&
-          error.code === "conflict" &&
-          error.message.startsWith("Local Endpoint port is already in use:");
+          connectionFailureDetails(error)?.cause === "local-bind-conflict";
         setOperation(
           presentOperationError({
             title: "Open local connection",
@@ -2845,15 +2844,9 @@ export function TuiApp({
       } catch (error) {
         setPendingHostTrustConfirmation(undefined);
         setForegroundConnections([...foregroundConnectionOperations.list()]);
-        const servicePortFailure =
-          isNormalizedError(error) &&
-          error.code === "provider-unavailable" &&
-          (error.message.includes("requested service port is not accepting connections") ||
-            error.message.includes("requested service could not be reached from the server"));
-        const localPortConflict =
-          isNormalizedError(error) &&
-          error.code === "conflict" &&
-          error.message.startsWith("Local Endpoint port is already in use:");
+        const failureCause = connectionFailureDetails(error)?.cause;
+        const servicePortFailure = failureCause === "remote-service-unavailable";
+        const localPortConflict = failureCause === "local-bind-conflict";
         setOperation(
           presentOperationError({
             title: "Retry local connection",
@@ -2871,12 +2864,7 @@ export function TuiApp({
                   error.code !== "unsupported-operation" &&
                   error.code !== "cancelled" &&
                   error.code !== "outcome-unknown" &&
-                  !(
-                    error.code === "authentication" &&
-                    /SSH host key mismatch|SSH host identity no longer matches/iu.test(
-                      error.message,
-                    )
-                  ))),
+                  failureCause !== "ssh-host-identity-mismatch")),
             retryLabel: "Retry connection",
             allowDiagnostics: !localPortConflict,
             ...(localPortConflict
