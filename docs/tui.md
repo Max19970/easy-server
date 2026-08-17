@@ -37,7 +37,7 @@ EasyServer does not bundle Provider Plugins in the core package. Install the pro
 
 **Settings & Support → Providers → Add installed provider**
 
-Discoverable packages appear by human provider name. The picker reads provider metadata without executing an unconfigured provider runtime.
+Discoverable packages appear by human provider name. The picker reads provider metadata without executing an unconfigured provider runtime. If no installed provider package is discoverable, the TUI says so instead of advertising an unavailable picker action; install the package outside EasyServer, then use **Refresh providers**, or use the Advanced module/path action when you already know the provider source.
 
 After adding a provider, open its **Actions** to configure a declared credential, enable/disable it, or remove a credential binding. Credential input is masked and values stay behind the OS-backed Secret Store boundary.
 
@@ -45,7 +45,7 @@ The TUI manages provider configuration, not the npm package lifecycle itself. In
 
 ## Rent a server
 
-Choose **Rent a server** from Home or Servers.
+Choose **Rent a server** from Home or Servers. If no guided acquisition workflow is currently available, **Actions → Open Providers** takes you directly to the prerequisite provider setup instead of leaving you at a dead end.
 
 The provider owns the fields and choices in its acquisition flow; EasyServer core renders the generic interaction model. This lets Vast.ai expose marketplace filters and lets Intelion.cloud expose its catalog/configurator without either provider leaking hard-coded fields into core.
 
@@ -76,7 +76,7 @@ One provider failing does not hide healthy inventory from another provider. Stal
 
 ## Connect to an application/service
 
-Select a server and choose **Connect**.
+Select a server and choose **Connect**. If no server is available yet, **Connections → Actions → Rent a server** routes directly to the prerequisite instead of opening a connection flow that cannot succeed.
 
 The normal flow asks for the application/service TCP port on the server — for example `8188` — and an optional local port. It does not ask a novice to choose an SSH port or connection-method ID.
 

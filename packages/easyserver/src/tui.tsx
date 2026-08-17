@@ -512,6 +512,9 @@ export function TuiShell({
     readSnapshot?.providerCandidates?.status === "ready"
       ? readSnapshot.providerCandidates.items
       : [];
+  const canRegisterProvider = onProviderMutation !== undefined;
+  const canAddInstalledProvider =
+    canRegisterProvider && providerCandidateItems.length > 0;
   const providerCandidatePickerView: ProviderCandidatePickerView | undefined =
     providerCandidatePickerOpen
       ? {
@@ -559,6 +562,10 @@ export function TuiShell({
     readSnapshot?.instances.status === "ready"
       ? readSnapshot.instances.items
       : [];
+  const canStartForegroundConnection =
+    inventoryItems.length > 0 &&
+    onOpenForegroundConnection !== undefined &&
+    onListForegroundAccessMethods !== undefined;
   const effectiveSelectedInstanceId =
     selectedInstanceId !== undefined &&
     inventoryItems.some((instance) => instance.id === selectedInstanceId)
@@ -912,12 +919,12 @@ export function TuiShell({
     }
     if (activeRoute.id === "providers") {
       const actions: TuiContextAction[] = [{ id: "refresh", label: "Refresh providers" }];
-      if (onProviderMutation !== undefined) {
+      if (canRegisterProvider) {
         actions.unshift({
           id: "provider-add-advanced",
           label: "Advanced: add module or path",
         });
-        if (providerCandidateItems.length > 0) {
+        if (canAddInstalledProvider) {
           actions.unshift({
             id: "provider-add-installed",
             label: "Add installed provider",
@@ -947,15 +954,26 @@ export function TuiShell({
       return actions;
     }
     if (activeRoute.id === "new-instance") {
-      return [{ id: "refresh", label: "Refresh acquisition options" }];
+      const actions: TuiContextAction[] = [
+        { id: "refresh", label: "Refresh acquisition options" },
+      ];
+      if (workflowItems.length === 0) {
+        actions.unshift({ id: "providers", label: "Open Providers" });
+      }
+      return actions;
     }
     if (activeRoute.id === "sessions") {
       const actions: TuiContextAction[] = [
         { id: "connection-details", label: connectionDetailsOpen ? "Hide technical details" : "Show technical details" },
         { id: "refresh", label: "Refresh connections" },
       ];
-      if (onOpenForegroundConnection !== undefined && onListForegroundAccessMethods !== undefined) {
+      if (canStartForegroundConnection) {
         actions.unshift({ id: "connection-new-foreground", label: "New local connection" });
+      } else if (
+        readSnapshot?.instances.status === "ready" &&
+        inventoryItems.length === 0
+      ) {
+        actions.unshift({ id: "new-instance", label: "Rent a server" });
       }
       if (
         selectedConnectionTarget?.kind === "foreground" &&
@@ -2578,7 +2596,8 @@ export function TuiShell({
               providerCredentialFlow={providerCredentialFlowView}
               selectedProviderSource={effectiveSelectedProviderSource}
               showProviderDetails={providerDetailsOpen}
-              canRegisterProvider={onProviderMutation !== undefined}
+              canRegisterProvider={canRegisterProvider}
+              canAddInstalledProvider={canAddInstalledProvider}
               selectedWorkflowKey={effectiveSelectedWorkflowKey}
               providerInteractiveScreen={providerInteractiveScreen}
               providerInteractiveDisabled={providerInteractiveDisabled}
@@ -2765,6 +2784,7 @@ interface RouteSurfaceProps {
   readonly selectedProviderSource?: string;
   readonly showProviderDetails: boolean;
   readonly canRegisterProvider: boolean;
+  readonly canAddInstalledProvider: boolean;
   readonly selectedWorkflowKey?: string;
   readonly providerInteractiveScreen?: ProviderInteractiveScreen;
   readonly providerInteractiveDisabled: boolean;
@@ -2804,6 +2824,7 @@ function RouteSurface({
   selectedProviderSource,
   showProviderDetails,
   canRegisterProvider,
+  canAddInstalledProvider,
   selectedWorkflowKey,
   providerInteractiveScreen,
   providerInteractiveDisabled,
@@ -2916,6 +2937,7 @@ function RouteSurface({
       selectedSource={selectedProviderSource}
       showDetails={showProviderDetails}
       canRegister={canRegisterProvider}
+      canAddInstalled={canAddInstalledProvider}
     />
   );
 }
@@ -3531,7 +3553,7 @@ function ConnectionsSurface({
         {localConnectionRows.length === 0 ? (
           <Text>
             None open. {snapshot.instances.status === "ready" && snapshot.instances.items.length === 0
-              ? "Rent or discover a server first."
+              ? "Use Actions to rent a server first."
               : "Choose a server and use Connect, or open Actions here to create one."}
           </Text>
         ) : (
@@ -3903,7 +3925,8 @@ function NewInstanceSurface({
     return (
       <Box flexDirection="column">
         <Text>No provider acquisition workflows are available.</Text>
-        <Text>Configure a provider first. Providers without a guided rental flow remain available under Advanced provider tools.</Text>
+        <Text>Open Providers from Actions to configure or enable a provider, then refresh acquisition options.</Text>
+        <Text>Providers without a guided rental flow remain available under Advanced provider tools.</Text>
       </Box>
     );
   }
@@ -3943,6 +3966,7 @@ function ProvidersSurface({
   selectedSource,
   showDetails,
   canRegister,
+  canAddInstalled,
 }: {
   readonly snapshot: TuiReadSnapshot;
   readonly height: number;
@@ -3952,6 +3976,7 @@ function ProvidersSurface({
   readonly selectedSource?: string;
   readonly showDetails: boolean;
   readonly canRegister: boolean;
+  readonly canAddInstalled: boolean;
 }): React.ReactElement {
   if (candidatePicker !== undefined) {
     const focusedCandidate = candidatePicker.items[candidatePicker.cursor];
@@ -4083,10 +4108,14 @@ function ProvidersSurface({
     return (
       <Box flexDirection="column">
         <Text>No providers added yet.</Text>
-        {canRegister ? (
-          <Text>Press Enter for Actions, then choose Add installed provider.</Text>
-        ) : (
+        {canAddInstalled ? (
+          <Text>Open Actions and choose Add installed provider.</Text>
+        ) : !canRegister ? (
           <Text>Provider setup is unavailable in this TUI session.</Text>
+        ) : snapshot.providerCandidates?.status === "ready" ? (
+          <Text>No installed provider packages were discovered. Install one outside EasyServer, then use Refresh providers; Advanced module/path registration is also available.</Text>
+        ) : (
+          <Text>Installed provider discovery is unavailable. Use Refresh providers, or Advanced module/path registration if you already know the provider source.</Text>
         )}
       </Box>
     );

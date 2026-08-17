@@ -555,6 +555,77 @@ test("read-only surfaces make zero-provider and zero-instance states actionable"
   assert.doesNotMatch(view.lastFrame(), /easyserver plugins add/);
 });
 
+test("empty dependency states expose only truthful next actions at 60x20", async () => {
+  const commonProps = {
+    width: 60,
+    height: 20,
+    readSnapshot: readSnapshot(),
+    readStatus: "ready",
+    onProviderMutation() {},
+    async onOpenForegroundConnection() {},
+    async onListForegroundAccessMethods() {
+      return [];
+    },
+  };
+
+  const providersView = render(shell(commonProps));
+  await openProvidersRoute(providersView);
+  assert.match(providersView.lastFrame(), /No providers added yet/);
+  assert.match(providersView.lastFrame(), /No installed provider packages were discovered/);
+  assert.doesNotMatch(providersView.lastFrame(), /choose Add installed provider/i);
+  providersView.stdin.write("\r");
+  await tick();
+  assert.doesNotMatch(providersView.lastFrame(), /Add installed provider/);
+  assert.match(providersView.lastFrame(), /Advanced: add module or path/);
+  assert.match(providersView.lastFrame(), /Refresh providers/);
+
+  const rentView = render(shell(commonProps));
+  await openRentRoute(rentView);
+  assert.match(rentView.lastFrame(), /No provider acquisition workflows are available/);
+  assert.match(rentView.lastFrame(), /Open Providers from Actions/);
+  await chooseVisibleAction(rentView, "Open Providers");
+  assert.match(rentView.lastFrame(), /Home › Settings & Support › Providers/);
+
+  const connectionsView = render(shell(commonProps));
+  await openConnectionsRoute(connectionsView);
+  assert.match(connectionsView.lastFrame(), /Use Actions to rent a server first/);
+  connectionsView.stdin.write("\r");
+  await tick();
+  assert.match(connectionsView.lastFrame(), /> Rent a server/);
+  assert.doesNotMatch(connectionsView.lastFrame(), /New local connection/);
+  connectionsView.stdin.write("\r");
+  await tick();
+  assert.match(connectionsView.lastFrame(), /Home › Servers › Rent server/);
+});
+
+test("screen-reader empty dependency guidance matches available actions", async () => {
+  const commonProps = {
+    width: 60,
+    height: 20,
+    screenReader: true,
+    readSnapshot: readSnapshot(),
+    readStatus: "ready",
+    onProviderMutation() {},
+    async onOpenForegroundConnection() {},
+    async onListForegroundAccessMethods() {
+      return [];
+    },
+  };
+
+  const providersView = render(shell(commonProps));
+  await openProvidersRoute(providersView);
+  assert.match(providersView.lastFrame(), /No installed provider packages were discovered/);
+  assert.doesNotMatch(providersView.lastFrame(), /choose Add installed provider/i);
+
+  const connectionsView = render(shell(commonProps));
+  await openConnectionsRoute(connectionsView);
+  assert.match(connectionsView.lastFrame(), /Use Actions to rent a server first/);
+  connectionsView.stdin.write("\r");
+  await tick();
+  assert.match(connectionsView.lastFrame(), /Rent a server/);
+  assert.doesNotMatch(connectionsView.lastFrame(), /New local connection/);
+});
+
 test("Providers adds a discoverable installed plugin by human display identity", async () => {
   const mutations = [];
   const view = render(
@@ -580,6 +651,7 @@ test("Providers adds a discoverable installed plugin by human display identity",
   );
 
   await openProvidersRoute(view);
+  assert.match(view.lastFrame(), /Open Actions and choose Add installed provider/);
   await chooseVisibleAction(view, "Add installed provider");
   assert.match(view.lastFrame(), /Add an installed provider/);
   assert.match(view.lastFrame(), /> Fixture Cloud/);
