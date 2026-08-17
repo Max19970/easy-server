@@ -21,10 +21,7 @@ import {
 } from "./connect-command.js";
 import { collectDiagnostics } from "./diagnostics.js";
 import { acquireFilesystemLock } from "./filesystem-lock.js";
-import {
-  requireMutationConfirmation,
-  type MutationConfirmationPrompt,
-} from "./mutation-safety.js";
+import type { MutationConfirmationPrompt } from "./mutation-safety.js";
 import type {
   InstanceWaitTarget,
   InventoryInstance,
@@ -47,7 +44,6 @@ import {
 import { sshHostTrustEvidence } from "./host-trust.js";
 import { ReloadingEndpointOpener } from "./reloading-endpoint-opener.js";
 import { ManagedDaemonOperations } from "./managed-daemon-operations.js";
-import { OsKeyringSecretStore } from "./secret-store.js";
 import { OpenSshAccessAdapter } from "./ssh-access-adapter.js";
 import { escapeTerminalText } from "./terminal-text.js";
 import type { EndpointIntentStatus } from "./endpoint-intent-service.js";

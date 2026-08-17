@@ -16,8 +16,6 @@ import {
 import {
   createVastMarketplaceFeature,
   type VastMarketplaceFeature,
-  type VastOffer,
-  type VastOfferSearch,
 } from "./marketplace.js";
 
 const DEFAULT_BASE_URL = "https://console.vast.ai";

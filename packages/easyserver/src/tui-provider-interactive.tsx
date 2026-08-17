@@ -7,7 +7,6 @@ import {
   useWindowSize,
 } from "ink";
 import type {
-  ProviderInteractiveAction,
   ProviderInteractiveEvent,
   ProviderInteractiveField,
   ProviderInteractiveFieldValue,

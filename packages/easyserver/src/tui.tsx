@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box,
   Text,
@@ -88,7 +88,6 @@ import {
 } from "@easyai101/easyserver-plugin-sdk";
 import {
   moveTuiFocus,
-  tuiFocusWindow,
   tuiFocusWindowWithinRows,
 } from "./tui-focus.js";
 import { escapeTerminalText } from "./terminal-text.js";
@@ -405,7 +404,6 @@ export function TuiShell({
   const windowSize = useWindowSize();
   const columns = width ?? windowSize.columns ?? 80;
   const rows = height ?? windowSize.rows ?? 24;
-  const narrow = columns < 72;
   const routeContentRows = Math.max(7, rows - 11);
   const routeContentColumns = Math.max(20, columns - 4);
   const diagnosticsReportRows = Math.max(1, routeContentRows - 3);
@@ -2558,7 +2556,6 @@ export function TuiShell({
               diagnosticsScroll={diagnosticsScroll}
               canCopyDiagnostics={onCopyDiagnostics !== undefined}
               screenReader={screenReader}
-              narrow={narrow}
               height={routeSurfaceRows}
               width={routeContentColumns}
               colorEnabled={colorEnabled}
@@ -2576,22 +2573,6 @@ export function TuiShell({
               selectedEndpointIntentName={effectiveSelectedEndpointIntentName}
               selectedConnectionTarget={selectedConnectionTarget}
               showConnectionDetails={connectionDetailsOpen}
-              canManageForegroundConnections={
-                onOpenForegroundConnection !== undefined &&
-                onCloseForegroundConnection !== undefined
-              }
-              canManagePersistentSessions={
-                onCreatePersistentSession !== undefined &&
-                onClosePersistentSession !== undefined
-              }
-              canManageEndpointIntents={
-                onSetEndpointIntentEnabled !== undefined &&
-                onRetryEndpointIntent !== undefined &&
-                onRemoveEndpointIntent !== undefined
-              }
-              canManageDaemon={
-                onStartDaemon !== undefined && onStopDaemon !== undefined
-              }
               providerCandidatePicker={providerCandidatePickerView}
               providerSourceInput={providerSourceInput}
               providerCredentialFlow={providerCredentialFlowView}
@@ -2761,7 +2742,6 @@ interface RouteSurfaceProps {
   readonly diagnosticsScroll: number;
   readonly canCopyDiagnostics: boolean;
   readonly screenReader: boolean;
-  readonly narrow: boolean;
   readonly height: number;
   readonly width: number;
   readonly colorEnabled: boolean;
@@ -2779,10 +2759,6 @@ interface RouteSurfaceProps {
   readonly selectedEndpointIntentName?: string;
   readonly selectedConnectionTarget?: TuiConnectionTarget;
   readonly showConnectionDetails: boolean;
-  readonly canManageForegroundConnections: boolean;
-  readonly canManagePersistentSessions: boolean;
-  readonly canManageEndpointIntents: boolean;
-  readonly canManageDaemon: boolean;
   readonly providerCandidatePicker?: ProviderCandidatePickerView;
   readonly providerSourceInput?: string;
   readonly providerCredentialFlow?: ProviderCredentialFlowView;
@@ -2805,7 +2781,6 @@ function RouteSurface({
   diagnosticsScroll,
   canCopyDiagnostics,
   screenReader,
-  narrow,
   height,
   width,
   colorEnabled,
@@ -2823,10 +2798,6 @@ function RouteSurface({
   selectedEndpointIntentName,
   selectedConnectionTarget,
   showConnectionDetails,
-  canManageForegroundConnections,
-  canManagePersistentSessions,
-  canManageEndpointIntents,
-  canManageDaemon,
   providerCandidatePicker,
   providerSourceInput,
   providerCredentialFlow,
@@ -2910,7 +2881,6 @@ function RouteSurface({
       <InstancesSurface
         snapshot={snapshot}
         height={height}
-        narrow={narrow}
         selectedInstanceId={selectedInstanceId}
         showDetails={showInstanceDetails}
         bulkSelectedInstanceIds={bulkSelectedInstanceIds}
@@ -2933,10 +2903,6 @@ function RouteSurface({
         selectedEndpointIntentName={selectedEndpointIntentName}
         selectedConnectionTarget={selectedConnectionTarget}
         showDetails={showConnectionDetails}
-        canManage={canManageForegroundConnections}
-        canManagePersistent={canManagePersistentSessions}
-        canManageIntents={canManageEndpointIntents}
-        canManageDaemon={canManageDaemon}
       />
     );
   }
@@ -3170,7 +3136,6 @@ function wrapDiagnosticsText(text: string, width: number): readonly string[] {
 interface InstancesSurfaceProps {
   readonly snapshot: TuiReadSnapshot;
   readonly height: number;
-  readonly narrow: boolean;
   readonly selectedInstanceId?: string;
   readonly showDetails: boolean;
   readonly bulkSelectedInstanceIds: readonly string[];
@@ -3181,7 +3146,6 @@ interface InstancesSurfaceProps {
 function InstancesSurface({
   snapshot,
   height,
-  narrow,
   selectedInstanceId,
   showDetails,
   bulkSelectedInstanceIds,
@@ -3319,10 +3283,6 @@ function ConnectionsSurface({
   selectedEndpointIntentName,
   selectedConnectionTarget,
   showDetails,
-  canManage,
-  canManagePersistent,
-  canManageIntents,
-  canManageDaemon,
 }: {
   readonly snapshot: TuiReadSnapshot;
   readonly height: number;
@@ -3335,10 +3295,6 @@ function ConnectionsSurface({
   readonly selectedEndpointIntentName?: string;
   readonly selectedConnectionTarget?: TuiConnectionTarget;
   readonly showDetails: boolean;
-  readonly canManage: boolean;
-  readonly canManagePersistent: boolean;
-  readonly canManageIntents: boolean;
-  readonly canManageDaemon: boolean;
 }): React.ReactElement {
   if (flow !== undefined) {
     const instances =
@@ -3347,7 +3303,6 @@ function ConnectionsSurface({
       0,
       instances.findIndex((instance) => instance.id === flow.instanceId),
     );
-    const selectedInstance = instances[selectedInstanceIndex];
     const instanceWindow = tuiFocusWindowWithinRows(
       selectedInstanceIndex,
       instances.length,

@@ -305,7 +305,7 @@ export class ConnectionGateway {
         throw new Error("Failed to determine local Endpoint address");
       }
 
-      session = new LiveConnectionSession(server, transport, scope);
+      session = new LiveConnectionSession(transport, scope);
 
       const onAbort = () => {
         session.close().catch(() => {});
@@ -359,7 +359,6 @@ class LiveConnectionSession implements ConnectionSession {
   #lateCleanupFailure: Promise<void> | undefined;
 
   constructor(
-    private readonly server: Server,
     private readonly transport: AccessTransportSession,
     private readonly scope: CleanupScope,
   ) {
