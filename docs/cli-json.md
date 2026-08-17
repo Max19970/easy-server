@@ -17,7 +17,7 @@ Bare `easyserver --json` is command mode, not TUI mode, and fails with a structu
 Every successful JSON-mode command writes exactly one compact JSON document to stdout:
 
 ```json
-{"schemaVersion":1,"ok":true,"data":{"version":"0.2.0"}}
+{"schemaVersion":1,"ok":true,"data":{"version":"0.2.1"}}
 ```
 
 Every terminal command error writes exactly one compact JSON document to stderr and leaves stdout empty:

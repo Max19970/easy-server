@@ -8,7 +8,7 @@ ZIP — **не** автономный нативный исполняемый ф
 
 ## Требования
 
-Для EasyServer `0.2.0` нужны:
+Для EasyServer `0.2.1` нужны:
 
 - Windows 11 x64;
 - Node.js `24.18.1`, доступный как `node` в `PATH`;
@@ -20,11 +20,11 @@ npm не нужен, чтобы просто запускать распаков
 
 ## Скачайте файлы релиза
 
-Из GitHub Release `v0.2.0` скачайте:
+Из GitHub Release `v0.2.1` скачайте:
 
 ```text
-easyserver-0.2.0-windows-x64.zip
-easyserver-0.2.0-SHA256SUMS.txt
+easyserver-0.2.1-windows-x64.zip
+easyserver-0.2.1-SHA256SUMS.txt
 ```
 
 ## Проверьте контрольную сумму
@@ -32,8 +32,8 @@ easyserver-0.2.0-SHA256SUMS.txt
 Выполните это в Windows PowerShell из каталога, где лежат оба скачанных файла:
 
 ```powershell
-$expected = ((Get-Content .\easyserver-0.2.0-SHA256SUMS.txt) -split '\s+')[0]
-$stream = [IO.File]::OpenRead((Resolve-Path .\easyserver-0.2.0-windows-x64.zip))
+$expected = ((Get-Content .\easyserver-0.2.1-SHA256SUMS.txt) -split '\s+')[0]
+$stream = [IO.File]::OpenRead((Resolve-Path .\easyserver-0.2.1-windows-x64.zip))
 $sha256 = [Security.Cryptography.SHA256]::Create()
 try {
   $actual = ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
@@ -51,9 +51,9 @@ if ($actual -ne $expected) { throw 'EasyServer release checksum mismatch' }
 Выберите каталог для этой версии:
 
 ```powershell
-$easyserver = Join-Path $PWD 'easyserver-0.2.0-windows-x64'
+$easyserver = Join-Path $PWD 'easyserver-0.2.1-windows-x64'
 New-Item -ItemType Directory -Force $easyserver | Out-Null
-Expand-Archive .\easyserver-0.2.0-windows-x64.zip -DestinationPath $easyserver -Force
+Expand-Archive .\easyserver-0.2.1-windows-x64.zip -DestinationPath $easyserver -Force
 ```
 
 Проверьте распакованную CLI:
@@ -63,7 +63,7 @@ Expand-Archive .\easyserver-0.2.0-windows-x64.zip -DestinationPath $easyserver -
 & "$easyserver\easyserver.cmd" plugins list
 ```
 
-Свежий bundle `0.2.0` сообщает версию `0.2.0` и:
+Свежий bundle `0.2.1` сообщает версию `0.2.1` и:
 
 ```text
 No provider plugins configured.
@@ -84,14 +84,14 @@ Provider Plugins подключаются по желанию. Устанавл�
 Vast.ai:
 
 ```powershell
-npm install --global --prefix $easyserver @easyai101/easyserver-plugin-vastai@0.2.0
+npm install --global --prefix $easyserver @easyai101/easyserver-plugin-vastai@0.2.1
 & "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-vastai
 ```
 
 Intelion.cloud:
 
 ```powershell
-npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion@0.2.0
+npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion@0.2.1
 & "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-intelion
 ```
 

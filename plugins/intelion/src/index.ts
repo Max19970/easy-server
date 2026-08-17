@@ -53,7 +53,7 @@ export function createIntelionProviderPlugin(
     manifest: {
       id: "intelion",
       displayName: "Intelion.cloud",
-      version: "0.2.0",
+      version: "0.2.1",
       compatibility: {
         easyserver: "^0.2.0",
         pluginSdk: "^0.2.0",

@@ -6,7 +6,7 @@ The ZIP is **not** a standalone native executable. It contains the core CLI and 
 
 ## Requirements
 
-For EasyServer `0.2.0` you need:
+For EasyServer `0.2.1` you need:
 
 - Windows 11 x64;
 - Node.js `24.18.1` available as `node` on `PATH`;
@@ -18,11 +18,11 @@ The authoritative current platform boundary is [Supported platforms](supported-p
 
 ## Download the release assets
 
-From GitHub Release `v0.2.0`, download:
+From GitHub Release `v0.2.1`, download:
 
 ```text
-easyserver-0.2.0-windows-x64.zip
-easyserver-0.2.0-SHA256SUMS.txt
+easyserver-0.2.1-windows-x64.zip
+easyserver-0.2.1-SHA256SUMS.txt
 ```
 
 ## Verify the checksum
@@ -30,8 +30,8 @@ easyserver-0.2.0-SHA256SUMS.txt
 Run this in Windows PowerShell from the directory containing both downloads:
 
 ```powershell
-$expected = ((Get-Content .\easyserver-0.2.0-SHA256SUMS.txt) -split '\s+')[0]
-$stream = [IO.File]::OpenRead((Resolve-Path .\easyserver-0.2.0-windows-x64.zip))
+$expected = ((Get-Content .\easyserver-0.2.1-SHA256SUMS.txt) -split '\s+')[0]
+$stream = [IO.File]::OpenRead((Resolve-Path .\easyserver-0.2.1-windows-x64.zip))
 $sha256 = [Security.Cryptography.SHA256]::Create()
 try {
   $actual = ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
@@ -49,9 +49,9 @@ Do not continue with an artifact whose checksum does not match the published fil
 Choose a directory for this version:
 
 ```powershell
-$easyserver = Join-Path $PWD 'easyserver-0.2.0-windows-x64'
+$easyserver = Join-Path $PWD 'easyserver-0.2.1-windows-x64'
 New-Item -ItemType Directory -Force $easyserver | Out-Null
-Expand-Archive .\easyserver-0.2.0-windows-x64.zip -DestinationPath $easyserver -Force
+Expand-Archive .\easyserver-0.2.1-windows-x64.zip -DestinationPath $easyserver -Force
 ```
 
 Check the extracted CLI:
@@ -61,7 +61,7 @@ Check the extracted CLI:
 & "$easyserver\easyserver.cmd" plugins list
 ```
 
-A fresh `0.2.0` bundle reports version `0.2.0` and:
+A fresh `0.2.1` bundle reports version `0.2.1` and:
 
 ```text
 No provider plugins configured.
@@ -82,14 +82,14 @@ Provider Plugins are opt-in packages. Install them into the **same extracted Eas
 Vast.ai:
 
 ```powershell
-npm install --global --prefix $easyserver @easyai101/easyserver-plugin-vastai@0.2.0
+npm install --global --prefix $easyserver @easyai101/easyserver-plugin-vastai@0.2.1
 & "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-vastai
 ```
 
 Intelion.cloud:
 
 ```powershell
-npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion@0.2.0
+npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion@0.2.1
 & "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-intelion
 ```
 

@@ -272,7 +272,7 @@ const parsed = parseProviderPlugin(plugin);
 const adapter = parsed.accessAdapters?.[0];
 if (
   parsed.manifest.id !== "external.ts-provider" ||
-  PLUGIN_SDK_VERSION !== "0.2.0" ||
+  PLUGIN_SDK_VERSION !== "0.2.1" ||
   adapter === undefined
 ) {
   throw new Error("Unexpected public SDK runtime result");
@@ -316,7 +316,7 @@ export default plugin;
   );
   assert.equal(
     installed.dependencies?.["@easyai101/easyserver-plugin-sdk"]?.version,
-    "0.2.0",
+    "0.2.1",
     "external consumer must resolve the packed SDK version",
   );
 
@@ -357,11 +357,11 @@ async function verifyCoreOnlyInstall(sdkTarball, cliTarball) {
 
   const result = runCli(prefix, "plugins", "list");
   assert.equal(result.stdout, "No provider plugins configured.\n");
-  assert.equal(runInstalledExecutable(prefix, "--version").stdout, "0.2.0\n");
+  assert.equal(runInstalledExecutable(prefix, "--version").stdout, "0.2.1\n");
 
   const diagnostics = JSON.parse(runCli(prefix, "doctor").stdout);
   assert.equal(diagnostics.schemaVersion, 1);
-  assert.equal(diagnostics.easyserver.version, "0.2.0");
+  assert.equal(diagnostics.easyserver.version, "0.2.1");
   assert.deepEqual(diagnostics.plugins, []);
   assert.equal(diagnostics.state.status, "empty");
 }
@@ -410,7 +410,7 @@ async function verifyPluginInstall({
   }
 
   runCli(prefix, "plugins", "disable", packageName);
-  assert.equal(runCli(prefix, "--version").stdout, "0.2.0\n");
+  assert.equal(runCli(prefix, "--version").stdout, "0.2.1\n");
 }
 
 async function verifyPackageLifecycle(sdkTarball, cliTarball, pluginTarball) {

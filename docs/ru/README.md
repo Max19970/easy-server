@@ -63,6 +63,7 @@ Provider-specific деревья команд также публикуют вл
 
 Исторические документы описывают то, что было выпущено или проверено для конкретной версии. Они не являются источником истины для текущего поведения.
 
+- [Release notes EasyServer 0.2.1](releases/v0.2.1.md)
 - [Release notes EasyServer 0.2.0](releases/v0.2.0.md)
 - [Release notes EasyServer 0.1.0](releases/v0.1.0.md)
 - [Аудит зависимостей и supply chain для EasyServer 0.1.0](releases/v0.1.0-dependency-audit.md)

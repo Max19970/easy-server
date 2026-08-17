@@ -1,6 +1,6 @@
 {
   "name": "@easyai101/easyserver-plugin-sdk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Public SDK for building EasyServer Provider Plugins.",
   "license": "MIT",
   "type": "module",

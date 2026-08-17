@@ -62,6 +62,7 @@ Provider-specific command trees expose their own nested help when the installed 
 
 Historical documents describe what shipped or was verified at a particular release. They are not the source of truth for current behavior.
 
+- [EasyServer 0.2.1 release notes](releases/v0.2.1.md)
 - [EasyServer 0.2.0 release notes](releases/v0.2.0.md)
 - [EasyServer 0.1.0 release notes](releases/v0.1.0.md)
 - [EasyServer 0.1.0 dependency and supply-chain audit](releases/v0.1.0-dependency-audit.md)
