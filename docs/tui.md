@@ -17,7 +17,7 @@ Home gives you four practical starting points:
 - **Rent a server** — open a guided provider-owned acquisition flow;
 - **Servers** — inspect and manage existing compute;
 - **Connections** — inspect local and background connections;
-- **Settings & Support** — configure providers/credentials and open Diagnostics.
+- **Settings & Support** — configure providers, credentials, appearance, and open Diagnostics.
 
 Working screens use the full content area instead of a permanent sidebar. Breadcrumbs show where you are, and `Esc` moves back toward Home.
 
@@ -133,6 +133,18 @@ Open **Settings & Support → Diagnostics** for a privacy-safe health/support su
 **Copy report** copies the same sanitized payload you review; scrolling and wrapping do not change the copied data.
 
 Diagnostics intentionally does not substitute raw logs or arbitrary OpenSSH stderr, which may contain sensitive provider or credential-adjacent data.
+
+## Appearance
+
+Open **Settings & Support → Appearance** to personalize the TUI without changing its safety or state semantics.
+
+**Accent** controls brand and focus emphasis only. The available terminal-safe choices are Cyan (default), Blue, Magenta, and White. Success, warning, and danger keep their semantic colors regardless of the selected accent.
+
+**Density** has two modes: **Comfortable** (default) keeps the calm spacing intended for normal use, while **Compact** reduces nonessential vertical gaps and leaves more rows available for lists and workflows. Density never removes warnings, confirmations, recovery actions, or technical information.
+
+Appearance is stored separately from EasyServer Local State in `~/.easyserver/appearance.json`. Invalid or corrupt appearance data falls back to the documented defaults and does not prevent EasyServer from starting. **Reset to defaults** removes the saved preference and restores Cyan + Comfortable.
+
+`NO_COLOR` is an absolute runtime override: when it is present, the configured accent does not emit ANSI foreground color. The saved preference remains intact and is used again on a later launch without `NO_COLOR`.
 
 ## Narrow terminals and accessibility
 

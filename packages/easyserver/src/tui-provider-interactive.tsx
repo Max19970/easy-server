@@ -9,6 +9,7 @@ import {
 import {
   tuiAppearance,
   tuiFocusColor,
+  type TuiAccent,
   type TuiAppearance,
 } from "./tui-appearance.js";
 import type {
@@ -22,14 +23,18 @@ import {
   tuiFocusWindowWithinRows,
 } from "./tui-focus.js";
 import {
+  tuiSpacing,
   tuiTableColumnWidths,
   tuiTableRow,
+  type TuiDensity,
 } from "./tui-layout.js";
 import { escapeTerminalText } from "./terminal-text.js";
 
 export interface ProviderInteractiveSurfaceProps {
   readonly screen: ProviderInteractiveScreen;
   readonly colorEnabled?: boolean;
+  readonly accent?: TuiAccent;
+  readonly density?: TuiDensity;
   readonly disabled?: boolean;
   readonly height?: number;
   readonly width?: number;
@@ -48,6 +53,8 @@ interface DraftValue {
 export function ProviderInteractiveSurface({
   screen,
   colorEnabled = true,
+  accent = "cyan",
+  density = "comfortable",
   disabled = false,
   height,
   width,
@@ -59,6 +66,7 @@ export function ProviderInteractiveSurface({
   const windowSize = useWindowSize();
   const terminalRows = height ?? windowSize.rows ?? 24;
   const terminalColumns = width ?? windowSize.columns ?? 80;
+  const spacing = tuiSpacing(density);
   const [cursor, setCursor] = useState(() =>
     screen.kind === "review" ? screen.items.length : 0,
   );
@@ -83,6 +91,7 @@ export function ProviderInteractiveSurface({
     : fieldDetailText(activeField);
   const fixedRows =
     2 +
+    spacing.sectionGap +
     (screen.description === undefined ? 0 : 1) +
     (screen.kind === "table" ? 1 + (screen.loading ? 1 : 0) : 0) +
     (activeFieldDetail === undefined ? 0 : 1) +
@@ -331,8 +340,8 @@ export function ProviderInteractiveSurface({
     }
   });
 
-  const appearance = tuiAppearance(colorEnabled);
-  const accent = appearance.accent;
+  const appearance = tuiAppearance(colorEnabled, accent);
+  const accentColor = appearance.accent;
   const muted = appearance.muted;
   const choiceField =
     choiceFieldId === undefined || screen.kind !== "form"
@@ -349,6 +358,7 @@ export function ProviderInteractiveSurface({
         cursor={choiceCursor}
         height={terminalRows}
         colorEnabled={colorEnabled}
+        accent={accent}
         screenReader={screenReader}
       />
     );
@@ -360,11 +370,11 @@ export function ProviderInteractiveSurface({
       height={screenReader ? undefined : terminalRows}
       overflowY={screenReader ? undefined : "hidden"}
     >
-      <Text bold color={accent} wrap="truncate">{safe(screen.title)}</Text>
+      <Text bold color={accentColor} wrap="truncate">{safe(screen.title)}</Text>
       {screen.description === undefined ? null : (
         <Text color={muted} wrap="truncate">{safe(screen.description)}</Text>
       )}
-      <Box flexDirection="column">
+      <Box flexDirection="column" marginTop={spacing.sectionGap}>
         {screen.kind === "form" ? (
           <>
             {contentWindow.showBefore ? (
@@ -398,6 +408,7 @@ export function ProviderInteractiveSurface({
             hiddenAfter={contentWindow.showAfter ? contentWindow.hiddenAfter : 0}
             width={terminalColumns}
             colorEnabled={colorEnabled}
+            accent={accent}
           />
         ) : (
           <>
@@ -502,6 +513,7 @@ function ChoicePicker({
   cursor,
   height,
   colorEnabled,
+  accent,
   screenReader,
 }: {
   readonly field: Extract<ProviderInteractiveField, {
@@ -510,6 +522,7 @@ function ChoicePicker({
   readonly cursor: number;
   readonly height: number;
   readonly colorEnabled: boolean;
+  readonly accent: TuiAccent;
   readonly screenReader: boolean;
 }): React.ReactElement {
   const choices = field.choices.filter((choice) => !choice.disabled);
@@ -542,9 +555,9 @@ function ChoicePicker({
         : [field.value]
       : field.value ?? [],
   );
-  const appearance = tuiAppearance(colorEnabled);
+  const appearance = tuiAppearance(colorEnabled, accent);
   const muted = appearance.muted;
-  const accent = appearance.accent;
+  const accentColor = appearance.accent;
 
   const visualWrap = screenReader ? "wrap" : "truncate-middle";
 
@@ -554,7 +567,7 @@ function ChoicePicker({
       height={screenReader ? undefined : height}
       overflowY={screenReader ? undefined : "hidden"}
     >
-      <Text bold color={accent} wrap={visualWrap}>Choose {safe(field.label)}</Text>
+      <Text bold color={accentColor} wrap={visualWrap}>Choose {safe(field.label)}</Text>
       {field.description === undefined ? null : (
         <Text color={muted} wrap={visualWrap}>{safe(field.description)}</Text>
       )}
@@ -599,6 +612,7 @@ function TableView({
   hiddenAfter,
   width,
   colorEnabled,
+  accent,
 }: {
   readonly screen: Extract<ProviderInteractiveScreen, { readonly kind: "table" }>;
   readonly cursor: number;
@@ -608,9 +622,10 @@ function TableView({
   readonly hiddenAfter: number;
   readonly width: number;
   readonly colorEnabled: boolean;
+  readonly accent: TuiAccent;
 }): React.ReactElement {
   const selected = new Set(screen.selectedRowIds);
-  const appearance = tuiAppearance(colorEnabled);
+  const appearance = tuiAppearance(colorEnabled, accent);
   const muted = appearance.muted;
   const rows = screen.rows.map((row) =>
     screen.columns.map((column) => safe(String(row.cells[column.id] ?? ""))),

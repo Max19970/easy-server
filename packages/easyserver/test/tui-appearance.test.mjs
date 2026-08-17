@@ -28,8 +28,8 @@ test("semantic TUI appearance maps focus and state through one restrained palett
   assert.equal(tuiResourceColor(appearance, "running"), "green");
 });
 
-test("NO_COLOR appearance removes every semantic foreground while preserving roles", () => {
-  const appearance = tuiAppearance(false);
+test("NO_COLOR appearance overrides even a configured alternate accent while preserving roles", () => {
+  const appearance = tuiAppearance(false, "magenta");
   for (const role of [
     "accent",
     "muted",
@@ -44,6 +44,15 @@ test("NO_COLOR appearance removes every semantic foreground while preserving rol
   assert.equal(tuiFocusColor(appearance, true), undefined);
   assert.equal(tuiResourceTone("failed"), "danger");
   assert.equal(tuiResourceColor(appearance, "failed"), undefined);
+});
+
+test("alternate accent changes focus only and keeps semantic tones stable", () => {
+  const appearance = tuiAppearance(true, "magenta");
+  assert.equal(appearance.accent, "magenta");
+  assert.equal(tuiFocusColor(appearance, true), "magenta");
+  assert.equal(tuiToneColor(appearance, "success"), "green");
+  assert.equal(tuiToneColor(appearance, "warning"), "yellow");
+  assert.equal(tuiToneColor(appearance, "danger"), "red");
 });
 
 test("core and provider TUI surfaces consume the shared visual contract", async () => {

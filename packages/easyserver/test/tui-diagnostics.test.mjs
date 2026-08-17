@@ -153,6 +153,8 @@ async function openDiagnostics(view) {
   await tick();
   view.stdin.write("\u001b[B");
   await tick();
+  view.stdin.write("\u001b[B");
+  await tick();
   view.stdin.write("\r");
   await tick();
   await tick();

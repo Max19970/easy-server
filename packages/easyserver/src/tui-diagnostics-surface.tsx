@@ -4,6 +4,7 @@ import type { DiagnosticsReport } from "./diagnostics.js";
 import {
   tuiAppearance,
   tuiResourceColor,
+  type TuiAccent,
 } from "./tui-appearance.js";
 
 export interface TuiDiagnosticsSummary {
@@ -35,6 +36,7 @@ export interface DiagnosticsSurfaceProps {
   readonly height: number;
   readonly width: number;
   readonly colorEnabled: boolean;
+  readonly accent?: TuiAccent;
 }
 
 export function DiagnosticsSurface({
@@ -46,8 +48,9 @@ export function DiagnosticsSurface({
   height,
   width,
   colorEnabled,
+  accent = "cyan",
 }: DiagnosticsSurfaceProps): React.ReactElement {
-  const appearance = tuiAppearance(colorEnabled);
+  const appearance = tuiAppearance(colorEnabled, accent);
   const muted = appearance.muted;
   if (diagnostics.status === "idle") {
     return (

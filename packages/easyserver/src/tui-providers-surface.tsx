@@ -5,6 +5,7 @@ import {
   tuiAppearance,
   tuiFocusColor,
   tuiResourceColor,
+  type TuiAccent,
 } from "./tui-appearance.js";
 import { tuiFocusWindowWithinRows } from "./tui-focus.js";
 import { tuiResourceRow } from "./tui-layout.js";
@@ -52,12 +53,14 @@ export function NewInstanceSurface({
   snapshot,
   selectedWorkflowKey,
   colorEnabled,
+  accent = "cyan",
 }: {
   readonly snapshot: TuiReadSnapshot;
   readonly selectedWorkflowKey?: string;
   readonly colorEnabled: boolean;
+  readonly accent?: TuiAccent;
 }): React.ReactElement {
-  const appearance = tuiAppearance(colorEnabled);
+  const appearance = tuiAppearance(colorEnabled, accent);
   if (snapshot.providerWorkflows.status === "failed") {
     return (
       <Box flexDirection="column">
@@ -118,6 +121,7 @@ export function ProvidersSurface({
   canRegister,
   canAddInstalled,
   colorEnabled,
+  accent = "cyan",
 }: {
   readonly snapshot: TuiReadSnapshot;
   readonly height: number;
@@ -130,8 +134,9 @@ export function ProvidersSurface({
   readonly canRegister: boolean;
   readonly canAddInstalled: boolean;
   readonly colorEnabled: boolean;
+  readonly accent?: TuiAccent;
 }): React.ReactElement {
-  const appearance = tuiAppearance(colorEnabled);
+  const appearance = tuiAppearance(colorEnabled, accent);
   if (candidatePicker !== undefined) {
     const focusedCandidate = candidatePicker.items[candidatePicker.cursor];
     const fixedRows = 2 + (focusedCandidate?.description === undefined ? 0 : 1);

@@ -13,7 +13,24 @@ import {
   tuiFocusColor,
   type TuiAppearance,
 } from "./tui-appearance.js";
-import { tuiReadableMeasure } from "./tui-layout.js";
+import {
+  DEFAULT_TUI_APPEARANCE,
+  JsonTuiAppearanceStore,
+  resolveTuiAppearancePath,
+  type TuiAppearancePreferences,
+  type TuiAppearanceStore,
+} from "./tui-appearance-settings.js";
+import {
+  AppearanceSurface,
+  applyAppearanceChoice,
+  appearanceChoiceAt,
+  TUI_APPEARANCE_CHOICES,
+} from "./tui-appearance-surface.js";
+import {
+  tuiReadableMeasure,
+  tuiSpacing,
+  type TuiSpacing,
+} from "./tui-layout.js";
 import { TuiOperationDrawer } from "./tui-operation-drawer.js";
 import { ProviderInteractiveSurface } from "./tui-provider-interactive.js";
 import {
@@ -150,6 +167,7 @@ type TuiRouteId =
   | "sessions"
   | "settings"
   | "providers"
+  | "appearance"
   | "new-instance"
   | "diagnostics";
 
@@ -182,14 +200,20 @@ const routes: readonly TuiRoute[] = [
   {
     id: "settings",
     label: "Settings & Support",
-    description: "Providers, credentials and support tools",
-    body: "Configure providers or inspect privacy-safe support information.",
+    description: "Providers, appearance and support tools",
+    body: "Configure providers or appearance, or inspect privacy-safe support information.",
   },
   {
     id: "providers",
     label: "Providers",
     description: "Provider setup and credentials",
     body: "Configure installed providers and their credentials here.",
+  },
+  {
+    id: "appearance",
+    label: "Appearance",
+    description: "Accent color and interface density",
+    body: "Choose a terminal-safe accent and comfortable or compact spacing.",
   },
   {
     id: "new-instance",
@@ -209,11 +233,12 @@ const homeDestinations = [
   { routeId: "new-instance" as const, label: "Rent a server", description: "Find compute and create a new server" },
   { routeId: "instances" as const, label: "My servers", description: "View, start, stop or manage rented servers" },
   { routeId: "sessions" as const, label: "Connections", description: "Expose a remote service on this computer" },
-  { routeId: "settings" as const, label: "Settings & Support", description: "Providers, credentials and diagnostics" },
+  { routeId: "settings" as const, label: "Settings & Support", description: "Providers, appearance and diagnostics" },
 ] as const;
 
 const settingsDestinations = [
   { routeId: "providers" as const, label: "Providers", description: "Configure installed providers and credentials" },
+  { routeId: "appearance" as const, label: "Appearance", description: "Accent color and interface density" },
   { routeId: "diagnostics" as const, label: "Diagnostics", description: "Check health and review a safe support report" },
 ] as const;
 
@@ -221,7 +246,7 @@ function parentRoute(routeId: TuiRouteId): TuiRouteId {
   if (routeId === "new-instance") {
     return "instances";
   }
-  if (routeId === "providers" || routeId === "diagnostics") {
+  if (routeId === "providers" || routeId === "appearance" || routeId === "diagnostics") {
     return "settings";
   }
   return "overview";
@@ -241,6 +266,8 @@ function routeBreadcrumb(routeId: TuiRouteId): string {
       return "Home › Settings & Support";
     case "providers":
       return "Home › Settings & Support › Providers";
+    case "appearance":
+      return "Home › Settings & Support › Appearance";
     case "diagnostics":
       return "Home › Settings & Support › Diagnostics";
   }
@@ -280,6 +307,11 @@ export interface TuiShellProps {
   readonly height?: number;
   readonly colorEnabled?: boolean;
   readonly screenReader?: boolean;
+  readonly appearancePreferences?: TuiAppearancePreferences;
+  readonly onAppearancePreferencesChange?: (
+    preferences: TuiAppearancePreferences,
+    reset: boolean,
+  ) => Promise<boolean>;
   readonly operation?: TuiOperationPresentation;
   readonly onOperationAction?: (action: TuiOperationActionKind) => void;
   readonly readSnapshot?: TuiReadSnapshot;
@@ -327,6 +359,8 @@ export function TuiShell({
   height,
   colorEnabled = true,
   screenReader = false,
+  appearancePreferences = DEFAULT_TUI_APPEARANCE,
+  onAppearancePreferencesChange,
   operation,
   onOperationAction,
   readSnapshot,
@@ -368,7 +402,8 @@ export function TuiShell({
   const windowSize = useWindowSize();
   const columns = width ?? windowSize.columns ?? 80;
   const rows = height ?? windowSize.rows ?? 24;
-  const routeContentRows = Math.max(7, rows - 11);
+  const spacing = tuiSpacing(appearancePreferences.density);
+  const routeContentRows = Math.max(7, rows - spacing.chromeRows);
   const routeContentColumns = Math.max(20, columns - 4);
   const routeVisualColumns = tuiReadableMeasure(routeContentColumns);
   const diagnosticsReportRows = Math.max(1, routeContentRows - 3);
@@ -382,6 +417,7 @@ export function TuiShell({
   );
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [settingsCursor, setSettingsCursor] = useState(0);
+  const [appearanceCursor, setAppearanceCursor] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const [contentFocused, setContentFocused] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
@@ -813,6 +849,7 @@ export function TuiShell({
     switch (activeRoute.id) {
       case "overview":
       case "settings":
+      case "appearance":
         return [];
       case "instances":
         return serverContextActions({
@@ -1817,6 +1854,12 @@ export function TuiShell({
         );
         return;
       }
+      if (activeRoute.id === "appearance") {
+        setAppearanceCursor((current) =>
+          moveTuiFocus(current, TUI_APPEARANCE_CHOICES.length, forwards ? 1 : -1),
+        );
+        return;
+      }
       if (activeRoute.id === "instances" && inventoryItems.length > 0) {
         const currentIndex = Math.max(
           0,
@@ -1878,6 +1921,27 @@ export function TuiShell({
         if (destination !== undefined) {
           openRoute(destination.routeId);
         }
+        return;
+      }
+      if (activeRoute.id === "appearance") {
+        const choice = appearanceChoiceAt(appearanceCursor);
+        if (choice === undefined) {
+          return;
+        }
+        const next = applyAppearanceChoice(appearancePreferences, choice);
+        if (onAppearancePreferencesChange === undefined) {
+          setStatus("Appearance settings are unavailable in this TUI session.");
+          return;
+        }
+        void onAppearancePreferencesChange(next, choice.kind === "reset").then((saved) => {
+          setStatus(
+            saved
+              ? choice.kind === "reset"
+                ? "Appearance reset to defaults."
+                : "Appearance updated."
+              : "Appearance updated for this session, but could not be saved.",
+          );
+        });
         return;
       }
       if (
@@ -1949,7 +2013,7 @@ export function TuiShell({
     }
   });
 
-  const appearance = tuiAppearance(colorEnabled);
+  const appearance = tuiAppearance(colorEnabled, appearancePreferences.accent);
   const accent = appearance.accent;
   const muted = appearance.muted;
   const actionMenuMaxRows = Math.max(4, routeContentRows - 2);
@@ -1967,6 +2031,7 @@ export function TuiShell({
     providerSourceInput !== undefined ||
     providerCredentialFlowView !== undefined ||
     foregroundConnectionFlow !== undefined ||
+    activeRoute.id === "appearance" ||
     diagnosticsReportOpen;
 
   return (
@@ -1991,6 +2056,7 @@ export function TuiShell({
           <TuiOperationDrawer
             operation={operation}
             colorEnabled={colorEnabled}
+            accent={appearancePreferences.accent}
             selectedActionIndex={Math.min(
               operationActionCursor,
               Math.max(0, operation.actions.length - 1),
@@ -2000,22 +2066,26 @@ export function TuiShell({
           />
         </Box>
       ) : helpOpen ? (
-        <Box marginTop={1} flexDirection="column">
+        <Box marginTop={spacing.pageGap} flexDirection="column">
           <Text color={muted}>{routeBreadcrumb(activeRoute.id)}</Text>
-          <HelpPanel colorEnabled={colorEnabled} />
+          <HelpPanel appearance={appearance} />
         </Box>
       ) : activeRoute.id === "overview" ? (
         <Box width={routeVisualColumns}>
-          <HomeSurface cursor={Math.min(focusedIndex, homeDestinations.length - 1)} appearance={appearance} />
+          <HomeSurface
+            cursor={Math.min(focusedIndex, homeDestinations.length - 1)}
+            appearance={appearance}
+            spacing={spacing}
+          />
         </Box>
       ) : (
-        <Box marginTop={1} flexDirection="column" flexGrow={1} minHeight={0} width={routeVisualColumns}>
+        <Box marginTop={spacing.pageGap} flexDirection="column" flexGrow={1} minHeight={0} width={routeVisualColumns}>
           <Text color={muted}>{routeBreadcrumb(activeRoute.id)}</Text>
           <Text bold>{activeRoute.label}</Text>
           <Text color={muted}>{activeRoute.description}</Text>
-          <Box marginTop={1} flexDirection="column" flexGrow={1} minHeight={0}>
+          <Box marginTop={spacing.sectionGap} flexDirection="column" flexGrow={1} minHeight={0}>
             {readSnapshot !== undefined && readStatus === "stale" ? (
-              <Box flexDirection="column" marginBottom={1}>
+              <Box flexDirection="column" marginBottom={spacing.sectionGap}>
                 <Text bold color={appearance.warning}>Some information could not be refreshed.</Text>
                 <Text color={appearance.warning}>Showing the previous snapshot; open Actions to try again.</Text>
               </Box>
@@ -2028,6 +2098,8 @@ export function TuiShell({
               height={routeSurfaceRows}
               width={routeVisualColumns}
               colorEnabled={colorEnabled}
+              appearancePreferences={appearancePreferences}
+              appearanceCursor={appearanceCursor}
               settingsCursor={settingsCursor}
               diagnostics={{
                 view: diagnostics,
@@ -2073,7 +2145,8 @@ export function TuiShell({
               <ContextActionMenu
                 actions={contextActions}
                 cursor={Math.min(actionCursor, Math.max(0, contextActions.length - 1))}
-                colorEnabled={colorEnabled}
+                appearance={appearance}
+                spacing={spacing}
                 maxRows={actionMenuMaxRows}
               />
             ) : null}
@@ -2082,10 +2155,11 @@ export function TuiShell({
       )}
 
       {operation === undefined || operationOwnsViewport ? null : (
-        <Box marginTop={1}>
+        <Box marginTop={spacing.sectionGap}>
           <TuiOperationDrawer
             operation={operation}
             colorEnabled={colorEnabled}
+            accent={appearancePreferences.accent}
             selectedActionIndex={Math.min(
               operationActionCursor,
               Math.max(0, operation.actions.length - 1),
@@ -2097,7 +2171,7 @@ export function TuiShell({
       )}
 
       {operationOwnsViewport || actionMenuOpen ? null : (
-        <Box marginTop={1} flexDirection="column">
+        <Box marginTop={spacing.sectionGap} flexDirection="column">
           {status === undefined ? null : (
             <Text color={muted} aria-label={`Status: ${status}`} wrap="truncate">{status}</Text>
           )}
@@ -2120,14 +2194,22 @@ export function TuiShell({
   );
 }
 
-function HomeSurface({ cursor, appearance }: { readonly cursor: number; readonly appearance: TuiAppearance }): React.ReactElement {
+function HomeSurface({
+  cursor,
+  appearance,
+  spacing,
+}: {
+  readonly cursor: number;
+  readonly appearance: TuiAppearance;
+  readonly spacing: TuiSpacing;
+}): React.ReactElement {
   const muted = appearance.muted;
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column" marginTop={spacing.pageGap}>
       <Text bold>What do you want to do?</Text>
-      <Box flexDirection="column" marginTop={1}>
+      <Box flexDirection="column" marginTop={spacing.sectionGap}>
         {homeDestinations.map((destination, index) => (
-          <Box key={destination.routeId} flexDirection="column" marginBottom={index === homeDestinations.length - 1 ? 0 : 1}>
+          <Box key={destination.routeId} flexDirection="column" marginBottom={index === homeDestinations.length - 1 ? 0 : spacing.itemGap}>
             <Text bold={index === cursor} color={tuiFocusColor(appearance, index === cursor)}>
               {index === cursor ? "> " : "  "}{destination.label}
             </Text>
@@ -2139,15 +2221,22 @@ function HomeSurface({ cursor, appearance }: { readonly cursor: number; readonly
   );
 }
 
-function SettingsSurface({ cursor, colorEnabled }: { readonly cursor: number; readonly colorEnabled: boolean }): React.ReactElement {
-  const appearance = tuiAppearance(colorEnabled);
+function SettingsSurface({
+  cursor,
+  appearance,
+  spacing,
+}: {
+  readonly cursor: number;
+  readonly appearance: TuiAppearance;
+  readonly spacing: TuiSpacing;
+}): React.ReactElement {
   const muted = appearance.muted;
   return (
     <Box flexDirection="column">
       <Text>Choose what you want to configure or inspect.</Text>
-      <Box flexDirection="column" marginTop={1}>
+      <Box flexDirection="column" marginTop={spacing.sectionGap}>
         {settingsDestinations.map((destination, index) => (
-          <Box key={destination.routeId} flexDirection="column" marginBottom={index === settingsDestinations.length - 1 ? 0 : 1}>
+          <Box key={destination.routeId} flexDirection="column" marginBottom={index === settingsDestinations.length - 1 ? 0 : spacing.itemGap}>
             <Text bold={index === cursor} color={tuiFocusColor(appearance, index === cursor)}>
               {index === cursor ? "> " : "  "}{destination.label}
             </Text>
@@ -2180,15 +2269,16 @@ function contextActionMenuRenderedRows(
 function ContextActionMenu({
   actions,
   cursor,
-  colorEnabled,
+  appearance,
+  spacing,
   maxRows = 6,
 }: {
   readonly actions: readonly TuiContextAction[];
   readonly cursor: number;
-  readonly colorEnabled: boolean;
+  readonly appearance: TuiAppearance;
+  readonly spacing: TuiSpacing;
   readonly maxRows?: number;
 }): React.ReactElement {
-  const appearance = tuiAppearance(colorEnabled);
   const accent = appearance.accent;
   const muted = appearance.muted;
   const window = tuiFocusWindowWithinRows(
@@ -2197,7 +2287,7 @@ function ContextActionMenu({
     Math.max(1, maxRows - 3),
   );
   return (
-    <Box marginTop={1} flexDirection="column">
+    <Box marginTop={spacing.sectionGap} flexDirection="column">
       <Text bold>Actions</Text>
       {window.hiddenBefore > 0 ? <Text color={muted}>↑ {window.hiddenBefore} more</Text> : null}
       {actions.slice(window.start, window.end).map((action, visibleIndex) => {
@@ -2270,6 +2360,8 @@ interface RouteSurfaceProps {
   readonly height: number;
   readonly width: number;
   readonly colorEnabled: boolean;
+  readonly appearancePreferences: TuiAppearancePreferences;
+  readonly appearanceCursor: number;
   readonly settingsCursor: number;
   readonly diagnostics: DiagnosticsRouteState;
   readonly servers: ServersRouteState;
@@ -2286,6 +2378,8 @@ function RouteSurface({
   height,
   width,
   colorEnabled,
+  appearancePreferences,
+  appearanceCursor,
   settingsCursor,
   diagnostics,
   servers,
@@ -2299,6 +2393,7 @@ function RouteSurface({
     route.id !== "new-instance" &&
     route.id !== "sessions" &&
     route.id !== "settings" &&
+    route.id !== "appearance" &&
     route.id !== "diagnostics"
   ) {
     return <Text wrap="wrap">{route.body}</Text>;
@@ -2315,12 +2410,29 @@ function RouteSurface({
         height={height}
         width={width}
         colorEnabled={colorEnabled}
+        accent={appearancePreferences.accent}
       />
     );
   }
 
   if (route.id === "settings") {
-    return <SettingsSurface cursor={settingsCursor} colorEnabled={colorEnabled} />;
+    return (
+      <SettingsSurface
+        cursor={settingsCursor}
+        appearance={tuiAppearance(colorEnabled, appearancePreferences.accent)}
+        spacing={tuiSpacing(appearancePreferences.density)}
+      />
+    );
+  }
+
+  if (route.id === "appearance") {
+    return (
+      <AppearanceSurface
+        preferences={appearancePreferences}
+        cursor={appearanceCursor}
+        colorEnabled={colorEnabled}
+      />
+    );
   }
 
   if (snapshot === undefined) {
@@ -2340,6 +2452,8 @@ function RouteSurface({
           key={`${rent.interactiveScreen.kind}:${rent.interactiveScreen.id}`}
           screen={rent.interactiveScreen}
           colorEnabled={colorEnabled}
+          accent={appearancePreferences.accent}
+          density={appearancePreferences.density}
           disabled={rent.interactiveDisabled}
           height={height}
           width={width}
@@ -2354,6 +2468,7 @@ function RouteSurface({
         snapshot={snapshot}
         selectedWorkflowKey={rent.selectedWorkflowKey}
         colorEnabled={colorEnabled}
+        accent={appearancePreferences.accent}
       />
     );
   }
@@ -2369,6 +2484,7 @@ function RouteSurface({
         canMutate={servers.canMutate}
         canBulkMutate={servers.canBulkMutate}
         colorEnabled={colorEnabled}
+        accent={appearancePreferences.accent}
       />
     );
   }
@@ -2388,6 +2504,7 @@ function RouteSurface({
         selectedConnectionTarget={connections.selectedTarget}
         showDetails={connections.showDetails}
         colorEnabled={colorEnabled}
+        accent={appearancePreferences.accent}
       />
     );
   }
@@ -2404,6 +2521,7 @@ function RouteSurface({
       canRegister={providers.canRegister}
       canAddInstalled={providers.canAddInstalled}
       colorEnabled={colorEnabled}
+      accent={appearancePreferences.accent}
     />
   );
 }
@@ -2459,8 +2577,8 @@ function operationActionForInput(
   return undefined;
 }
 
-function HelpPanel({ colorEnabled }: { readonly colorEnabled: boolean }): React.ReactElement {
-  const accent = tuiAppearance(colorEnabled).accent;
+function HelpPanel({ appearance }: { readonly appearance: TuiAppearance }): React.ReactElement {
+  const accent = appearance.accent;
   return (
     <Box
       flexDirection="column"
@@ -2490,6 +2608,8 @@ export type TuiReadLoader = (
 export interface TuiAppProps {
   readonly colorEnabled?: boolean;
   readonly screenReader?: boolean;
+  readonly initialAppearancePreferences?: TuiAppearancePreferences;
+  readonly appearanceStore?: TuiAppearanceStore;
   readonly readLoader?: TuiReadLoader;
   readonly instanceMutationRunner?: TuiInstanceMutationRunner;
   readonly bulkInstanceMutationRunner?: TuiBulkInstanceMutationRunner;
@@ -2503,6 +2623,8 @@ export interface TuiAppProps {
 export function TuiApp({
   colorEnabled = true,
   screenReader = false,
+  initialAppearancePreferences = DEFAULT_TUI_APPEARANCE,
+  appearanceStore,
   readLoader,
   instanceMutationRunner,
   bulkInstanceMutationRunner,
@@ -2512,6 +2634,9 @@ export function TuiApp({
   providerMutationRunner,
   providerFlowOpener,
 }: TuiAppProps): React.ReactElement {
+  const [appearancePreferences, setAppearancePreferences] = useState<TuiAppearancePreferences>(
+    initialAppearancePreferences,
+  );
   const [snapshot, setSnapshot] = useState<TuiReadSnapshot | undefined>();
   const [diagnostics, setDiagnostics] = useState<TuiDiagnosticsView>({ status: "idle" });
   const [operation, setOperation] = useState<TuiOperationPresentation | undefined>();
@@ -2545,6 +2670,51 @@ export function TuiApp({
   const providerFlowBusyRef = useRef(false);
   const diagnosticsGenerationRef = useRef(0);
   const reportedForegroundFailuresRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (appearanceStore === undefined) {
+      return;
+    }
+    let active = true;
+    void appearanceStore.read().then(
+      (preferences) => {
+        if (active) {
+          setAppearancePreferences(preferences);
+        }
+      },
+      () => {
+        if (active) {
+          setAppearancePreferences(DEFAULT_TUI_APPEARANCE);
+        }
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [appearanceStore]);
+
+  const updateAppearancePreferences = useCallback(
+    async (
+      preferences: TuiAppearancePreferences,
+      reset: boolean,
+    ): Promise<boolean> => {
+      setAppearancePreferences(preferences);
+      if (appearanceStore === undefined) {
+        return true;
+      }
+      try {
+        if (reset) {
+          await appearanceStore.reset();
+        } else {
+          await appearanceStore.write(preferences);
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [appearanceStore],
+  );
 
   const refreshDiagnostics = useCallback(async (): Promise<boolean> => {
     if (diagnosticsOperations === undefined) {
@@ -4028,6 +4198,8 @@ export function TuiApp({
     <TuiShell
       colorEnabled={colorEnabled}
       screenReader={screenReader}
+      appearancePreferences={appearancePreferences}
+      onAppearancePreferencesChange={updateAppearancePreferences}
       readSnapshot={snapshot}
       readStatus={readStatus}
       diagnostics={diagnostics}
@@ -4143,6 +4315,7 @@ export interface TuiRuntimeOptions {
   readonly stdout?: NodeJS.WriteStream;
   readonly stderr?: NodeJS.WriteStream;
   readonly env?: NodeJS.ProcessEnv;
+  readonly appearanceStore?: TuiAppearanceStore;
   readonly readLoader?: TuiReadLoader;
   readonly instanceMutationRunner?: TuiInstanceMutationRunner;
   readonly bulkInstanceMutationRunner?: TuiBulkInstanceMutationRunner;
@@ -4157,10 +4330,14 @@ export function renderTui(options: TuiRuntimeOptions = {}): InkInstance {
   const env = options.env ?? process.env;
   const screenReader = env.INK_SCREEN_READER === "true";
   const colorEnabled = env.NO_COLOR === undefined;
+  const appearanceStore =
+    options.appearanceStore ??
+    new JsonTuiAppearanceStore(resolveTuiAppearancePath(env));
   return render(
     <TuiApp
       colorEnabled={colorEnabled}
       screenReader={screenReader}
+      appearanceStore={appearanceStore}
       readLoader={options.readLoader}
       instanceMutationRunner={options.instanceMutationRunner}
       bulkInstanceMutationRunner={options.bulkInstanceMutationRunner}

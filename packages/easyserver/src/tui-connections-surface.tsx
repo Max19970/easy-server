@@ -14,6 +14,7 @@ import {
   tuiAppearance,
   tuiFocusColor,
   tuiResourceColor,
+  type TuiAccent,
   type TuiAppearance,
 } from "./tui-appearance.js";
 import { tuiFocusWindowWithinRows } from "./tui-focus.js";
@@ -73,6 +74,7 @@ export interface ConnectionsSurfaceProps {
   readonly selectedConnectionTarget?: TuiConnectionTarget;
   readonly showDetails: boolean;
   readonly colorEnabled: boolean;
+  readonly accent?: TuiAccent;
 }
 
 export function ConnectionsSurface({
@@ -89,8 +91,9 @@ export function ConnectionsSurface({
   selectedConnectionTarget,
   showDetails,
   colorEnabled,
+  accent = "cyan",
 }: ConnectionsSurfaceProps): React.ReactElement {
-  const appearance = tuiAppearance(colorEnabled);
+  const appearance = tuiAppearance(colorEnabled, accent);
   if (flow !== undefined) {
     const instances =
       snapshot.instances.status === "ready" ? snapshot.instances.items : [];

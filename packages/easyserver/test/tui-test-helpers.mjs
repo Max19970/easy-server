@@ -145,6 +145,8 @@ export async function openDiagnosticsRoute(view) {
   await openSettingsRoute(view);
   view.stdin.write("\u001b[B");
   await tick();
+  view.stdin.write("\u001b[B");
+  await tick();
   view.stdin.write("\r");
   await tick();
 }

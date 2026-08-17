@@ -1,3 +1,7 @@
+export const TUI_ACCENTS = ["cyan", "blue", "magenta", "white"] as const;
+
+export type TuiAccent = (typeof TUI_ACCENTS)[number];
+
 export type TuiSemanticRole =
   | "accent"
   | "muted"
@@ -20,8 +24,7 @@ export interface TuiAppearance {
   readonly border?: string;
 }
 
-const COLOR_APPEARANCE: Omit<TuiAppearance, "colorEnabled"> = {
-  accent: "cyan",
+const COLOR_APPEARANCE: Omit<TuiAppearance, "colorEnabled" | "accent"> = {
   muted: "gray",
   info: "blue",
   success: "green",
@@ -30,9 +33,12 @@ const COLOR_APPEARANCE: Omit<TuiAppearance, "colorEnabled"> = {
   border: "gray",
 };
 
-export function tuiAppearance(colorEnabled: boolean): TuiAppearance {
+export function tuiAppearance(
+  colorEnabled: boolean,
+  accent: TuiAccent = "cyan",
+): TuiAppearance {
   return colorEnabled
-    ? { colorEnabled: true, ...COLOR_APPEARANCE }
+    ? { colorEnabled: true, accent, ...COLOR_APPEARANCE }
     : { colorEnabled: false };
 }
 

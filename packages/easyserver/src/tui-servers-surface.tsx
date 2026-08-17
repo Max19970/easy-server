@@ -10,6 +10,7 @@ import {
   tuiAppearance,
   tuiFocusColor,
   tuiResourceColor,
+  type TuiAccent,
 } from "./tui-appearance.js";
 import { tuiFocusWindowWithinRows } from "./tui-focus.js";
 import { tuiResourceRow } from "./tui-layout.js";
@@ -38,6 +39,7 @@ export interface InstancesSurfaceProps {
   readonly canMutate: boolean;
   readonly canBulkMutate: boolean;
   readonly colorEnabled: boolean;
+  readonly accent?: TuiAccent;
 }
 
 export function InstancesSurface({
@@ -50,8 +52,9 @@ export function InstancesSurface({
   canMutate,
   canBulkMutate,
   colorEnabled,
+  accent = "cyan",
 }: InstancesSurfaceProps): React.ReactElement {
-  const appearance = tuiAppearance(colorEnabled);
+  const appearance = tuiAppearance(colorEnabled, accent);
   if (snapshot.instances.status === "failed") {
     return (
       <Box flexDirection="column">

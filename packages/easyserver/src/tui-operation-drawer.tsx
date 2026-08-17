@@ -5,6 +5,7 @@ import {
   tuiFocusColor,
   tuiResourceColor,
   tuiToneColor,
+  type TuiAccent,
 } from "./tui-appearance.js";
 import {
   assertTuiOperationPresentation,
@@ -14,6 +15,7 @@ import {
 export interface TuiOperationDrawerProps {
   readonly operation: TuiOperationPresentation;
   readonly colorEnabled?: boolean;
+  readonly accent?: TuiAccent;
   readonly selectedActionIndex?: number;
   readonly interactionResourceScroll?: number;
   readonly screenReader?: boolean;
@@ -22,13 +24,14 @@ export interface TuiOperationDrawerProps {
 export function TuiOperationDrawer({
   operation,
   colorEnabled = true,
+  accent = "cyan",
   selectedActionIndex = 0,
   interactionResourceScroll = 0,
   screenReader = false,
 }: TuiOperationDrawerProps): React.ReactElement {
   assertTuiOperationPresentation(operation);
 
-  const appearance = tuiAppearance(colorEnabled);
+  const appearance = tuiAppearance(colorEnabled, accent);
   const toneColor = tuiToneColor(appearance, operation.tone);
   const affectedResources =
     operation.interaction?.kind === "mutation-confirmation"

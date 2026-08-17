@@ -1,5 +1,21 @@
 export type TuiWidthClass = "compact" | "standard" | "wide";
 
+export const TUI_DENSITIES = ["comfortable", "compact"] as const;
+export type TuiDensity = (typeof TUI_DENSITIES)[number];
+
+export interface TuiSpacing {
+  readonly pageGap: number;
+  readonly sectionGap: number;
+  readonly itemGap: number;
+  readonly chromeRows: number;
+}
+
+export function tuiSpacing(density: TuiDensity): TuiSpacing {
+  return density === "compact"
+    ? { pageGap: 0, sectionGap: 0, itemGap: 0, chromeRows: 9 }
+    : { pageGap: 1, sectionGap: 1, itemGap: 1, chromeRows: 11 };
+}
+
 export interface TuiResourceRow {
   readonly marker: string;
   readonly primary: string;
