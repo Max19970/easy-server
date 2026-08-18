@@ -20,7 +20,7 @@ EasyServer хранит пользовательское состояние и �
 
 Удаление Local State ради того, чтобы совместимое обновление заработало, не считается допустимой стратегией миграции.
 
-Provider Plugins — отдельные пакеты. Обновление основной CLI не устанавливает, не обновляет и не удаляет их автоматически.
+Provider Plugins — отдельные, независимо версионируемые пакеты. Обновление основной CLI не устанавливает, не обновляет, не удаляет и не синхронизирует их номера версий автоматически.
 
 ## Если настроенный Provider Plugin отсутствует или несовместим
 
@@ -37,13 +37,15 @@ EasyServer рассматривает это как недоступность �
 
 ## Переустановка одного пакета провайдера
 
-Для глобальной npm-установки переустановите соответствующий совместимый плагин в той же глобальной пакетной среде, где установлен EasyServer:
+Для глобальной npm-установки переустановите версию плагина, чьи объявленные диапазоны совместимости EasyServer/Plugin SDK включают установленную линию host, в той же глобальной пакетной среде, где установлен EasyServer:
 
 ```powershell
-npm install --global @easyai101/easyserver-plugin-vastai@^0.2.0
+npm install --global @easyai101/easyserver-plugin-vastai
 # or
-npm install --global @easyai101/easyserver-plugin-intelion@^0.2.0
+npm install --global @easyai101/easyserver-plugin-intelion
 ```
+
+Собственный SemVer плагина независим от версии EasyServer. Не определяйте совместимость по совпадению номеров версий — используйте документированные/объявленные диапазоны host и SDK.
 
 Для установки из переносимого ZIP устанавливайте провайдера в этот распакованный prefix. См. [Установка из GitHub Releases](github-release-install.md#добавьте-provider-plugin-позже).
 
@@ -89,7 +91,7 @@ easyserver plugins credential remove @easyai101/easyserver-plugin-intelion api-t
 
 Очистка для конкретных провайдеров:
 
-- [Vast.ai](providers/vastai.md#очистка-аренды)
-- [Intelion.cloud](providers/intelion.md#очистка-сервера)
+- [Vast.ai](https://github.com/Max19970/easy-server-plugin-vastai/blob/main/docs/ru/usage.md#очистка-аренды)
+- [Intelion.cloud](https://github.com/Max19970/easy-server-plugin-intelion/blob/main/docs/ru/usage.md#очистка-сервера)
 
 Никогда не используйте удаление Local State вместо очистки ресурсов провайдера. Удаление локальной записи не может удалить удалённый ресурс, который она описывала.

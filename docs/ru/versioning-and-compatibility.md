@@ -68,9 +68,11 @@ Provider-owned raw API shapes или недокументированное со
 
 `@easyai101/easyserver` не позиционируется как general-purpose программная библиотека. Plugin SDK — поддерживаемая переиспользуемая зависимость для provider extensions.
 
+First-party Provider Plugins версионируются независимо и имеют собственные репозитории и истории релизов. SemVer пакета плагина и его диапазоны совместимости с EasyServer/Plugin SDK — разные оси: feature release одного плагина не требует matching version bump EasyServer, а релиз EasyServer не требует перевыпускать неизменившийся плагин ради одинакового номера версии.
+
 ## Диапазоны совместимости Provider Plugin
 
-Plugin линии `0.2.x` обычно объявляет совместимость и с host, и с SDK:
+Plugin, совместимый с линией EasyServer/Plugin SDK `0.2.x`, обычно объявляет совместимость и с host, и с SDK:
 
 ```ts
 compatibility: {

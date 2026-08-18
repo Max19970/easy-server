@@ -9,11 +9,11 @@ import test from "node:test";
 import {
   createIntelionProviderPlugin,
   INTELION_API_TOKEN_CREDENTIAL,
-} from "../../../plugins/intelion/dist/index.js";
+} from "@easyai101/easyserver-plugin-intelion";
 import {
   createVastProviderPlugin,
   VAST_API_KEY_CREDENTIAL,
-} from "../../../plugins/vastai/dist/index.js";
+} from "@easyai101/easyserver-plugin-vastai";
 import { AccessAdapterRegistry } from "../dist/access-adapter-registry.js";
 import { ComputeManager } from "../dist/compute-manager.js";
 import { ConnectionGateway } from "../dist/connection-gateway.js";

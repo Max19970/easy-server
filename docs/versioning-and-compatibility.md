@@ -66,9 +66,11 @@ The documented package roles are part of the public distribution model:
 
 `@easyai101/easyserver` is not advertised as a general-purpose programmatic library. The Plugin SDK is the supported reusable dependency for provider extensions.
 
+First-party Provider Plugins are independently versioned products with their own repositories and release histories. Their package SemVer and their EasyServer/Plugin SDK compatibility ranges are separate axes: a plugin feature release does not require a matching EasyServer version bump, and an EasyServer release does not require republishing an unchanged plugin for numerical symmetry.
+
 ## Provider Plugin compatibility ranges
 
-A `0.2.x` plugin normally declares both host and SDK compatibility:
+A plugin compatible with the EasyServer/Plugin SDK `0.2.x` line normally declares:
 
 ```ts
 compatibility: {

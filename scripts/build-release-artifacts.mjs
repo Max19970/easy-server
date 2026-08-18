@@ -31,6 +31,14 @@ const rootManifest = JSON.parse(
 );
 const version = rootManifest.version;
 assert.match(version, /^\d+\.\d+\.\d+$/u, "workspace version must be a release version");
+const vastPluginSpec = exactDevDependencySpec(
+  rootManifest,
+  "@easyai101/easyserver-plugin-vastai",
+);
+const intelionPluginSpec = exactDevDependencySpec(
+  rootManifest,
+  "@easyai101/easyserver-plugin-intelion",
+);
 
 const bundleName = `easyserver-${version}-${target.id}`;
 const artifactName = releaseAssetName(version, target);
@@ -53,8 +61,6 @@ try {
 
   const sdkTarball = pack("packages/plugin-sdk", packDirectory);
   const cliTarball = pack("packages/easyserver", packDirectory);
-  const vastTarball = pack("plugins/vastai", packDirectory);
-  const intelionTarball = pack("plugins/intelion", packDirectory);
   installPortablePrefix(bundleDirectory, sdkTarball, cliTarball);
 
   await rm(join(globalNodeModules(bundleDirectory), ".package-lock.json"), {
@@ -85,7 +91,7 @@ try {
   createArchive(bundleDirectory, artifactPath);
   assert.equal(existsSync(artifactPath), true, "portable release archive must be created");
 
-  await verifyReleaseArchive(artifactPath, vastTarball, intelionTarball);
+  await verifyReleaseArchive(artifactPath, vastPluginSpec, intelionPluginSpec);
 
   process.stdout.write(
     [
@@ -115,7 +121,7 @@ function pack(packageDirectory, destination) {
   return join(destination, packed[0].filename);
 }
 
-function installPortablePrefix(prefix, ...tarballs) {
+function installPortablePrefix(prefix, ...packages) {
   runNpm(
     [
       "install",
@@ -125,10 +131,20 @@ function installPortablePrefix(prefix, ...tarballs) {
       "--omit=dev",
       "--no-audit",
       "--no-fund",
-      ...tarballs,
+      ...packages,
     ],
     repositoryRoot,
   );
+}
+
+function exactDevDependencySpec(manifest, packageName) {
+  const packageVersion = manifest.devDependencies?.[packageName];
+  assert.match(
+    packageVersion ?? "",
+    /^\d+\.\d+\.\d+$/u,
+    `${packageName} integration baseline must be an exact version`,
+  );
+  return `${packageName}@${packageVersion}`;
 }
 
 function verifyPortablePrefix(prefix) {
@@ -155,7 +171,7 @@ function verifyPortablePrefix(prefix) {
   );
 }
 
-async function verifyReleaseArchive(archivePath, vastTarball, intelionTarball) {
+async function verifyReleaseArchive(archivePath, vastPluginSpec, intelionPluginSpec) {
   const extractionDirectory = join(temporaryRoot, "extracted");
   const outsideDirectory = join(temporaryRoot, "outside-cwd");
   await mkdir(extractionDirectory, { recursive: true });
@@ -191,7 +207,7 @@ async function verifyReleaseArchive(archivePath, vastTarball, intelionTarball) {
     "No provider plugins configured.\n",
   );
 
-  installPortablePrefix(extractionDirectory, vastTarball, intelionTarball);
+  installPortablePrefix(extractionDirectory, vastPluginSpec, intelionPluginSpec);
   runPortableExecutable(
     extractionDirectory,
     ["plugins", "add", "@easyai101/easyserver-plugin-vastai"],

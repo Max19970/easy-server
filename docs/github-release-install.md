@@ -137,21 +137,21 @@ You can keep the extracted bundle anywhere convenient and invoke it by path or a
 
 ## Add a Provider Plugin later
 
-Provider Plugins are opt-in packages. Install them into the **same extracted EasyServer prefix** so that this portable CLI can discover them.
+Provider Plugins are opt-in packages with independent release histories. Install a plugin version whose declared compatibility includes your EasyServer/Plugin SDK line into the **same extracted EasyServer prefix** so that this portable CLI can discover it. EasyServer validates that compatibility when the plugin is loaded.
 
 ### Windows
 
 Vast.ai:
 
 ```powershell
-npm install --global --prefix $easyserver @easyai101/easyserver-plugin-vastai@0.2.3
+npm install --global --prefix $easyserver @easyai101/easyserver-plugin-vastai
 & "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-vastai
 ```
 
 Intelion.cloud:
 
 ```powershell
-npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion@0.2.3
+npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion
 & "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-intelion
 ```
 
@@ -160,14 +160,14 @@ npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion@
 Vast.ai:
 
 ```sh
-npm install --global --prefix "$easyserver" @easyai101/easyserver-plugin-vastai@0.2.3
+npm install --global --prefix "$easyserver" @easyai101/easyserver-plugin-vastai
 "$easyserver/bin/easyserver" plugins add @easyai101/easyserver-plugin-vastai
 ```
 
 Intelion.cloud:
 
 ```sh
-npm install --global --prefix "$easyserver" @easyai101/easyserver-plugin-intelion@0.2.3
+npm install --global --prefix "$easyserver" @easyai101/easyserver-plugin-intelion
 "$easyserver/bin/easyserver" plugins add @easyai101/easyserver-plugin-intelion
 ```
 

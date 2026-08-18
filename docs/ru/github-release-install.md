@@ -139,21 +139,21 @@ No provider plugins configured.
 
 ## Добавьте Provider Plugin позже
 
-Provider Plugins подключаются по желанию. Устанавливайте их в **тот же распакованный prefix EasyServer**, чтобы эта переносимая CLI могла их обнаружить.
+Provider Plugins подключаются по желанию и имеют независимые истории релизов. Устанавливайте версию плагина, чьи объявленные диапазоны совместимости принимают вашу линию EasyServer/Plugin SDK, в **тот же распакованный prefix EasyServer**, чтобы эта переносимая CLI могла её обнаружить. EasyServer проверяет эту совместимость при загрузке плагина.
 
 ### Windows
 
 Vast.ai:
 
 ```powershell
-npm install --global --prefix $easyserver @easyai101/easyserver-plugin-vastai@0.2.3
+npm install --global --prefix $easyserver @easyai101/easyserver-plugin-vastai
 & "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-vastai
 ```
 
 Intelion.cloud:
 
 ```powershell
-npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion@0.2.3
+npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion
 & "$easyserver\easyserver.cmd" plugins add @easyai101/easyserver-plugin-intelion
 ```
 
@@ -162,14 +162,14 @@ npm install --global --prefix $easyserver @easyai101/easyserver-plugin-intelion@
 Vast.ai:
 
 ```sh
-npm install --global --prefix "$easyserver" @easyai101/easyserver-plugin-vastai@0.2.3
+npm install --global --prefix "$easyserver" @easyai101/easyserver-plugin-vastai
 "$easyserver/bin/easyserver" plugins add @easyai101/easyserver-plugin-vastai
 ```
 
 Intelion.cloud:
 
 ```sh
-npm install --global --prefix "$easyserver" @easyai101/easyserver-plugin-intelion@0.2.3
+npm install --global --prefix "$easyserver" @easyai101/easyserver-plugin-intelion
 "$easyserver/bin/easyserver" plugins add @easyai101/easyserver-plugin-intelion
 ```
 

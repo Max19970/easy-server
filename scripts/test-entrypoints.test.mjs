@@ -8,8 +8,6 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workspacePackagePaths = [
   "packages/easyserver/package.json",
   "packages/plugin-sdk/package.json",
-  "plugins/vastai/package.json",
-  "plugins/intelion/package.json",
 ];
 
 async function readPackage(path) {
@@ -33,11 +31,9 @@ test("workspace-local tests build current source before running compiled tests",
   }
 });
 
-test("SDK consumers rebuild the SDK before compiling their own tests", async () => {
+test("in-repo SDK consumers rebuild the SDK before compiling their own tests", async () => {
   const sdkConsumers = await Promise.all([
     readPackage("packages/easyserver/package.json"),
-    readPackage("plugins/vastai/package.json"),
-    readPackage("plugins/intelion/package.json"),
   ]);
 
   for (const packageJson of sdkConsumers) {

@@ -84,8 +84,8 @@ The TUI therefore distinguishes SSH authentication failures from provider creden
 
 See the provider-specific connection requirements:
 
-- [Vast.ai](providers/vastai.md#connect-to-a-service)
-- [Intelion.cloud](providers/intelion.md#connect-to-a-service)
+- [Vast.ai](https://github.com/Max19970/easy-server-plugin-vastai/blob/main/docs/usage.md#connect-to-a-service)
+- [Intelion.cloud](https://github.com/Max19970/easy-server-plugin-intelion/blob/main/docs/usage.md#connect-to-a-service)
 
 ## Connection methods
 

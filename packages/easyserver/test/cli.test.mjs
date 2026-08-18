@@ -35,9 +35,7 @@ const rejectTuiRuntime = fileURLToPath(
 const destroySessionPlugin = fileURLToPath(
   new URL("./fixtures/destroy-session-plugin.mjs", import.meta.url),
 );
-const intelionPlugin = fileURLToPath(
-  new URL("../../../plugins/intelion/dist/index.js", import.meta.url),
-);
+const intelionPlugin = "@easyai101/easyserver-plugin-intelion";
 const partialHealthyPlugin = `data:text/javascript,${encodeURIComponent(`
   export default {
     manifest: {
@@ -785,7 +783,7 @@ test("published CLI entrypoint is directly executable by Node-compatible shells"
   assert.match(await readFile(cli, "utf8"), /^#!\/usr\/bin\/env node\r?\n/);
 });
 
-test("loads first-party workspace packages as explicit provider plugins", () => {
+test("loads published first-party packages as explicit provider plugins", () => {
   for (const [source, providerId, credentialName] of [
     ["@easyai101/easyserver-plugin-vastai", "vastai", "api-key"],
     [intelionPlugin, "intelion", "api-token"],

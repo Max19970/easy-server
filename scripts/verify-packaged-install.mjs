@@ -26,8 +26,14 @@ assertRootPublishBlocked();
 try {
   const sdkTarball = pack("packages/plugin-sdk");
   const cliTarball = pack("packages/easyserver");
-  const vastTarball = pack("plugins/vastai");
-  const intelionTarball = pack("plugins/intelion");
+  const vastPluginSpec = exactDevDependencySpec(
+    rootManifest,
+    "@easyai101/easyserver-plugin-vastai",
+  );
+  const intelionPluginSpec = exactDevDependencySpec(
+    rootManifest,
+    "@easyai101/easyserver-plugin-intelion",
+  );
   const exampleTarball = packExamplePlugin();
   const externalTsPluginTarball = await verifyExternalSdkConsumer(sdkTarball);
 
@@ -35,7 +41,7 @@ try {
   await verifyPluginInstall({
     packageName: "@easyai101/easyserver-plugin-vastai",
     providerId: "vastai",
-    pluginTarball: vastTarball,
+    pluginInstallSource: vastPluginSpec,
     absentPackageName: "@easyai101/easyserver-plugin-intelion",
     sdkTarball,
     cliTarball,
@@ -45,7 +51,7 @@ try {
   await verifyPluginInstall({
     packageName: "@easyai101/easyserver-plugin-intelion",
     providerId: "intelion",
-    pluginTarball: intelionTarball,
+    pluginInstallSource: intelionPluginSpec,
     absentPackageName: "@easyai101/easyserver-plugin-vastai",
     sdkTarball,
     cliTarball,
@@ -56,7 +62,7 @@ try {
     packageName: "@easyai101/easyserver-example-provider",
     pluginId: "example.provider-plugin",
     providerId: "example",
-    pluginTarball: exampleTarball,
+    pluginInstallSource: exampleTarball,
     absentPackageName: "@easyai101/easyserver-plugin-vastai",
     sdkTarball,
     cliTarball,
@@ -69,7 +75,7 @@ try {
     packageName: "@easyai101/easyserver-external-ts-provider",
     pluginId: "external.ts-provider",
     providerId: "external-ts",
-    pluginTarball: externalTsPluginTarball,
+    pluginInstallSource: externalTsPluginTarball,
     absentPackageName: "@easyai101/easyserver-plugin-vastai",
     sdkTarball,
     cliTarball,
@@ -109,6 +115,16 @@ function pack(packageDirectory) {
   assert.equal(packed.length, 1, `expected one tarball for ${packageDirectory}`);
   assertTarballFiles(packed[0], packageDirectory);
   return join(artifactDirectory, packed[0].filename);
+}
+
+function exactDevDependencySpec(manifest, packageName) {
+  const packageVersion = manifest.devDependencies?.[packageName];
+  assert.match(
+    packageVersion ?? "",
+    /^\d+\.\d+\.\d+$/u,
+    `${packageName} integration baseline must be an exact version`,
+  );
+  return `${packageName}@${packageVersion}`;
 }
 
 function packExamplePlugin() {
@@ -370,7 +386,7 @@ async function verifyPluginInstall({
   packageName,
   providerId,
   pluginId = providerId,
-  pluginTarball,
+  pluginInstallSource,
   absentPackageName,
   sdkTarball,
   cliTarball,
@@ -381,9 +397,9 @@ async function verifyPluginInstall({
 }) {
   const prefix = await createPrefix(providerId);
   installGlobally(prefix, sdkTarball, cliTarball);
-  // Before public npm publication the plugin's SDK range cannot resolve from the
-  // registry yet, so provide the packed SDK alongside the selected plugin.
-  installGlobally(prefix, sdkTarball, pluginTarball);
+  // Local fixture plugins receive the packed SDK; published first-party plugins
+  // resolve the same compatible SDK line through their normal npm dependency.
+  installGlobally(prefix, sdkTarball, pluginInstallSource);
 
   assertPackagePresent(prefix, packageName);
   assertPackageAbsent(prefix, absentPackageName);

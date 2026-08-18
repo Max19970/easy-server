@@ -80,7 +80,7 @@ A change that requires users, scripts, or compatible Provider Plugins to migrate
 
 ## First-party provider maintenance
 
-The Vast.ai and Intelion.cloud plugins are maintained with the same current compatibility line as EasyServer while the documented provider integrations remain viable.
+The Vast.ai and Intelion.cloud plugins are maintained in their own repositories and release independently from EasyServer. Their manifests declare which EasyServer/Plugin SDK compatibility lines they accept; package version numbers do not need to match the host numerically.
 
 Provider APIs/policies are external dependencies. When an upstream change breaks an integration, the project may:
 

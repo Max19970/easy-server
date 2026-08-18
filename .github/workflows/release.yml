@@ -125,9 +125,7 @@ jobs:
           version=$(node -p "require('./package.json').version")
           for package in \
             @easyai101/easyserver-plugin-sdk \
-            @easyai101/easyserver \
-            @easyai101/easyserver-plugin-vastai \
-            @easyai101/easyserver-plugin-intelion
+            @easyai101/easyserver
           do
             published=$(npm view "$package@$version" version --json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s)))")
             if [ "$published" != "$version" ]; then

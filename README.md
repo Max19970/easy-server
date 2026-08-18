@@ -70,10 +70,12 @@ Want the full first-run walkthrough? Start with [Getting started](docs/getting-s
 
 ## Supported providers
 
-EasyServer `0.2.x` ships first-party plugins for:
+EasyServer has independently versioned first-party Provider Plugins for:
 
-- **Vast.ai** — marketplace search and rental, lifecycle, and SSH-backed access. [Vast.ai guide](docs/providers/vastai.md)
-- **Intelion.cloud** — server catalog/configuration, creation, lifecycle, and SSH-backed access. [Intelion.cloud guide](docs/providers/intelion.md)
+- **Vast.ai** — marketplace search and rental, lifecycle, and SSH-backed access. [Vast.ai plugin](https://github.com/Max19970/easy-server-plugin-vastai) · [guide](docs/providers/vastai.md)
+- **Intelion.cloud** — server catalog/configuration, creation, lifecycle, and SSH-backed access. [Intelion.cloud plugin](https://github.com/Max19970/easy-server-plugin-intelion) · [guide](docs/providers/intelion.md)
+
+These plugins are maintained and released in their own repositories. Their package versions do not need to match the EasyServer version; compatibility is declared through the Provider Plugin host/SDK ranges.
 
 Third-party providers can integrate through the public [`@easyai101/easyserver-plugin-sdk`](packages/plugin-sdk/README.md).
 

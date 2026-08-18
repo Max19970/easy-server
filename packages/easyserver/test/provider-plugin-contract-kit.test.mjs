@@ -3,11 +3,11 @@ import test from "node:test";
 import {
   createIntelionProviderPlugin,
   INTELION_API_TOKEN_CREDENTIAL,
-} from "../../../plugins/intelion/dist/index.js";
+} from "@easyai101/easyserver-plugin-intelion";
 import {
   createVastProviderPlugin,
   VAST_API_KEY_CREDENTIAL,
-} from "../../../plugins/vastai/dist/index.js";
+} from "@easyai101/easyserver-plugin-vastai";
 import daemonPlugin from "./fixtures/daemon-plugin.mjs";
 import { HostOperationRunner } from "../dist/host-operation.js";
 import {

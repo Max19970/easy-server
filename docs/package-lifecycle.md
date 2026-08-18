@@ -18,7 +18,7 @@ In normal configuration:
 
 Deleting Local State to make a compatible upgrade work is not an acceptable migration strategy.
 
-Provider Plugins are separate packages. Updating the core CLI does not automatically install, upgrade, or remove them.
+Provider Plugins are separate, independently versioned packages. Updating the core CLI does not automatically install, upgrade, remove, or numerically synchronize them.
 
 ## If a configured Provider Plugin is missing or incompatible
 
@@ -35,13 +35,15 @@ Do not delete state or recreate provider resources simply because the local plug
 
 ## Reinstall one provider package
 
-For an npm-global installation, reinstall the matching compatible plugin in the same global package environment as EasyServer:
+For an npm-global installation, reinstall a plugin version whose declared EasyServer/Plugin SDK compatibility includes your installed host line, in the same global package environment as EasyServer:
 
 ```powershell
-npm install --global @easyai101/easyserver-plugin-vastai@^0.2.0
+npm install --global @easyai101/easyserver-plugin-vastai
 # or
-npm install --global @easyai101/easyserver-plugin-intelion@^0.2.0
+npm install --global @easyai101/easyserver-plugin-intelion
 ```
+
+The plugin's own SemVer is independent from the EasyServer version. Do not infer compatibility from matching version numbers; use the plugin's documented/declared host and SDK ranges.
 
 For a portable ZIP installation, install the provider into that extracted prefix instead. See [Install from GitHub Releases](github-release-install.md#add-a-provider-plugin-later).
 
@@ -87,7 +89,7 @@ If your goal is to stop using EasyServer completely:
 
 Provider-specific cleanup:
 
-- [Vast.ai](providers/vastai.md#clean-up-the-rental)
-- [Intelion.cloud](providers/intelion.md#clean-up-the-server)
+- [Vast.ai](https://github.com/Max19970/easy-server-plugin-vastai/blob/main/docs/usage.md#clean-up-the-rental)
+- [Intelion.cloud](https://github.com/Max19970/easy-server-plugin-intelion/blob/main/docs/usage.md#clean-up-the-server)
 
 Never use deletion of Local State as a substitute for provider cleanup. Deleting a local record cannot delete the remote resource it described.

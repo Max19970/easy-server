@@ -86,8 +86,8 @@ EasyServer ведёт собственное хранилище SSH trust по �
 
 Требования конкретных провайдеров к подключению:
 
-- [Vast.ai](providers/vastai.md#подключение-к-сервису)
-- [Intelion.cloud](providers/intelion.md#подключение-к-сервису)
+- [Vast.ai](https://github.com/Max19970/easy-server-plugin-vastai/blob/main/docs/ru/usage.md#подключение-к-сервису)
+- [Intelion.cloud](https://github.com/Max19970/easy-server-plugin-intelion/blob/main/docs/ru/usage.md#подключение-к-сервису)
 
 ## Методы подключения
 

@@ -19,9 +19,18 @@ const PROCESS_START_RETRY_DELAY_MS = 1_000;
 const releaseDirectory = resolve(process.argv[2] ?? "");
 assert.ok(process.argv[2], "published release download directory is required");
 const target = releaseTargetForRuntime();
-const version = JSON.parse(
+const rootManifest = JSON.parse(
   await readFile(join(repositoryRoot, "package.json"), "utf8"),
-).version;
+);
+const version = rootManifest.version;
+const vastPluginSpec = exactDevDependencySpec(
+  rootManifest,
+  "@easyai101/easyserver-plugin-vastai",
+);
+const intelionPluginSpec = exactDevDependencySpec(
+  rootManifest,
+  "@easyai101/easyserver-plugin-intelion",
+);
 const artifactName = releaseAssetName(version, target);
 const checksumName = releaseChecksumName(version);
 const artifactPath = join(releaseDirectory, artifactName);
@@ -70,8 +79,8 @@ try {
     "--omit=dev",
     "--no-audit",
     "--no-fund",
-    `@easyai101/easyserver-plugin-vastai@${version}`,
-    `@easyai101/easyserver-plugin-intelion@${version}`,
+    vastPluginSpec,
+    intelionPluginSpec,
   ]);
   runPortable(
     extracted,
@@ -92,6 +101,16 @@ try {
   process.stdout.write(`Published ${artifactName} verification passed on ${target.name}.\n`);
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
+}
+
+function exactDevDependencySpec(manifest, packageName) {
+  const packageVersion = manifest.devDependencies?.[packageName];
+  assert.match(
+    packageVersion ?? "",
+    /^\d+\.\d+\.\d+$/u,
+    `${packageName} integration baseline must be an exact version`,
+  );
+  return `${packageName}@${packageVersion}`;
 }
 
 function checksumFor(manifest, filename) {
